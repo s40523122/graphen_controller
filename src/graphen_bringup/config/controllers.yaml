@@ -1,0 +1,56 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 1000
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_group_controller:
+      type: graphen_control/SubGroupController
+
+    gripper_group_controller:
+      type: graphen_control/SubGroupController
+
+    switch_group_controller:
+      type: graphen_control/SwitchGroupController
+
+    sensor_forwarder:
+      type: forward_command_controller/ForwardCommandController
+
+sensor_forwarder:
+  ros__parameters:
+    joints:
+      - imu
+    interface_name: raw_data
+
+switch_group_controller:
+  ros__parameters:
+    sensor: imu/raw_data
+    state_publish_rate: 50.0
+    state_interfaces:
+      - joint_arm1/position
+      - joint_gripper1/position
+    command_interfaces:
+      - arm_group_controller/position
+      - gripper_group_controller/position
+    # 每個模式依 command_interfaces 順序給一組目標值（攤平）
+    modes: [1, 2]
+    mode_targets: [0.1, 0.2,   # mode 1: arm, gripper
+                   0.3, 0.4]   # mode 2: arm, gripper
+    default_mode: 1
+
+arm_group_controller:
+  ros__parameters:
+    input_interfaces:
+      - position
+    output_interfaces:
+      - joint_arm1/position
+    reference_publish_rate: 50.0
+
+gripper_group_controller:
+  ros__parameters:
+    input_interfaces:
+      - position
+    output_interfaces:
+      - joint_gripper1/position
+    reference_publish_rate: 50.0
