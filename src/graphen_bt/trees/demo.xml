@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<root main_tree_to_execute="BehaviorTree">
+    <!-- ////////// -->
+    <BehaviorTree ID="BehaviorTree">
+        <Fallback>
+            <ReactiveSequence>
+                <Condition ID="IsOk" is_ok_val="{is_ok}"/>
+                <Action ID="ClearSysCount"/>
+                <Action ID="ExecutionRateLogger" label="Normal"/>
+                <Decorator ID="RateControl" hz="1">
+                    <Sequence>
+                        <Action ID="ExecutionRateLogger" label="RateControl"/>
+                    </Sequence>
+                </Decorator>
+            </ReactiveSequence>
+            <ReactiveSequence>
+                <Inverter>
+                    <Condition ID="IsOk" is_ok_val="{is_ok}"/>
+                </Inverter>
+                <Inverter>
+                    <Condition ID="CheckSysCount" target="3000"/>
+                </Inverter>
+                <Decorator ID="RateControl" hz="{rate}">
+                    <Sequence>
+                        <Action ID="ExecutionRateLogger" label="1000Hz"/>
+                        <Action ID="IncrementSysCount"/>
+                    </Sequence>
+                </Decorator>
+            </ReactiveSequence>
+        </Fallback>
+    </BehaviorTree>
+    <!-- ////////// -->
+    <TreeNodesModel>
+        <Condition ID="CheckSysCount">
+            <input_port name="target" type="int"/>
+        </Condition>
+        <Action ID="ClearSysCount"/>
+        <Action ID="ExecutionRateLogger">
+            <input_port name="label" type="std::string">Label to display in log</input_port>
+        </Action>
+        <Action ID="IncrementSysCount"/>
+        <Condition ID="IsOk">
+            <input_port name="is_ok_val" type="bool"/>
+        </Condition>
+        <Decorator ID="RateControl">
+            <input_port name="hz" type="double">Execution rate in Hz</input_port>
+        </Decorator>
+    </TreeNodesModel>
+    <!-- ////////// -->
+</root>

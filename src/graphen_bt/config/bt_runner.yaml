@@ -1,0 +1,19 @@
+bt_runner:
+  ros__parameters:
+    # 以函式庫名稱指定要載入的 BT 節點 plugin
+    plugins:
+      - graphen_bt_nodes
+    # 主樹 tick 週期
+    tick_period_ms: 100
+
+    groot:
+      enabled: true
+      max_msg_per_second: 25
+      publisher_port: 1666
+      server_port: 1667
+
+    # 同步到 blackboard 的參數，可在執行中用 rqt / ros2 param set 修改
+    gp_is_ok: true
+    gp_wait_seconds: 3
+    gp_rate: 100.0
+    gp_sys_count: 0
