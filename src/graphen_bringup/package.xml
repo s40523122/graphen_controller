@@ -14,6 +14,7 @@
   <exec_depend>graphen_controllers</exec_depend>
   <exec_depend>graphen_description</exec_depend>
   <exec_depend>hardware_interface</exec_depend>
+  <exec_depend>imu_sensor_broadcaster</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

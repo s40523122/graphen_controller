@@ -1,0 +1,23 @@
+# 實機 IMU（use_mock_imu:=false）時，疊加在 controllers.yaml 之後載入。
+# mock 模式不會載入這個檔案。
+
+controller_manager:
+  ros__parameters:
+    imu_sensor_broadcaster:
+      type: imu_sensor_broadcaster/IMUSensorBroadcaster
+
+imu_sensor_broadcaster:
+  ros__parameters:
+    sensor_name: imu_sensor
+    frame_id: imu_link
+    # 姿態定義（坐標系、Euler 順序）尚待實機驗證，第一項設 -1 表示不提供姿態
+    static_covariance_orientation: [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # 暫定值：對角線分別為角速度 (rad/s)² 與加速度 (m/s²)² 的變異數。
+    # 之後應以實測靜態資料（imu16460_cli 或 rosbag 統計）取代
+    static_covariance_angular_velocity: [1.0e-6, 0.0, 0.0, 0.0, 1.0e-6, 0.0, 0.0, 0.0, 1.0e-6]
+    static_covariance_linear_acceleration: [1.0e-4, 0.0, 0.0, 0.0, 1.0e-4, 0.0, 0.0, 0.0, 1.0e-4]
+
+switch_group_controller:
+  ros__parameters:
+    # 實機沒有 imu/raw_data，改讀 IMU 的 state interface（要讀哪一個可依需求調整）
+    sensor: imu_sensor/angular_velocity.z
