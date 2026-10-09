@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<robot name="dual_dexterous_hands" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- 引入左右手 macro -->
+  <xacro:include filename="$(find dexterous_hand_description)/urdf/right_hand.xacro"/>
+  <xacro:include filename="$(find dexterous_hand_description)/urdf/left_hand.xacro"/>
+  <xacro:include filename="$(find dexterous_hand_description)/urdf/ros2_control.xacro"/>
+  <!-- 世界座標根連結 -->
+  <link name="world"/>
+
+  <!-- 右手：掛在 world 右側 -->
+  <xacro:right_hand
+    parent="world"
+    xyz="0.2 0 0"
+    rpy="0 0 0"/>
+
+  <!-- 左手：掛在 world 左側 -->
+  <xacro:left_hand
+    parent="world"
+    xyz="-0.2 0 0"
+    rpy="0 0 0"/>
+
+</robot>

@@ -1,0 +1,10 @@
+<library path="dexterous_hand_hardware">
+  <class
+    name="dexterous_hand_hardware/DexterousHandHardware"
+    type="dexterous_hand_hardware::DexterousHandHardware"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Dexterous Hand Hardware Interface (Mock)
+    </description>
+  </class>
+</library>
