@@ -1,0 +1,7 @@
+<library path="imu16460_hardware">
+  <class name="imu16460_hardware/Imu16460SensorInterface"
+         type="imu16460_hardware::Imu16460SensorInterface"
+         base_class_type="hardware_interface::SensorInterface">
+    <description>ros2_control sensor plugin for the FSS-IMU16460-C (UART).</description>
+  </class>
+</library>
