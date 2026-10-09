@@ -14,7 +14,7 @@
     <!-- ////////// -->
     <BehaviorTree ID="BehaviorTree">
         <Sequence>
-            <Action ID="GetStateValue" joint="L_SHOULDER_P" interface="position" value="{arm_pos}"/>
+            <Action ID="GetStateValue" joint="L_WRIST_P" interface="position" value="{arm_pos}"/>
             <Fallback>
                 <BlackboardCheckString name="Forward" value_A="{direction}" value_B="forward" return_on_mismatch="FAILURE">
                     <Fallback>

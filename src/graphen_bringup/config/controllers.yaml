@@ -28,8 +28,8 @@ switch_group_controller:
     sensor: imu/raw_data
     state_publish_rate: 50.0
     state_interfaces:
-      - L_SHOULDER_P/position
-      - R_SHOULDER_P/position
+      - L_WRIST_P/position
+      - R_WRIST_P/position
     command_interfaces:
       - left_arm_group_controller/position
       - right_arm_group_controller/position
@@ -49,15 +49,15 @@ switch_group_controller:
     planner_max_steps: [0.005, 0.005]   # 100 Hz 下約 0.5 rad/s
     # activate 時以這些 state 作為 planner 起點（順序對應 command_interfaces）
     target_state_interfaces:
-      - L_SHOULDER_P/position
-      - R_SHOULDER_P/position
+      - L_WRIST_P/position
+      - R_WRIST_P/position
 
 left_arm_group_controller:
   ros__parameters:
     input_interfaces:
       - position
     output_interfaces:
-      - L_SHOULDER_P/position
+      - L_WRIST_P/position
     reference_publish_rate: 50.0
 
 right_arm_group_controller:
@@ -65,5 +65,5 @@ right_arm_group_controller:
     input_interfaces:
       - position
     output_interfaces:
-      - R_SHOULDER_P/position
+      - R_WRIST_P/position
     reference_publish_rate: 50.0

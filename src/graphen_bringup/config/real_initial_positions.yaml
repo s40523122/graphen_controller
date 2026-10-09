@@ -4,7 +4,7 @@ initial_positions:
   # Left Arm
   L_ELBOW_Y: 0.00
   L_SHOULDER_P: 0.00
-  #L_SHOULDER_R: -1.3963
+  L_SHOULDER_R: -1.3963
   L_SHOULDER_Y: 0.00
   L_WRIST_P: 0.00
   L_WRIST_R: 0.00
@@ -12,7 +12,7 @@ initial_positions:
   # Right Arm
   R_ELBOW_Y: 0.00
   R_SHOULDER_P: 0.00
-  #R_SHOULDER_R: 1.3963
+  R_SHOULDER_R: 1.3963
   R_SHOULDER_Y: 0.00
   R_WRIST_P: 0.00
   R_WRIST_R: 0.00
@@ -21,25 +21,25 @@ initial_positions:
   WAIST_Y: 0
   WAIST_R: 0
   WAIST_P: 0
-  # # Head
+  # Head
   NECK_Y: 0
   NECK_P: 0
   NECK_R: 0
-  # # Left Leg
-  # L_HIP_P: 0
-  # L_HIP_R: 0
-  # L_HIP_Y: 0
-  # L_KNEE_P: 0
-  # L_ANKLE_P: 0
-  # L_ANKLE_R: 0
-  # # Right Leg
-  # R_HIP_P: 0
-  # R_HIP_R: 0
-  # R_HIP_Y: 0
-  # R_KNEE_P: 0
-  # R_ANKLE_P: 0
-  # R_ANKLE_R: 0
-  # # Left Hand
+  # Left Leg
+  L_HIP_P: 0
+  L_HIP_R: 0
+  L_HIP_Y: 0
+  L_KNEE_P: 0
+  L_ANKLE_P: 0
+  L_ANKLE_R: 0
+  # Right Leg
+  R_HIP_P: 0
+  R_HIP_R: 0
+  R_HIP_Y: 0
+  R_KNEE_P: 0
+  R_ANKLE_P: 0
+  R_ANKLE_R: 0
+  # Left Hand
   # left_wrist_to_base: 0
   # left_thumb_yaw_joint: 0
   # left_thumb_mcp_joint: 0
