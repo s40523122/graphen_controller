@@ -1,0 +1,9 @@
+<library path="ti5_control_plugin">
+  <class name="ti5_hardware/Ti5Hardware"
+         type="ti5_hardware::Ti5Hardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      TI5 CAN hardware plugin for ros2_control
+    </description>
+  </class>
+</library>
