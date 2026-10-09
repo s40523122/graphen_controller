@@ -1,20 +1,20 @@
 <?xml version="1.0"?>
 <!--
-  joint_arm1 往返擺動：依「目前方向」分支，換向時切到另一個分支
-    Forward  分支：{direction} == forward，joint_arm1 < 1.0 時維持正轉（forward 模式）；
+  L_SHOULDER_P 往返擺動：依「目前方向」分支，換向時切到另一個分支
+    Forward  分支：{direction} == forward，L_SHOULDER_P < 1.0 時維持正轉（forward 模式）；
                    到達 1.0 時走 TurnToReverse，切成 reverse 模式並把方向記為 reverse
-    Reverse  分支：{direction} == reverse，joint_arm1 > -1.0 時維持反轉（reverse 模式）；
+    Reverse  分支：{direction} == reverse，L_SHOULDER_P > -1.0 時維持反轉（reverse 模式）；
                    到達 -1.0 時走 TurnToForward，切成 forward 模式並把方向記為 forward
     Init     分支：{direction} 尚未設定（剛啟動）時，先切成 forward 模式並記為 forward
   模式名稱必須和 controllers.yaml 的 modes 一致。
   換向時先 SwitchMode 再寫入方向：action 失敗時方向不變，下一個 tick 會重試同一個換向分支。
-  門檻必須落在 controllers.yaml 兩個模式的 arm 目標（±1.5）之間，否則 joint 會停在目標而不換向。
+  門檻必須落在 controllers.yaml 兩個模式的 L_SHOULDER_P 目標（±1.5）之間，否則 joint 會停在目標而不換向。
 -->
 <root main_tree_to_execute="BehaviorTree">
     <!-- ////////// -->
     <BehaviorTree ID="BehaviorTree">
         <Sequence>
-            <Action ID="GetStateValue" joint="joint_arm1" interface="position" value="{arm_pos}"/>
+            <Action ID="GetStateValue" joint="L_SHOULDER_P" interface="position" value="{arm_pos}"/>
             <Fallback>
                 <BlackboardCheckString name="Forward" value_A="{direction}" value_B="forward" return_on_mismatch="FAILURE">
                     <Fallback>
