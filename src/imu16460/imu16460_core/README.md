@@ -57,6 +57,32 @@ colcon test --packages-select imu16460_core && colcon test-result --verbose
 
 涵蓋：CRC 對所有手冊向量、`encode_command` 逐 byte 比對、A1 解析、parser（整幀、逐 byte、多幀任意切段、雜訊、偽幀頭、CRC 錯誤後恢復）、以 `openpty` 模擬裝置測 Driver（數據流、命令 / 回應交錯、`read_param` 自動恢復數據流、逾時、`stop()` < 100 ms）。
 
+## 已知問題：Jetson Orin 上約 1.2% 掉幀
+
+在 Orin（JetPack R36.4.4，`/dev/ttyTHS1` @ 921600、1000 Hz）實測：
+
+- `imu16460_cli monitor` 的頻率約 980 Hz，但 **CRC 錯誤率約 1.2–1.6%**，未達 < 0.1% 的驗收標準。
+- 原始資料中，壞幀是「少了一段 bytes」或「多出 2 / 4 個 `0x00`」，裝置 timer 偶爾會跳 3000 µs（連掉 2 幀）。
+- UART 驅動的錯誤計數（`TIOCGICOUNT`）：`frame`、`parity`、`brk` 都是 0，**`overrun` 次數約等於壞幀數**。
+
+**原因**：主機端 UART 接收 FIFO overrun，與接線和 IMU 本身無關。
+
+1. device tree 中 `serial@3100000`（ttyTHS1）沒有設定 `dmas`，以中斷搬 FIFO（PIO 模式）。
+2. CPU idle 狀態 `c7` 的退出延遲是 5000 µs。921600 baud 下 5 ms 約進來 460 bytes，遠超過 FIFO 容量。CPU 在 c7 時中斷來不及處理，就會 overrun。
+
+**驗證**：讓所有核心保持忙碌（不會進入 c7）時，5 秒內的 overrun 是 **0**；恢復閒置後又回到約 1.2%。
+
+**目前的處理**：先接受。本套件的使用方式是「取最新一筆」，1 kHz 下偶爾少一幀影響不大，parser 會丟棄壞幀並重新同步，不會輸出錯誤資料。
+
+**可行的修正（尚未採用）**：
+
+| 方式 | 說明 |
+|---|---|
+| Driver 使用 PM QoS | 執行期間開啟 `/dev/cpu_dma_latency` 寫入延遲上限，只在 IMU 執行時禁止深度 idle；需要 udev 規則開放寫入權限（預設是 root 才能寫） |
+| 系統層關閉 c7 | 開機時停用 `cpuidle/state1`；不需改程式，但會一直增加閒置功耗 |
+| 為 UART 開啟 DMA | 以 device tree overlay 為 `serial@3100000` 加上 DMA；可以從根本解決，但需要修改 DT 並重新開機 |
+| 降低資料量 | 改成 460800 / 500 Hz（需要修改 IMU 設定並存 FLASH，要經過同意） |
+
 ## 待實機驗證
 
 見 [docs/IMU16460.md §3](../../../docs/IMU16460.md#3-待實機驗證)。與本套件相關的是 S1 系統狀態的實際長度。
