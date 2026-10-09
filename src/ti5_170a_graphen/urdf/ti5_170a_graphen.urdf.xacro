@@ -9,6 +9,8 @@
   <xacro:arg name="real_initial_positions_file" default=""/>
   <xacro:arg name="urdf_path" default="$(find ti5_170a_graphen)/urdf/robot.urdf"/>
   <xacro:arg name="hw_read_timeout_ms" default="20"/>
+  <!-- 送往馬達的指令最大變化速度（rad/s），開機走向 real_initial_positions 時也受限；應 >= planner 的速度 -->
+  <xacro:arg name="max_command_velocity" default="0.5"/>
 
   <!-- 靈巧手：預設不啟用；啟用時 mock / 實機跟隨 use_mock_hardware -->
   <xacro:arg name="use_hands" default="false"/>
@@ -46,7 +48,8 @@
     can_config_path="$(arg can_config_path)"
     urdf_path="$(arg urdf_path)"
     real_initial_positions_file="$(arg real_initial_positions_file)"
-    hw_read_timeout_ms="$(arg hw_read_timeout_ms)"/>
+    hw_read_timeout_ms="$(arg hw_read_timeout_ms)"
+    max_command_velocity="$(arg max_command_velocity)"/>
 
   <!-- 3. 靈巧手 ros2_control（只在 use_hands:=true 時存在） -->
   <xacro:if value="$(arg use_hands)">

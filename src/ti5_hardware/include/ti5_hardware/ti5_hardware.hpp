@@ -125,6 +125,17 @@ class Ti5Hardware : public hardware_interface::SystemInterface
         double limit_epsilon_rad_{0.0};
 
         /**
+        * @brief 送往馬達的指令最大變化速度（rad/s），<= 0 表示不限速
+        *
+        * write() 不直接送出 hw_commands_，而是讓 hw_output_commands_ 每週期最多往
+        * hw_commands_ 前進 max_command_velocity * dt，開機走向初始姿態時也會受限。
+        */
+        double max_command_velocity_{0.0};
+        /**
+        * @brief 實際送往馬達的指令（弧度），activate 時以 encoder 位置為起點
+        */
+        std::vector<double> hw_output_commands_;
+        /**
         * @brief 與 URDF 一致的 joint 名稱順序（僅包含有對應馬達的 joint）
         */
         std::vector<std::string> joint_names_;

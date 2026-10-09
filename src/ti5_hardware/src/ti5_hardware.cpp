@@ -1,5 +1,7 @@
 #include "ti5_hardware/ti5_hardware.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 
@@ -99,6 +101,33 @@ hardware_interface::CallbackReturn Ti5Hardware::on_init(const hardware_interface
     }
     joint_safety_control_.setLimitEpsilon(limit_epsilon_rad_);
 
+    // 讀取指令最大變化速度（rad/s），預設 0.0（不限速）
+    max_command_velocity_ = 0.0;
+    auto it_vel = info.hardware_parameters.find("max_command_velocity");
+    if (it_vel != info.hardware_parameters.end() && !it_vel->second.empty()) {
+        try {
+            const double vel = std::stod(it_vel->second);
+            if (!std::isfinite(vel) || vel < 0.0) {
+                RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"),
+                             "Invalid max_command_velocity=%f (must be >= 0).", vel);
+                return CallbackReturn::ERROR;
+            }
+            max_command_velocity_ = vel;
+        } catch (const std::exception & e) {
+            RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"),
+                         "Failed to parse max_command_velocity='%s' (%s).",
+                         it_vel->second.c_str(), e.what());
+            return CallbackReturn::ERROR;
+        }
+    }
+    if (max_command_velocity_ > 0.0) {
+        RCLCPP_INFO(rclcpp::get_logger("Ti5Hardware"),
+                    "Command velocity limited to %.3f rad/s.", max_command_velocity_);
+    } else {
+        RCLCPP_WARN(rclcpp::get_logger("Ti5Hardware"),
+                    "max_command_velocity is not set, commands are sent without rate limiting.");
+    }
+
     // 讀取出使關節角度設定檔路徑
     auto info_init = info.hardware_parameters.at("initial_positions_file");
     try
@@ -167,6 +196,7 @@ hardware_interface::CallbackReturn Ti5Hardware::on_init(const hardware_interface
     hw_states_.resize(joint_names_.size(), 0.0);
     hw_velocities_.resize(joint_names_.size(), 0.0);
     hw_commands_.resize(joint_names_.size(), 0.0);
+    hw_output_commands_.resize(joint_names_.size(), 0.0);
     hw_filter_currents_.resize(joint_names_.size(), 0.0);
     hw_error_codes_.resize(joint_names_.size(), 0.0);
 
@@ -251,53 +281,44 @@ hardware_interface::CallbackReturn Ti5Hardware::on_activate(const rclcpp_lifecyc
                 joint_to_channel_[i].c_str(), joint_names_[i].c_str());
             return CallbackReturn::ERROR;
         }
+        // 以 encoder 的實際位置作為輸出起點，讓走向初始姿態的過程受 max_command_velocity 限速
+        // TODO(verify-on-hw): 原本 activate 時的 encoder 讀取被註解掉，需確認此時讀取位置是否可靠
         int32_t cnt = 0;
-        double rad = 0.0;
-
-        try
-        {
-            rad = initial_positions_["initial_positions"][joint_names_[i]].as<double>();
-            RCLCPP_INFO(
-                rclcpp::get_logger("joint_init_angle"),
-                "Joint '%s' in init is '%f'",
-                joint_names_[i].c_str(), rad
-            );
-
-            // if (!b->readPosition(joint_to_motor_index_[i], cnt, rad, hw_read_timeout_ms_)) {
-            //     RCLCPP_ERROR(
-            //         rclcpp::get_logger("Ti5Hardware"),
-            //         "Activate read failed: joint='%s' channel='%s' motor_index=%zu timeout_ms=%d",
-            //         joint_names_[i].c_str(),
-            //         joint_to_channel_[i].c_str(),
-            //         joint_to_motor_index_[i],
-            //         hw_read_timeout_ms_);
-            //     return CallbackReturn::ERROR;
-            // }
-
-            // RCLCPP_INFO(
-            //     rclcpp::get_logger("joint_get_angle"),
-            //     "Joint '%s' by get is '%f'",
-            //     joint_names_[i].c_str(), rad
-            // );
-
+        double actual = 0.0;
+        if (!b->readPosition(joint_to_motor_index_[i], cnt, actual, hw_read_timeout_ms_)) {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("Ti5Hardware"),
+                "Activate read failed: joint='%s' channel='%s' motor_index=%zu timeout_ms=%d",
+                joint_names_[i].c_str(),
+                joint_to_channel_[i].c_str(),
+                joint_to_motor_index_[i],
+                hw_read_timeout_ms_);
+            return CallbackReturn::ERROR;
         }
-        catch (const std::exception & e)
-        {
-            if (!b->readPosition(joint_to_motor_index_[i], cnt, rad, hw_read_timeout_ms_)) {
+
+        // 目標：initial_positions_file 有設定時使用該值，否則保持目前位置
+        double target = actual;
+        const YAML::Node init_section = initial_positions_["initial_positions"];
+        const YAML::Node init_value = init_section ? init_section[joint_names_[i]] : YAML::Node();
+        if (init_value) {
+            try {
+                target = init_value.as<double>();
+            } catch (const YAML::Exception & e) {
                 RCLCPP_ERROR(
                     rclcpp::get_logger("Ti5Hardware"),
-                    "Activate read failed: joint='%s' channel='%s' motor_index=%zu timeout_ms=%d",
-                    joint_names_[i].c_str(),
-                    joint_to_channel_[i].c_str(),
-                    joint_to_motor_index_[i],
-                    hw_read_timeout_ms_);
+                    "Invalid initial position for joint '%s': %s",
+                    joint_names_[i].c_str(), e.what());
                 return CallbackReturn::ERROR;
             }
         }
+        RCLCPP_INFO(
+            rclcpp::get_logger("joint_init_angle"),
+            "Joint '%s' actual %f, initial target %f",
+            joint_names_[i].c_str(), actual, target);
 
-        
-        hw_states_[i] = rad;
-        hw_commands_[i] = hw_states_[i];
+        hw_states_[i] = actual;
+        hw_output_commands_[i] = actual;
+        hw_commands_[i] = target;
 
         // 嘗試清除錯誤
         if (hw_error_codes_[i] != 0){
@@ -420,7 +441,7 @@ hardware_interface::return_type Ti5Hardware::read(const rclcpp::Time & /* time *
     return hardware_interface::return_type::OK;
 }
 
-hardware_interface::return_type Ti5Hardware::write(const rclcpp::Time &, const rclcpp::Duration &) {
+hardware_interface::return_type Ti5Hardware::write(const rclcpp::Time &, const rclcpp::Duration & period) {
     if (!is_can_ready_) {
         return hardware_interface::return_type::ERROR;
     }
@@ -446,10 +467,20 @@ hardware_interface::return_type Ti5Hardware::write(const rclcpp::Time &, const r
         return hardware_interface::return_type::ERROR;
     }
 
+    // 每週期最多移動 max_command_velocity * dt；period 異常（<= 0）時本週期不移動
+    const double dt = std::max(period.seconds(), 0.0);
+    const double max_step = max_command_velocity_ * dt;
+
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         const std::shared_ptr<can_driver::CanDriverBuilder> & b = joint_builders_[i];
         if (b) {
-            b->moveToPositionRad(joint_to_motor_index_[i], hw_commands_[i]);
+            if (max_command_velocity_ > 0.0) {
+                hw_output_commands_[i] += std::clamp(
+                    hw_commands_[i] - hw_output_commands_[i], -max_step, max_step);
+            } else {
+                hw_output_commands_[i] = hw_commands_[i];
+            }
+            b->moveToPositionRad(joint_to_motor_index_[i], hw_output_commands_[i]);
         } else {
             RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"),
                          "Write failed: missing builder cache for joint='%s' channel='%s'.",

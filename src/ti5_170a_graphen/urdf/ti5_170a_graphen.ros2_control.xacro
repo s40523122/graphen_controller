@@ -4,10 +4,12 @@
          use_fake_hardware 為 true 時使用 mock_components/GenericSystem，否則使用 ti5_hardware/Ti5Hardware（CAN 實機）。
          initial_positions_file：mock 的 position 初始值；real_initial_positions_file：Ti5Hardware 使用的初始位置。
          urdf_path 是 Ti5Hardware 讀取限位用的靜態 URDF。
+         max_command_velocity：送往馬達的指令最大變化速度（rad/s，0 為不限速），開機走向初始姿態時也受此限制。
          實機參數由頂層 xacro 傳入，不在這裡給預設路徑，缺少時 Ti5Hardware 會在 on_init 失敗 -->
     <xacro:macro name="ti5_170a_graphen_ros2_control"
                  params="name initial_positions_file use_fake_hardware
-                         can_config_path urdf_path real_initial_positions_file hw_read_timeout_ms">
+                         can_config_path urdf_path real_initial_positions_file hw_read_timeout_ms
+                         max_command_velocity">
 
         <xacro:property name="initial_positions"
                 value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
@@ -26,6 +28,7 @@
                     <param name="urdf_path">${urdf_path}</param>
                     <param name="hw_read_timeout_ms">${hw_read_timeout_ms}</param>
                     <param name="initial_positions_file">${real_initial_positions_file}</param>
+                    <param name="max_command_velocity">${max_command_velocity}</param>
                 </xacro:unless>
             </hardware>
             <joint name="L_SHOULDER_P">

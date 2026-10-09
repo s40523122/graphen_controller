@@ -23,6 +23,7 @@ def generate_launch_description():
 
     use_mock_hardware = LaunchConfiguration('use_mock_hardware')
     hw_read_timeout_ms = LaunchConfiguration('hw_read_timeout_ms')
+    max_command_velocity = LaunchConfiguration('max_command_velocity')
     use_hands = LaunchConfiguration('use_hands')
     left_hand_port = LaunchConfiguration('left_hand_port')
     right_hand_port = LaunchConfiguration('right_hand_port')
@@ -39,6 +40,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'hw_read_timeout_ms', default_value='20',
             description='CAN read timeout of ti5_hardware (use_mock_hardware:=false)'),
+        DeclareLaunchArgument(
+            'max_command_velocity', default_value='0.5',
+            description='Max command velocity [rad/s] of ti5_hardware, also limits the move '
+                        'to real_initial_positions at startup (0 disables)'),
         DeclareLaunchArgument(
             'use_hands', default_value='false',
             description='Enable dexterous hands ros2_control '
@@ -70,6 +75,7 @@ def generate_launch_description():
         ' can_config_path:=', can_config_file,
         ' real_initial_positions_file:=', real_initial_positions_file,
         ' hw_read_timeout_ms:=', hw_read_timeout_ms,
+        ' max_command_velocity:=', max_command_velocity,
         ' use_hands:=', use_hands,
         ' left_hand_port:=', left_hand_port,
         ' right_hand_port:=', right_hand_port,
