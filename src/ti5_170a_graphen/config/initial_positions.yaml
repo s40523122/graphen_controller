@@ -1,0 +1,81 @@
+# Default initial positions for ti5_170a_graphen's ros2_control fake system
+
+initial_positions:
+  # Left Arm
+  L_ELBOW_Y: 0
+  L_SHOULDER_P: 0
+  L_SHOULDER_R: 0
+  L_SHOULDER_Y: 0
+  L_WRIST_P: 0
+  L_WRIST_R: 0
+  L_WRIST_Y: 0
+  # Right Arm
+  R_ELBOW_Y: 0
+  R_SHOULDER_P: 0
+  R_SHOULDER_R: 0
+  R_SHOULDER_Y: 0
+  R_WRIST_P: 0
+  R_WRIST_R: 0
+  R_WRIST_Y: 0
+  # Waist
+  WAIST_Y: 0
+  WAIST_R: 0
+  WAIST_P: 0
+  # Head
+  NECK_Y: 0
+  NECK_P: 0
+  NECK_R: 0
+  # Left Leg
+  L_HIP_P: 0
+  L_HIP_R: 0
+  L_HIP_Y: 0
+  L_KNEE_P: 0
+  L_ANKLE_P: 0
+  L_ANKLE_R: 0
+  # Right Leg
+  R_HIP_P: 0
+  R_HIP_R: 0
+  R_HIP_Y: 0
+  R_KNEE_P: 0
+  R_ANKLE_P: 0
+  R_ANKLE_R: 0
+  # Left Hand
+  left_wrist_to_base: 0
+  left_thumb_yaw_joint: 0
+  left_thumb_mcp_joint: 0
+  left_thumb_pip_joint: 0
+  left_thumb_dip_joint: 0
+  left_index_yaw_joint: 0
+  left_index_mcp_joint: 0
+  left_index_pip_joint: 0
+  left_index_dip_joint: 0
+  left_middle_yaw_joint: 0
+  left_middle_mcp_joint: 0
+  left_middle_pip_joint: 0
+  left_middle_dip_joint: 0
+  left_ring_mcp_joint: 0
+  left_ring_pip_joint: 0
+  left_ring_dip_joint: 0
+  left_pinky_mcp_joint: 0
+  left_pinky_pip_joint: 0
+  left_pinky_dip_joint: 0
+  # Right Hand
+  right_wrist_to_base: 0
+  right_thumb_yaw_joint: 0
+  right_thumb_mcp_joint: 0
+  right_thumb_pip_joint: 0
+  right_thumb_dip_joint: 0
+  right_index_yaw_joint: 0
+  right_index_mcp_joint: 0
+  right_index_pip_joint: 0
+  right_index_dip_joint: 0
+  right_middle_yaw_joint: 0
+  right_middle_mcp_joint: 0
+  right_middle_pip_joint: 0
+  right_middle_dip_joint: 0
+  right_ring_mcp_joint: 0
+  right_ring_pip_joint: 0
+  right_ring_dip_joint: 0
+  right_pinky_mcp_joint: 0
+  right_pinky_pip_joint: 0
+  right_pinky_dip_joint: 0

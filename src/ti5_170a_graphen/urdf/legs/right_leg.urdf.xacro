@@ -1,0 +1,198 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="t170_right_leg" params="prefix mesh_dir parent">
+
+    <!-- ===== R_HIP_P ===== -->
+    <link name="${prefix}R_HIP_P_S">
+      <inertial>
+        <origin xyz="0.0055060000000000005 -0.001116 -0.135556" rpy="0 0 0"/>
+        <mass value="2.123172"/>
+        <inertia
+          ixx="0.007651678788"
+          ixy="9.966719e-06"
+          ixz="-0.001027351346"
+          iyy="0.008350089032"
+          iyz="0.000150362604"
+          izz="0.00334698021" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_HIP_P_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_HIP_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_HIP_P" type="revolute">
+      <origin xyz="0 -0.0545 0" rpy="0 0 0"/>
+      <parent link="${parent}"/>
+      <child  link="${prefix}R_HIP_P_S"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="-1.57" upper="1.57" effort="267" velocity="5.76"/>
+    </joint>
+
+    <!-- ===== R_HIP_R ===== -->
+    <link name="${prefix}R_HIP_R_S">
+      <inertial>
+        <origin xyz="0.001702 -0.007193 -0.240251" rpy="0 0 0"/>
+        <mass value="3.313288"/>
+        <inertia
+          ixx="0.017719057346999998"
+          ixy="6.415347800000001e-05"
+          ixz="-0.000409299561"
+          iyy="0.018141943934"
+          iyz="0.000332521739"
+          izz="0.006587571438" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_HIP_R_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_HIP_R_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_HIP_R" type="revolute">
+      <origin xyz="0 -0.084 0" rpy="0 0 0"/>
+      <parent link="${prefix}R_HIP_P_S"/>
+      <child  link="${prefix}R_HIP_R_S"/>
+      <axis xyz="1 0 0"/>
+      <!-- 注意：右腳 lower/upper 與左腳相反 -->
+      <limit lower="-0.2616" upper="1.7444" effort="63" velocity="8.06"/>
+    </joint>
+
+    <!-- ===== R_HIP_Y ===== -->
+    <link name="${prefix}R_HIP_Y_S">
+      <inertial>
+        <origin xyz="0.008185000000000001 -0.010518000000000001 -0.130898" rpy="0 0 0"/>
+        <mass value="2.982449"/>
+        <inertia ixx="0.030686817" ixy="2.318e-04"  ixz="-7.684e-04"
+                 iyy="0.029042786" iyz="7.432e-04"   izz="0.006556686"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_HIP_Y_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_HIP_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_HIP_Y" type="revolute">
+      <origin xyz="0 0 -0.1558" rpy="0 0 0"/>
+      <parent link="${prefix}R_HIP_R_S"/>
+      <child  link="${prefix}R_HIP_Y_S"/>
+      <axis xyz="0 0 -1"/>
+      <limit lower="-3.14" upper="3.14" effort="121" velocity="6.81"/>
+    </joint>
+
+    <!-- ===== R_KNEE_P ===== -->
+    <link name="${prefix}R_KNEE_P_S">
+      <inertial>
+        <origin xyz="-0.005285 0.0030510000000000003 0.00138" rpy="0 0 0"/>
+        <mass value="0.20469900000000002"/>
+        <inertia
+          ixx="0.000108479421"
+          ixy="-5.50834e-07"
+          ixz="7.923754e-06"
+          iyy="7.7879228e-05"
+          iyz="1.25221e-07"
+          izz="0.000148205976" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_KNEE_P_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_KNEE_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_KNEE_P" type="revolute">
+      <origin xyz="0 0 -0.2642" rpy="0 0 0"/>
+      <parent link="${prefix}R_HIP_Y_S"/>
+      <child  link="${prefix}R_KNEE_P_S"/>
+      <!-- 注意：右膝 axis 與左膝相反 -->
+      <axis xyz="0 -1 0"/>
+      <limit lower="-2.3" upper="0.83" effort="267" velocity="5.76"/>
+    </joint>
+
+    <!-- ===== R_ANKLE_P ===== -->
+    <link name="${prefix}R_ANKLE_P_S">
+      <inertial>
+        <origin xyz="0.039403 -2e-06 -0.055027" rpy="0 0 0"/>
+        <mass value="1.698964"/>
+        <inertia
+          ixx="0.003570435261"
+          ixy="-1.93574e-07"
+          ixz="-0.00025761484299999997"
+          iyy="0.008761158659"
+          iyz="-1.2173e-08"
+          izz="0.007145339196999999" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_ANKLE_P_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_ANKLE_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_ANKLE_P" type="revolute">
+      <origin xyz="0 0 -0.37" rpy="0 0 0"/>
+      <parent link="${prefix}R_KNEE_P_S"/>
+      <child  link="${prefix}R_ANKLE_P_S"/>
+      <!-- 注意：右踝 axis 與左踝相反 -->
+      <axis xyz="0 1 0"/>
+      <limit lower="-0.314" upper="1.57" effort="63" velocity="8.06"/>
+    </joint>
+
+    <!-- ===== R_ANKLE_R ===== -->
+    <link name="${prefix}R_ANKLE_R_S">
+      <inertial>
+        <origin xyz="-0.042947000000000006 0.0 0.047143" rpy="0 0 0"/>
+        <mass value="2.44971"/>
+        <inertia
+          ixx="0.006630609097"
+          ixy="-7.3349e-08"
+          ixz="0.00413951169"
+          iyy="0.011669004651"
+          iyz="2.2969000000000002e-08"
+          izz="0.0072234244" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_ANKLE_R_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_ANKLE_R_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_ANKLE_R" type="revolute">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <parent link="${prefix}R_ANKLE_P_S"/>
+      <child  link="${prefix}R_ANKLE_R_S"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.34" upper="0.34" effort="23" velocity="10.16"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>

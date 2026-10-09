@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ti5_170a_graphen">
+
+  <!-- 本體：true 使用 mock_components/GenericSystem，false 使用 ti5_hardware/Ti5Hardware（CAN 實機） -->
+  <xacro:arg name="use_mock_hardware" default="true"/>
+  <xacro:arg name="initial_positions_file" default="$(find ti5_170a_graphen)/config/initial_positions.yaml"/>
+  <!-- 實機本體參數（use_mock_hardware:=false 時必填，由 bringup launch 傳入） -->
+  <xacro:arg name="can_config_path" default=""/>
+  <xacro:arg name="real_initial_positions_file" default=""/>
+  <xacro:arg name="urdf_path" default="$(find ti5_170a_graphen)/urdf/robot.urdf"/>
+  <xacro:arg name="hw_read_timeout_ms" default="20"/>
+
+  <!-- 靈巧手：預設不啟用；啟用時 mock / 實機跟隨 use_mock_hardware -->
+  <xacro:arg name="use_hands" default="false"/>
+  <xacro:arg name="left_hand_port" default="/dev/ttyUSB1"/>
+  <xacro:arg name="right_hand_port" default="/dev/ttyUSB0"/>
+  <xacro:arg name="hand_baudrate" default="115200"/>
+
+  <!-- IMU：use_mock_imu:=true 時使用 mock 的 imu/raw_data（原本的模擬方式），
+       false 時使用實機 FSS-IMU16460-C（imu16460_hardware） -->
+  <xacro:arg name="use_mock_imu" default="true"/>
+  <xacro:arg name="imu_port" default="/dev/ttyTHS1"/>
+  <xacro:arg name="imu_baudrate" default="921600"/>
+  <!-- IMU 相對 base_link 的安裝位置 -->
+  <!-- TODO(verify-on-hw): T170 上的 IMU 實際安裝位置與姿態 -->
+  <xacro:arg name="imu_xyz" default="0 0 0.1"/>
+  <xacro:arg name="imu_rpy" default="0 0 0"/>
+
+  <!-- 1. 機器人本體（root 為 base_link，已含雙手模型） -->
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/robot.urdf.xacro"/>
+
+  <link name="imu_link"/>
+
+  <joint name="base_to_imu" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="$(arg imu_xyz)" rpy="$(arg imu_rpy)"/>
+  </joint>
+
+  <!-- 2. 本體 ros2_control -->
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/ti5_170a_graphen.ros2_control.xacro"/>
+  <xacro:ti5_170a_graphen_ros2_control
+    name="UpperBody"
+    initial_positions_file="$(arg initial_positions_file)"
+    use_fake_hardware="$(arg use_mock_hardware)"
+    can_config_path="$(arg can_config_path)"
+    urdf_path="$(arg urdf_path)"
+    real_initial_positions_file="$(arg real_initial_positions_file)"
+    hw_read_timeout_ms="$(arg hw_read_timeout_ms)"/>
+
+  <!-- 3. 靈巧手 ros2_control（只在 use_hands:=true 時存在） -->
+  <xacro:if value="$(arg use_hands)">
+    <xacro:include filename="$(find dexterous_hand_description)/urdf/ros2_control.xacro"/>
+    <xacro:right_hand_ros2_control use_fake_hardware="$(arg use_mock_hardware)"
+                                   serial_port="$(arg right_hand_port)" baudrate="$(arg hand_baudrate)"/>
+    <xacro:left_hand_ros2_control use_fake_hardware="$(arg use_mock_hardware)"
+                                  serial_port="$(arg left_hand_port)" baudrate="$(arg hand_baudrate)"/>
+  </xacro:if>
+
+  <!-- 4. IMU -->
+  <!-- 模擬 sensor：imu/raw_data。獨立成一個 mock system，讓本體改用實機時 mock IMU 仍可單獨使用 -->
+  <xacro:if value="$(arg use_mock_imu)">
+    <ros2_control name="MockImu" type="system">
+      <hardware>
+        <plugin>mock_components/GenericSystem</plugin>
+        <!-- 為 sensor 產生同名 command interface，可用 topic 寫入模擬資料 -->
+        <param name="mock_sensor_commands">true</param>
+      </hardware>
+      <sensor name="imu">
+        <state_interface name="raw_data">
+          <param name="initial_value">1.23</param>
+        </state_interface>
+      </sensor>
+    </ros2_control>
+  </xacro:if>
+
+  <!-- 實機 IMU：獨立的 sensor 硬體元件，與本體由同一個 controller_manager 管理 -->
+  <xacro:unless value="$(arg use_mock_imu)">
+    <xacro:include filename="$(find imu16460_hardware)/urdf/imu16460.ros2_control.xacro"/>
+    <xacro:imu16460_ros2_control name="imu16460" sensor_name="imu_sensor"
+                                 port="$(arg imu_port)" baudrate="$(arg imu_baudrate)"/>
+  </xacro:unless>
+
+</robot>

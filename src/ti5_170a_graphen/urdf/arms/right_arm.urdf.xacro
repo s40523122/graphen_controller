@@ -1,0 +1,203 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="t170_right_arm" params="prefix mesh_dir parent">
+
+    <!-- ===== R_SHOULDER_P ===== -->
+    <link name="${prefix}R_SHOULDER_P_S">
+      <inertial>
+        <origin xyz="0.003757 -0.088343 0.000206" rpy="0 0 0"/>
+        <mass value="1.017275"/>
+        <inertia ixx="0.002372571" ixy="-3.0801e-04" ixz="1.410e-06"
+                 iyy="0.001139377" iyz="-1.618e-05"   izz="0.002662773"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_SHOULDER_P_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_SHOULDER_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_SHOULDER_P" type="revolute">
+      <origin xyz="0.0005 -0.08965 0.336" rpy="0 0 0"/>
+      <parent link="${parent}"/>
+      <child  link="${prefix}R_SHOULDER_P_S"/>
+      <!-- 注意：右肩 axis 與左肩相反 -->
+      <axis xyz="0 -1 0"/>
+      <limit lower="-3.14" upper="3.14" effort="63" velocity="8.06"/>
+    </joint>
+
+    <!-- ===== R_SHOULDER_R ===== -->
+    <link name="${prefix}R_SHOULDER_R_S">
+      <inertial>
+        <origin xyz="-0.002243 -0.164011 0.01393" rpy="0 0 0"/>
+        <mass value="1.098095"/>
+        <inertia ixx="0.004355095" ixy="1.4651e-04"  ixz="-2.084e-05"
+                 iyy="0.001024924" iyz="1.5511e-04"   izz="0.004159197"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_SHOULDER_R_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_SHOULDER_R_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_SHOULDER_R" type="revolute">
+      <origin xyz="0 -0.10035 0" rpy="0 0 0"/>
+      <parent link="${prefix}R_SHOULDER_P_S"/>
+      <child  link="${prefix}R_SHOULDER_R_S"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-1.57" upper="1.57" effort="63" velocity="8.06"/>
+    </joint>
+
+    <!-- ===== R_SHOULDER_Y ===== -->
+    <link name="${prefix}R_SHOULDER_Y_S">
+      <inertial>
+        <origin xyz="-0.000770 -0.079347 0.003347" rpy="0 0 0"/>
+        <mass value="0.715036"/>
+        <inertia ixx="0.001531855" ixy="2.9772e-05"  ixz="-1.563e-06"
+                 iyy="0.000837946" iyz="-1.1722e-04"  izz="0.001338125"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_SHOULDER_Y_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_SHOULDER_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_SHOULDER_Y" type="revolute">
+      <origin xyz="0 -0.10367 0" rpy="0 0 0"/>
+      <parent link="${prefix}R_SHOULDER_R_S"/>
+      <child  link="${prefix}R_SHOULDER_Y_S"/>
+      <!-- 注意：右肩 Y axis 與左肩相反 -->
+      <axis xyz="0 -1 0"/>
+      <limit lower="-3.14" upper="3.14" effort="42" velocity="8.59"/>
+    </joint>
+
+    <!-- ===== R_ELBOW_Y ===== -->
+    <link name="${prefix}R_ELBOW_Y_S">
+      <inertial>
+        <origin xyz="1.9e-05 -0.085592 0.016017" rpy="0 0 0"/>
+        <mass value="0.809895"/>
+        <inertia ixx="0.002073947" ixy="-3.598e-06" ixz="-3.526e-07"
+                 iyy="0.000740931" iyz="4.6822e-04"  izz="0.001867598"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_ELBOW_Y_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_ELBOW_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_ELBOW_Y" type="revolute">
+      <origin xyz="0 -0.19633 0" rpy="0 0 0"/>
+      <parent link="${prefix}R_SHOULDER_Y_S"/>
+      <child  link="${prefix}R_ELBOW_Y_S"/>
+      <axis xyz="0 0 1"/>
+      <!-- 注意：右肘 lower/upper 與左肘對稱翻轉 -->
+      <limit lower="-0.87" upper="2.4" effort="42" velocity="8.59"/>
+    </joint>
+
+    <!-- ===== R_WRIST_P ===== -->
+    <link name="${prefix}R_WRIST_P_S">
+      <inertial>
+        <origin xyz="0.001498 0.0 0.00128" rpy="0 0 0"/>
+        <mass value="0.495016"/>
+        <inertia ixx="2.5161e-04" ixy="4.42e-10"  ixz="9.489e-07"
+                 iyy="3.2624e-04" iyz="8.65e-10"   izz="3.0644e-04"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_WRIST_P_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_WRIST_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_WRIST_P" type="revolute">
+      <origin xyz="0 -0.09685 0" rpy="0 0 0"/>
+      <parent link="${prefix}R_ELBOW_Y_S"/>
+      <child  link="${prefix}R_WRIST_P_S"/>
+      <!-- 注意：右腕 P axis 與左腕相反 -->
+      <axis xyz="0 -1 0"/>
+      <limit lower="-3.14" upper="3.14" effort="23" velocity="10.16"/>
+    </joint>
+
+    <!-- ===== R_WRIST_Y ===== -->
+    <link name="${prefix}R_WRIST_Y_S">
+      <inertial>
+        <origin xyz="0.007651 -0.109169 -0.002162" rpy="0 0 0"/>
+        <mass value="0.730783"/>
+        <inertia ixx="0.002992259" ixy="1.8662e-04"  ixz="1.5665e-04"
+                 iyy="0.000891376" iyz="-3.2597e-05"  izz="0.003536809"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_WRIST_Y_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_WRIST_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_WRIST_Y" type="revolute">
+      <origin xyz="0 -0.17615 -0.0035" rpy="0 0 0"/>
+      <parent link="${prefix}R_WRIST_P_S"/>
+      <child  link="${prefix}R_WRIST_Y_S"/>
+      <!-- 注意：右腕 Y axis 與左腕相反 -->
+      <axis xyz="0 0 1"/>
+      <limit lower="-0.69" upper="0.69" effort="8.3" velocity="12.36"/>
+    </joint>
+
+    <!-- ===== R_WRIST_R ===== -->
+    <link name="${prefix}R_WRIST_R_S">
+      <inertial>
+        <origin xyz="0.0261 0.00014 0.210967" rpy="0 0 0"/>
+        <mass value="2.500629"/>
+        <inertia ixx="0.014941306" ixy="-2.5312e-05" ixz="-8.0265e-05"
+                 iyy="0.017071356" iyz="-8.817e-06"   izz="0.009101684"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_WRIST_R_S.STL"/></geometry>
+        <material name="t170_silver"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/R_WRIST_R_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}R_WRIST_R" type="revolute">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <parent link="${prefix}R_WRIST_Y_S"/>
+      <child  link="${prefix}R_WRIST_R_S"/>
+      <axis xyz="1 0 0"/>
+      <!-- 注意：右腕 R lower/upper 與左腕對稱翻轉 -->
+      <limit lower="-0.348" upper="2.35" effort="8.3" velocity="12.36"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>

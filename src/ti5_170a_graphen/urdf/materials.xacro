@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- T170 標準色系 -->
+  <material name="t170_light_grey">
+    <color rgba="0.898 0.918 0.929 1.0"/>
+  </material>
+
+  <material name="t170_mid_grey">
+    <color rgba="0.776 0.757 0.737 1.0"/>
+  </material>
+
+  <material name="t170_blue_grey">
+    <color rgba="0.792 0.820 0.933 1.0"/>
+  </material>
+
+  <material name="t170_white">
+    <color rgba="1.0 1.0 1.0 1.0"/>
+  </material>
+
+  <material name="t170_silver">
+    <color rgba="0.753 0.753 0.753 1.0"/>
+  </material>
+
+</robot>

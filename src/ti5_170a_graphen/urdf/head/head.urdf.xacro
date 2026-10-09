@@ -1,0 +1,263 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="t170_head" params="prefix mesh_dir parent">
+
+    <!-- ===== NECK_Y_S ===== -->
+    <!-- <link name="${prefix}NECK_Y_S">
+      <inertial>
+        <origin xyz="-8e-05 1e-06 0.004059" rpy="0 0 0"/>
+        <mass value="4.344303"/>
+        <inertia ixx="0.015958047" ixy="1.323e-07"  ixz="2.091e-05"
+                 iyy="0.008137038" iyz="-2.451e-07"  izz="0.015727247"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/NECK_Y_S.STL"/></geometry>
+        <material name="t170_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/NECK_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}NECK_Y" type="revolute">
+      <origin xyz="0.0005 0 0.336" rpy="0 0 0"/>
+      <parent link="${parent}"/>
+      <child  link="${prefix}NECK_Y_S"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-3.14" upper="3.14" effort="8.3" velocity="12.36"/>
+    </joint> -->
+
+    <joint
+    name="${prefix}NECK_Y"
+    type="revolute">
+    <origin
+      xyz="0.0005 0 0.336"
+      rpy="0 0 0" />
+    <parent
+      link="${parent}" />
+    <child
+      link="${prefix}NECK_Y1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="8.3"
+      velocity="12.36" />
+  </joint>
+  <link
+    name="${prefix}NECK_Y1">
+    <inertial>
+      <origin
+        xyz="8.3048E-05 -0.016082 0.058359"
+        rpy="0 0 0" />
+      <mass
+        value="0.41567813" />
+      <inertia
+        ixx="0.00040539"
+        ixy="2.219E-07"
+        ixz="-2.9368E-09"
+        iyy="0.00022035"
+        iyz="9.095E-05"
+        izz="0.00024863" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="${mesh_dir}/old_head/NECK_Y1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="${mesh_dir}/old_head/NECK_Y1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="${prefix}NECK_P_S">
+    <inertial>
+      <origin
+        xyz="0.00040928 -0.0012918 -3.4508E-05"
+        rpy="0 0 0" />
+      <mass
+        value="0.25030706" />
+      <inertia
+        ixx="9.727E-06"
+        ixy="3.1503E-06"
+        ixz="2.0046E-06"
+        iyy="9.6845E-06"
+        iyz="1.4836E-08"
+        izz="1.1224E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="${mesh_dir}/old_head/NECK_P_S.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="${mesh_dir}/old_head/NECK_P_S.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="${prefix}NECK_P"
+    type="revolute">
+    <origin
+      xyz="0 0 0.12"
+      rpy="0 0 0" />
+    <parent
+      link="${prefix}NECK_Y1" />
+    <child
+      link="${prefix}NECK_P_S" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-0.6807"
+      upper="0.6807"
+      effort="2.3"
+      velocity="90" />
+  </joint>
+  <link
+    name="${prefix}NECK_R_S">
+    <inertial>
+      <origin
+        xyz="0.0098842 0.055042 3.7167E-05"
+        rpy="0 0 0" />
+      <mass
+        value="0.97679895" />
+      <inertia
+        ixx="0.0070696"
+        ixy="-0.0013376"
+        ixz="1.5126E-06"
+        iyy="0.0037878"
+        iyz="5.3878E-06"
+        izz="0.0077904" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="${mesh_dir}/old_head/NECK_R_S.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="${mesh_dir}/old_head/NECK_R_S.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="${prefix}NECK_R"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="1.5708 0 0" />
+    <parent
+      link="${prefix}NECK_P_S" />
+    <child
+      link="${prefix}NECK_R_S" />
+    <axis
+      xyz="1 0 0" />
+    <limit
+      lower="-0.7854"
+      upper="0.7854"
+      effort="2.3"
+      velocity="90" />
+  </joint>
+  <link
+    name="${prefix}NECK_CAMERA_S">
+    <inertial>
+      <origin
+        xyz="-0.023357 -0.03695 -7.7656E-05"
+        rpy="0 0 0" />
+      <mass
+        value="0.30970111" />
+      <inertia
+        ixx="0.00029399"
+        ixy="3.5175E-05"
+        ixz="2.7948E-05"
+        iyy="0.00032475"
+        iyz="-2.2326E-05"
+        izz="0.0002443" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="${mesh_dir}/old_head/NECK_CAMERA_S.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.86667 0.86667 0.8902 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="${mesh_dir}/old_head/NECK_CAMERA_S.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="${prefix}NECK_CAMERA"
+    type="fixed">
+    <origin
+      xyz="0.056875 0.10712 0"
+      rpy="0 0 -0.17453" />
+    <parent
+      link="${prefix}NECK_R_S" />
+    <child
+      link="${prefix}NECK_CAMERA_S" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+
+  </xacro:macro>
+
+</robot>

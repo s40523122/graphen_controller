@@ -1,0 +1,97 @@
+<?xml version="1.0"?>
+<robot name="t170" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ================================================================ -->
+  <!-- 全域參數                                                          -->
+  <!-- ================================================================ -->
+  <xacro:arg name="prefix"       default=""/>
+  <xacro:arg name="package_name" default="ti5_170a_graphen"/>
+  <xacro:arg name="use_sim"      default="false"/>
+  <xacro:arg name="use_gazebo"   default="false"/>
+
+  <xacro:property name="prefix"   value="$(arg prefix)"/>
+  <xacro:property name="mesh_dir" value="package://$(arg package_name)/meshes"/>
+
+  <!-- ================================================================ -->
+  <!-- 引入模組                                                          -->
+  <!-- ================================================================ -->
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/materials.xacro"/>
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/base/base.urdf.xacro"/>
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/legs/left_leg.urdf.xacro"/>
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/legs/right_leg.urdf.xacro"/>
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/arms/left_arm.urdf.xacro"/>
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/arms/right_arm.urdf.xacro"/>
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/head/head.urdf.xacro"/>
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/hands/left_hand.urdf.xacro"/>
+  <xacro:include filename="$(find ti5_170a_graphen)/urdf/hands/right_hand.urdf.xacro"/>
+
+  <!-- ================================================================ -->
+  <!-- 世界參考點                                                        -->
+  <!-- ================================================================ -->
+  <link name="${prefix}base_link"/>
+
+  <joint name="${prefix}base_link_to_base_s" type="fixed">
+    <parent link="${prefix}base_link"/>
+    <child  link="${prefix}BASE_S"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ================================================================ -->
+  <!-- 實例化各部位                                                      -->
+  <!-- ================================================================ -->
+
+  <!-- 軀幹：BASE_S + WAIST_Y/R/P -->
+  <xacro:t170_base
+    prefix="${prefix}"
+    mesh_dir="${mesh_dir}"/>
+
+  <!-- 左腿：L_HIP_P/R/Y → L_KNEE_P → L_ANKLE_P/R -->
+  <xacro:t170_left_leg
+    prefix="${prefix}"
+    mesh_dir="${mesh_dir}"
+    parent="${prefix}BASE_S"/>
+
+  <!-- 右腿：R_HIP_P/R/Y → R_KNEE_P → R_ANKLE_P/R -->
+  <xacro:t170_right_leg
+    prefix="${prefix}"
+    mesh_dir="${mesh_dir}"
+    parent="${prefix}BASE_S"/>
+
+  <!-- 左臂：L_SHOULDER_P/R/Y → L_ELBOW_Y → L_WRIST_P/Y/R -->
+  <xacro:t170_left_arm
+    prefix="${prefix}"
+    mesh_dir="${mesh_dir}"
+    parent="${prefix}WAIST_P_S"/>
+
+  <!-- 右臂：R_SHOULDER_P/R/Y → R_ELBOW_Y → R_WRIST_P/Y/R -->
+  <xacro:t170_right_arm
+    prefix="${prefix}"
+    mesh_dir="${mesh_dir}"
+    parent="${prefix}WAIST_P_S"/>
+
+  <!-- 頭部：NECK_Y_S -->
+  <xacro:t170_head
+    prefix="${prefix}"
+    mesh_dir="${mesh_dir}"
+    parent="${prefix}WAIST_P_S"/>
+
+  <!-- 左手：接在左腕末端 -->                                           <!-- ✅ 新增 -->
+  <xacro:t170_left_hand
+    prefix="${prefix}"
+    mesh_dir="${mesh_dir}"
+    parent="${prefix}L_WRIST_R_S"/>
+
+  <!-- 右手：接在右腕末端 -->                                           <!-- ✅ 新增 -->
+  <xacro:t170_right_hand
+    prefix="${prefix}"
+    mesh_dir="${mesh_dir}"
+    parent="${prefix}R_WRIST_R_S"/>
+
+  <!-- ================================================================ -->
+  <!-- Gazebo 插件（條件式，不影響現有功能）                             -->
+  <!-- ================================================================ -->
+  <xacro:if value="$(arg use_gazebo)">
+    <xacro:include filename="$(find ti5_170a_graphen)/urdf/gazebo/t170.gazebo.xacro"/>
+  </xacro:if>
+
+</robot>
