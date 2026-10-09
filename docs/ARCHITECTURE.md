@@ -25,6 +25,10 @@ graph LR
     desc[graphen_description<br/>URDF]
     bringup[graphen_bringup<br/>config + launch]
   end
+  subgraph IMU 驅動
+    imucore[imu16460_core<br/>純 C++，無 ROS]
+    imuhw[imu16460_hardware<br/>sensor plugin]
+  end
   subgraph 行為層
     btnodes[graphen_bt_nodes<br/>BT plugin]
     bt[graphen_bt<br/>bt_runner + trees]
@@ -34,6 +38,8 @@ graph LR
   btnodes -->|build| ifaces
   bringup -.->|exec| ctrl
   bringup -.->|exec| desc
+  imuhw -->|build| imucore
+  desc -.->|xacro include| imuhw
   bt -.->|runtime 載入| btnodes
 ```
 
@@ -55,6 +61,8 @@ graph LR
 | header 路徑 | `include/<pkg>/<file>.hpp` | `graphen_controllers/sub_group_controller.hpp` |
 | include guard | `<PKG>__<FILE>_HPP_` | `GRAPHEN_CONTROLLERS__SUB_GROUP_CONTROLLER_HPP_` |
 
+例外：IMU 驅動是可重用的裝置驅動，不綁定 graphen，使用自己的名稱（套件 `imu16460_core` / `imu16460_hardware`，namespace `imu16460` / `imu16460_hardware`，plugin `imu16460_hardware/Imu16460SensorInterface`），見 D11。
+
 ---
 
 ## 2. 控制層（ros2_control）
@@ -75,6 +83,19 @@ graph LR
   hw --> jsb[joint_state_broadcaster]
   fwd[sensor_forwarder<br/>ForwardCommandController] -->|imu/raw_data| hw
 ```
+
+上圖是預設的 mock IMU（`use_mock_imu:=true`）。實機 IMU（`use_mock_imu:=false`）時：
+
+```mermaid
+graph LR
+  dev[(FSS-IMU16460-C<br/>UART ~1000 Hz)] -->|背景 thread| drv[imu16460::Driver]
+  drv -->|最新樣本| imuhw[Imu16460SensorInterface<br/>imu_sensor/*]
+  imuhw --> imub["imu_sensor_broadcaster<br/>→ /imu_sensor_broadcaster/imu"]
+  imuhw -->|imu_sensor/angular_velocity.z| sw[switch_group_controller]
+```
+
+- mock system 不再有 `imu/raw_data`，`sensor_forwarder` 不啟動；改為獨立的 sensor 硬體元件 `imu16460`，與 mock system 由同一個 controller_manager 管理。
+- `switch_group_controller.sensor` 由 `controllers_imu16460.yaml` 覆寫為 `imu_sensor/angular_velocity.z`。
 
 - `SwitchGroupController` 不直接操作硬體，而是寫入下層 `SubGroupController` 導出的 **reference interface**（ros2_control chaining）。
 - `sensor_forwarder` 用來模擬 sensor 資料：mock hardware 開啟了 `mock_sensor_commands`，所以可以透過 `/sensor_forwarder/commands` 寫入 `imu/raw_data`。
@@ -190,10 +211,32 @@ graph LR
 
 ```
 joint_state_broadcaster ─▶ arm_group_controller ─▶ gripper_group_controller ─▶ switch_group_controller
-sensor_forwarder（與 JSB 並行）
+sensor_forwarder（與 JSB 並行，use_mock_imu:=true）
+imu_sensor_broadcaster（與 JSB 並行，use_mock_imu:=false）
 ```
 
 上層 `switch_group_controller` 要 claim 下層導出的 reference interface，所以下層必須先 active，上層要最後啟動。
+
+launch argument：
+
+| 參數 | 預設值 | 說明 |
+|---|---|---|
+| `use_mock_imu` | `true` | `true`：mock `imu/raw_data` + `sensor_forwarder`（原本的行為）；`false`：實機 IMU，額外載入 [controllers_imu16460.yaml](../src/graphen_bringup/config/controllers_imu16460.yaml) |
+| `imu_port` | `/dev/ttyTHS1` | 實機 IMU 的 serial port |
+| `imu_baudrate` | `921600` | 實機 IMU 的鮑率 |
+
+`use_mock_imu` 同時傳給 xacro（切換 URDF 中的 sensor 區塊）和 controller_manager 的參數檔組合（ROS 參數檔無法以 condition 切換，所以 controller_manager 在 `OpaqueFunction` 中建立）。
+
+### 2.7 Imu16460SensorInterface（imu16460_hardware）
+
+原始碼：[imu16460_sensor_interface.hpp](../src/imu16460/imu16460_hardware/include/imu16460_hardware/imu16460_sensor_interface.hpp) / [.cpp](../src/imu16460/imu16460_hardware/src/imu16460_sensor_interface.cpp)
+類型：`hardware_interface::SensorInterface`；協議與硬體細節見 [IMU16460.md](IMU16460.md)，參數見 [套件 README](../src/imu16460/imu16460_hardware/README.md)。
+
+- **更新模型**：`imu16460_core` 的 `Driver` 在背景 thread 依裝置頻率（約 1000 Hz）接收並更新最新樣本；`read()` 每個週期只以 `try_lock` 取最新一筆、換算後寫入 state，不做 serial I/O、不阻塞、不配置記憶體。拿不到 lock 時沿用上一筆。
+- 匯出 `imu_sensor_broadcaster` 需要的 10 個 state interface，加上選用的 `temperature`。
+- activate 時確認 `activate_timeout_ms` 內有資料，否則回傳 ERROR；之後超過 `data_timeout_ms` 沒有新資料時節流警告。
+- 不送任何命令、不修改 IMU 設定；裝置設定由 `imu16460_cli` 處理。
+- 實機 xacro 片段由 [imu16460.ros2_control.xacro](../src/imu16460/imu16460_hardware/urdf/imu16460.ros2_control.xacro) 的 macro 產生，graphen 的 URDF 以 `xacro:unless use_mock_imu` 引入。
 
 ---
 
@@ -343,6 +386,9 @@ Sequence
 | D8 | 模式切換走 action，joint 狀態走既有的 `~/states` topic | 指令與狀態分開是 ROS 的主流分工（Nav2 也這樣做）：action 提供明確的接受、拒絕與結果，BT 可以據此判斷成敗；狀態用 topic，BT 隨時都拿得到最新值，不必等 goal |
 | D9 | 規劃放在 controller 內的 `LocomotionPlanner` thread，以 `RealtimeBuffer` 交接 | 規劃計算不佔用 RT 的 `update()`；`update()` 只輸出最新目標。planner 不認識模式或 joint，可以重用在其他 controller |
 | D10 | 遲滯判斷放在 BT，以「方向分支 + `{direction}`」表達，不放在 controller | 門檻屬於任務邏輯，放在 tree XML 中修改不需要重新建置；controller 只負責「模式 → 目標」。用分支而不是單一變數切換，在 Groot 中可以直接看到目前的方向和換向的時間點 |
+| D11 | IMU 驅動獨立命名（`imu16460_*`），core 不依賴 ROS | 它是裝置驅動，與 graphen 的控制邏輯無關，可以直接搬到其他機器人或非 ROS 程式；協議、parser、Driver 不依賴 ROS，可以用 GoogleTest + pty 在沒有實機的環境測試 |
+| D12 | mock / 實機 IMU 以 `use_mock_imu` 切換，mock 完全保留 | 開發機（WSL）沒有實體設備，mock 是日常開發的預設；實機差異集中在 xacro 的 `xacro:if/unless` 和疊加的 `controllers_imu16460.yaml`，不修改原本的 `controllers.yaml` |
+| D13 | IMU 由背景 thread 依自身頻率更新，`read()` 只取最新一筆 | serial I/O 不進 RT 路徑；IMU 頻率與 controller_manager 的 `update_rate` 互不影響（不提供平均模式，避免引入額外延遲） |
 
 ---
 
@@ -395,4 +441,6 @@ Sequence
 - **Groot 只支援 v1**：要改用 Groot2 必須升級到 BT.CPP v4。
 - **robot_description 以參數傳給 controller_manager 已被標為 deprecated**：Humble 下會印 WARN，之後可以改成由 `robot_state_publisher` 的 topic 提供。
 - **WSL 環境**：沒有 RT scheduling（會印 WARN），ros2 daemon 探索偏慢。
-- **測試**：目前沒有自動化測試，測試方式待討論。
+- **IMU 待實機驗證**：坐標系方向、Euler 順序、S1 長度、共變異數（見 [IMU16460.md §3](IMU16460.md#3-待實機驗證)），程式中以 `TODO(verify-on-hw)` 標記。
+- **IMU 時間戳**：Humble 的 `imu_sensor_broadcaster` 以 controller_manager 的更新時間打時間戳，無法傳遞裝置 timer；需要精確時間戳時改用獨立 node 發布。
+- **測試**：只有 `imu16460_core` 有自動化測試（GoogleTest，`colcon test --packages-select imu16460_core`）；其他套件尚無，測試方式待討論。

@@ -14,7 +14,7 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | ROS 2 | Humble |
 | ros2_control / controller_interface | 2.53 |
 | behaviortree_cpp_v3 | 3.8.7 |
-| 硬體 | `mock_components/GenericSystem`（模擬） |
+| 硬體 | `mock_components/GenericSystem`（模擬）；IMU 可切換為實機 FSS-IMU16460-C（`use_mock_imu:=false`） |
 
 ## 套件一覽
 
@@ -27,6 +27,8 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [graphen_bringup](src/graphen_bringup/) | 資源 | controller 設定檔與 launch | graphen_controllers、graphen_description |
 | [graphen_bt_nodes](src/graphen_bt_nodes/) | BT plugin | 自訂 BT 節點（RateControl、IsOk、SysCount、SwitchMode…） | graphen_interfaces |
 | [graphen_bt](src/graphen_bt/) | 執行檔 | `bt_runner`、tree XML、設定檔與 launch | graphen_bt_nodes（執行期載入） |
+| [imu16460_core](src/imu16460/imu16460_core/) | C++ lib（純 CMake，無 ROS） | IMU 協議、parser、serial、`Driver`、`imu16460_cli` | — |
+| [imu16460_hardware](src/imu16460/imu16460_hardware/) | hardware plugin | ros2_control `SensorInterface`，xacro macro | imu16460_core |
 
 ## 快速開始
 
@@ -91,6 +93,29 @@ ros2 launch graphen_bt bt.launch.py \
 ```
 
 tree 依目前方向分成 `Forward` / `Reverse` 兩個分支，跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向。用 Groot v1 連線可以看到目前亮著的分支和換向的瞬間；log 會每隔約 4 秒交替印出 `SwitchMode: switched to mode [ forward ]` / `[ reverse ]`，`/switch_group_controller/states` 中的 joint_arm1 會在約 ±1.0 之間往返。門檻在 tree XML 中修改（必須落在兩個模式的 arm 目標 ±1.5 之間）。
+
+### 實機 IMU（FSS-IMU16460-C）
+
+預設 `use_mock_imu:=true`，行為與上面相同（mock `imu/raw_data` + `sensor_forwarder`）。接上實機時（Orin）：
+
+```bash
+imu16460_cli monitor                                # 先確認資料：約 1000 Hz、CRC 錯誤率 < 0.1%
+ros2 launch graphen_bringup bringup.launch.py use_mock_imu:=false imu_port:=/dev/ttyTHS1 imu_baudrate:=921600
+ros2 topic echo /imu_sensor_broadcaster/imu         # 角速度 rad/s、加速度 m/s²
+```
+
+實機時 `sensor_forwarder` 不啟動，改為 `imu_sensor_broadcaster`，`switch_group_controller` 的 sensor 改讀 `imu_sensor/angular_velocity.z`。
+協議、待實機驗證項目與 CLI 用法見 [docs/IMU16460.md](docs/IMU16460.md) 和 [imu16460_core/README.md](src/imu16460/imu16460_core/README.md)。
+
+> 會改變 IMU 設定的 CLI 指令（`set-*`、`save`、`reboot`）必須帶 `--yes`，未經確認不要對實機送出。
+
+### 自動化測試
+
+```bash
+colcon test --packages-select imu16460_core && colcon test-result --verbose
+```
+
+目前只有 `imu16460_core` 有單元測試（GoogleTest，含以 pty 模擬裝置的 Driver 測試）。
 
 ### 常見問題
 
