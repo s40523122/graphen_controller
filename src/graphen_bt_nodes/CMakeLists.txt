@@ -7,7 +7,10 @@ endif()
 
 set(THIS_PACKAGE_INCLUDE_DEPENDS
   behaviortree_cpp_v3
+  control_msgs
+  graphen_interfaces
   rclcpp
+  rclcpp_action
 )
 
 find_package(ament_cmake REQUIRED)
@@ -16,12 +19,15 @@ foreach(dep IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
 endforeach()
 
 add_library(${PROJECT_NAME} SHARED
+  src/compare_nodes.cpp
   src/execution_rate_logger.cpp
+  src/get_state_value.cpp
   src/high_freq_control.cpp
   src/is_ok.cpp
   src/rate_control.cpp
   src/register_nodes.cpp
   src/say_hello.cpp
+  src/switch_mode.cpp
   src/sys_count_nodes.cpp
   src/wait.cpp
 )

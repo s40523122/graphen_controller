@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<!--
+  joint_arm1 往返擺動：依「目前方向」分支，換向時切到另一個分支
+    Forward  分支：{direction} == forward，joint_arm1 < 1.0 時維持正轉（forward 模式）；
+                   到達 1.0 時走 TurnToReverse，切成 reverse 模式並把方向記為 reverse
+    Reverse  分支：{direction} == reverse，joint_arm1 > -1.0 時維持反轉（reverse 模式）；
+                   到達 -1.0 時走 TurnToForward，切成 forward 模式並把方向記為 forward
+    Init     分支：{direction} 尚未設定（剛啟動）時，先切成 forward 模式並記為 forward
+  模式名稱必須和 controllers.yaml 的 modes 一致。
+  換向時先 SwitchMode 再寫入方向：action 失敗時方向不變，下一個 tick 會重試同一個換向分支。
+  門檻必須落在 controllers.yaml 兩個模式的 arm 目標（±1.5）之間，否則 joint 會停在目標而不換向。
+-->
+<root main_tree_to_execute="BehaviorTree">
+    <!-- ////////// -->
+    <BehaviorTree ID="BehaviorTree">
+        <Sequence>
+            <Action ID="GetStateValue" joint="joint_arm1" interface="position" value="{arm_pos}"/>
+            <Fallback>
+                <BlackboardCheckString name="Forward" value_A="{direction}" value_B="forward" return_on_mismatch="FAILURE">
+                    <Fallback>
+                        <Condition ID="IsBelow" name="KeepForward" value="{arm_pos}" threshold="1.0"/>
+                        <Sequence name="TurnToReverse">
+                            <Action ID="SwitchMode" mode="reverse"/>
+                            <SetBlackboard output_key="direction" value="reverse"/>
+                        </Sequence>
+                    </Fallback>
+                </BlackboardCheckString>
+                <BlackboardCheckString name="Reverse" value_A="{direction}" value_B="reverse" return_on_mismatch="FAILURE">
+                    <Fallback>
+                        <Condition ID="IsAbove" name="KeepReverse" value="{arm_pos}" threshold="-1.0"/>
+                        <Sequence name="TurnToForward">
+                            <Action ID="SwitchMode" mode="forward"/>
+                            <SetBlackboard output_key="direction" value="forward"/>
+                        </Sequence>
+                    </Fallback>
+                </BlackboardCheckString>
+                <!-- 只在 {direction} 不是 forward 也不是 reverse 時執行，
+                     避免上面的換向失敗時誤落到這裡而送出 forward -->
+                <Sequence name="Init">
+                    <Inverter>
+                        <BlackboardCheckString value_A="{direction}" value_B="forward" return_on_mismatch="FAILURE">
+                            <AlwaysSuccess/>
+                        </BlackboardCheckString>
+                    </Inverter>
+                    <Inverter>
+                        <BlackboardCheckString value_A="{direction}" value_B="reverse" return_on_mismatch="FAILURE">
+                            <AlwaysSuccess/>
+                        </BlackboardCheckString>
+                    </Inverter>
+                    <Action ID="SwitchMode" mode="forward"/>
+                    <SetBlackboard output_key="direction" value="forward"/>
+                </Sequence>
+            </Fallback>
+        </Sequence>
+    </BehaviorTree>
+    <!-- ////////// -->
+    <TreeNodesModel>
+        <Action ID="GetStateValue">
+            <input_port name="topic" type="std::string" default="/switch_group_controller/states">DynamicJointState topic</input_port>
+            <input_port name="joint" type="std::string">Joint name</input_port>
+            <input_port name="interface" type="std::string">Interface name</input_port>
+            <output_port name="value" type="double">Latest interface value</output_port>
+        </Action>
+        <Condition ID="IsAbove">
+            <input_port name="value" type="double"/>
+            <input_port name="threshold" type="double"/>
+        </Condition>
+        <Condition ID="IsBelow">
+            <input_port name="value" type="double"/>
+            <input_port name="threshold" type="double"/>
+        </Condition>
+        <Action ID="SwitchMode">
+            <input_port name="action_name" type="std::string" default="/switch_group_controller/switch_mode">SwitchMode action name</input_port>
+            <input_port name="mode" type="std::string">Mode name to switch to</input_port>
+            <input_port name="timeout_ms" type="int" default="1000">Timeout including server discovery</input_port>
+        </Action>
+    </TreeNodesModel>
+    <!-- ////////// -->
+</root>

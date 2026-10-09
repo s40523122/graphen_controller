@@ -1,11 +1,12 @@
 # graphen_ws
 
-ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchGroupController` → chainable `SubGroupController` → mock hardware），以及 BehaviorTree.CPP v3 行為層（`bt_runner` + plugin 節點）。兩層目前尚未連動。
+ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchGroupController` → chainable `SubGroupController` → mock hardware），以及 BehaviorTree.CPP v3 行為層（`bt_runner` + plugin 節點）。兩層透過 `SwitchMode` action（切換模式）和 `~/states` topic（BT 取得 joint 狀態）連動。
 架構、參數、設計決策見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；使用方式見 [README.md](README.md)。
 
 ## 套件
+- `graphen_interfaces`：action 定義（`SwitchMode`），控制層與行為層共用
 - `graphen_control_utils`：header-only 共用元件（`StateInterfacePublisher`）
-- `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`
+- `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`；`LocomotionPlanner` 是內部元件（不是 plugin）
 - `graphen_description`：URDF / ros2_control
 - `graphen_bringup`：`config/controllers.yaml`、`launch/bringup.launch.py`
 - `graphen_bt_nodes`：BT 節點 plugin，全部在 `register_nodes.cpp` 註冊
@@ -23,7 +24,8 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 - header 放在 `include/<pkg>/`，include guard 為 `<PKG>__<FILE>_HPP_`
 - controller 參數：在 `on_init` 用 `auto_declare` 宣告，在 `on_configure` 讀取並驗證，失敗回傳 ERROR；參數值放在 YAML
 - 新增 controller plugin 時，plugin XML、`CMakeLists.txt`、`package.xml` 要同步修改
-- BT 節點需要 ROS node 時，從 blackboard 的 `"node"` key 取得，不使用建構子注入
+- BT 節點需要 ROS node 時，從 blackboard 的 `"node"` key 取得，不使用建構子注入（用 `graphen_bt_nodes/ros_node.hpp` 的 `get_ros_node()`）
+- BT 節點的 XML port 不能命名為 `name`（v3 會當成節點的實例名稱）
 - `rclcpp::Parameter::as_*_array()` 回傳的是參考：要先存到區域變數，不能直接用暫存值做 range-for
 
 ## Git
@@ -31,7 +33,7 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 
 ## 測試注意事項（WSL）
 - 每個 `ros2` CLI 指令都加 `timeout`；`ros2 topic pub` 要加 `-t`/`--once` 和 `-w`，避免等待 subscriber 而卡住。
-- 背景啟動 launch 時用 `setsid`（非互動 shell 的背景 job 會忽略 SIGINT）；結束時對 `pgrep -x bt_runner` 等**確切的 process 名稱**送出 SIGINT，不要用 `pkill -f` 或 `pgrep -f`，否則會比對到自己的 shell。
+- 背景啟動 launch 時用 `setsid`（非互動 shell 的背景 job 會忽略 SIGINT）；結束時對 `pgrep -x bt_runner` 等**確切的 process 名稱**送出 SIGINT，不要用 `pkill -f` 或 `pgrep -f`，否則會比對到自己的 shell。process 名稱最多 15 個字元，`pgrep -x` 要用截斷後的名稱：`ros2_control_no`、`robot_state_pub`（直接對 `ros2 launch` 的 PID 送 SIGINT 也可以，會一併結束子 process）。
 - `ros2 param` 偶爾會回 "Node not found"（daemon 探索偏慢），重試即可。
 - 測試完成後確認沒有殘留的 process（Groot 的 port 1666 被佔用時，下一個 `bt_runner` 會啟動失敗）。
 - 目前沒有自動化測試框架，要新增前先和使用者討論。

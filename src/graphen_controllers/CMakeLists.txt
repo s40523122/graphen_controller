@@ -7,9 +7,12 @@ endif()
 
 set(THIS_PACKAGE_INCLUDE_DEPENDS
   controller_interface
+  graphen_interfaces
   hardware_interface
+  lifecycle_msgs
   pluginlib
   rclcpp
+  rclcpp_action
   rclcpp_lifecycle
   realtime_tools
   std_msgs
@@ -22,6 +25,7 @@ foreach(dep IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
 endforeach()
 
 add_library(${PROJECT_NAME} SHARED
+  src/locomotion_planner.cpp
   src/switch_group_controller.cpp
   src/sub_group_controller.cpp
 )

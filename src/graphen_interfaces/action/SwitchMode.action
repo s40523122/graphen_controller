@@ -1,0 +1,12 @@
+# 要求 SwitchGroupController 切換到指定模式
+string mode
+---
+bool success
+string message
+# 實際套用的模式
+string mode
+# 切換當下的 state interface 快照（名稱與數值一一對應）
+string[] interface_names
+float64[] values
+---
+# 模式切換是瞬間完成的，沒有 feedback

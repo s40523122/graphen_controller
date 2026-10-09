@@ -1,20 +1,13 @@
 #include "graphen_bt_nodes/sys_count_nodes.hpp"
 
+#include "graphen_bt_nodes/ros_node.hpp"
+
 namespace graphen::bt {
 
 namespace {
 
 constexpr const char * kCountKey = "sys_count";
 constexpr const char * kCountParam = "gp_sys_count";
-
-// 從 blackboard 取得執行器放入的 ROS node
-rclcpp::Node::SharedPtr get_ros_node(const BT::NodeConfiguration & config, const std::string & name) {
-  rclcpp::Node::SharedPtr node;
-  if (!config.blackboard || !config.blackboard->get("node", node) || !node) {
-    throw BT::RuntimeError(name, ": missing ROS node in blackboard key [node]");
-  }
-  return node;
-}
 
 int get_count(const BT::NodeConfiguration & config) {
   int count = 0;

@@ -33,11 +33,22 @@ switch_group_controller:
     command_interfaces:
       - arm_group_controller/position
       - gripper_group_controller/position
-    # 每個模式依 command_interfaces 順序給一組目標值（攤平）
-    modes: [1, 2]
-    mode_targets: [0.1, 0.2,   # mode 1: arm, gripper
-                   0.3, 0.4]   # mode 2: arm, gripper
-    default_mode: 1
+    # 模式以名稱識別（BT、action、~/mode topic 都用這些名稱），名稱同時是下面參數的前綴。
+    # forward 往正方向（正轉）、reverse 往負方向（反轉）。
+    # BT 以遲滯門檻換向時，門檻必須落在兩個模式的 arm 目標之間（目前 BT 用 ±1.0）
+    modes: [forward, reverse]
+    default_mode: forward
+    forward:
+      targets: [ 1.5, 0.05]   # 依 command_interfaces 順序：arm, gripper
+    reverse:
+      targets: [-1.5, 0.05]
+    # planner 以 planner_rate 往模式目標內插，每週期最多移動 planner_max_steps
+    planner_rate: 100.0
+    planner_max_steps: [0.005, 0.001]   # 100 Hz 下 arm 約 0.5 rad/s、gripper 約 0.1 m/s
+    # activate 時以這些 state 作為 planner 起點（順序對應 command_interfaces）
+    target_state_interfaces:
+      - joint_arm1/position
+      - joint_gripper1/position
 
 arm_group_controller:
   ros__parameters:

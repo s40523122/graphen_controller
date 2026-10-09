@@ -1,9 +1,12 @@
 #include "behaviortree_cpp_v3/bt_factory.h"
+#include "graphen_bt_nodes/compare_nodes.hpp"
 #include "graphen_bt_nodes/execution_rate_logger.hpp"
+#include "graphen_bt_nodes/get_state_value.hpp"
 #include "graphen_bt_nodes/high_freq_control.hpp"
 #include "graphen_bt_nodes/is_ok.hpp"
 #include "graphen_bt_nodes/rate_control.hpp"
 #include "graphen_bt_nodes/say_hello.hpp"
+#include "graphen_bt_nodes/switch_mode.hpp"
 #include "graphen_bt_nodes/sys_count_nodes.hpp"
 #include "graphen_bt_nodes/wait.hpp"
 
@@ -19,4 +22,8 @@ BT_REGISTER_NODES(factory)
   factory.registerNodeType<graphen::bt::IncrementSysCount>("IncrementSysCount");
   factory.registerNodeType<graphen::bt::CheckSysCount>("CheckSysCount");
   factory.registerNodeType<graphen::bt::ClearSysCount>("ClearSysCount");
+  factory.registerNodeType<graphen::bt::GetStateValue>("GetStateValue");
+  factory.registerNodeType<graphen::bt::IsBelow>("IsBelow");
+  factory.registerNodeType<graphen::bt::IsAbove>("IsAbove");
+  factory.registerNodeType<graphen::bt::SwitchMode>("SwitchMode");
 }
