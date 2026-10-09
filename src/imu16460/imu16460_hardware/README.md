@@ -40,7 +40,7 @@ sensor 必須有以下 10 個 state interface（`imu_sensor_broadcaster` 需要�
                              port="/dev/ttyTHS1" baudrate="921600"/>
 ```
 
-在 graphen 中由 `graphen_description` 以 `use_mock_imu:=false` 引入：
+在 graphen 中由 `ti5_170a_graphen/urdf/ti5_170a_graphen.urdf.xacro` 以 `use_mock_imu:=false` 引入：
 
 ```bash
 ros2 launch graphen_bringup bringup.launch.py use_mock_imu:=false imu_port:=/dev/ttyTHS1

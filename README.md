@@ -14,7 +14,9 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | ROS 2 | Humble |
 | ros2_control / controller_interface | 2.53 |
 | behaviortree_cpp_v3 | 3.8.7 |
-| 硬體 | `mock_components/GenericSystem`（模擬）；IMU 可切換為實機 FSS-IMU16460-C（`use_mock_imu:=false`） |
+| 機器人 | Ti5 T170（`ti5_170a_graphen`，32 joint）；預設 `mock_components/GenericSystem`，`use_mock_hardware:=false` 切換為 CAN 實機（`ti5_hardware`） |
+| 靈巧手 | 預設不啟用，`use_hands:=true` 加入左右手（各 13 joint） |
+| IMU | 預設 mock，`use_mock_imu:=false` 切換為實機 FSS-IMU16460-C |
 
 ## 套件一覽
 
@@ -23,12 +25,16 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [graphen_interfaces](src/graphen_interfaces/) | 介面定義 | `SwitchMode` action | — |
 | [graphen_control_utils](src/graphen_control_utils/) | header-only lib | 共用元件 `StateInterfacePublisher` | — |
 | [graphen_controllers](src/graphen_controllers/) | controller plugin | `SwitchGroupController`（含 `LocomotionPlanner`）、`SubGroupController` | graphen_control_utils、graphen_interfaces |
-| [graphen_description](src/graphen_description/) | 資源 | URDF / ros2_control 硬體描述 | — |
-| [graphen_bringup](src/graphen_bringup/) | 資源 | controller 設定檔與 launch | graphen_controllers、graphen_description |
+| [graphen_bringup](src/graphen_bringup/) | 資源 | controller 設定檔、CAN 設定與 launch | graphen_controllers、ti5_170a_graphen |
 | [graphen_bt_nodes](src/graphen_bt_nodes/) | BT plugin | 自訂 BT 節點（RateControl、IsOk、SysCount、SwitchMode…） | graphen_interfaces |
 | [graphen_bt](src/graphen_bt/) | 執行檔 | `bt_runner`、tree XML、設定檔與 launch | graphen_bt_nodes（執行期載入） |
 | [imu16460_core](src/imu16460/imu16460_core/) | C++ lib（純 CMake，無 ROS） | IMU 協議、parser、serial、`Driver`、`imu16460_cli` | — |
 | [imu16460_hardware](src/imu16460/imu16460_hardware/) | hardware plugin | ros2_control `SensorInterface`，xacro macro | imu16460_core |
+| [ti5_170a_graphen](src/ti5_170a_graphen/) | 資源（外部） | T170 URDF、ros2_control xacro、joint 分組 SRDF | imu16460_hardware、ti5_hardware、dexterous_hand_description |
+| [ti5_hardware](src/ti5_hardware/) | hardware plugin（外部） | T170 關節 `SystemInterface`（`ti5_hardware/Ti5Hardware`） | can_driver |
+| [can_driver](src/can_driver/) | C++ lib（外部） | SocketCAN 與 Ti5 馬達指令 | — |
+| [dexterous_hand_description](src/dexterous_hands/dexterous_hand_description/) | 資源（外部） | 靈巧手 ros2_control xacro macro | dexterous_hand_hardware（執行期） |
+| [dexterous_hand_hardware](src/dexterous_hands/dexterous_hand_hardware/) | hardware plugin（外部） | 靈巧手 `SystemInterface`（RS485） | — |
 
 ## 快速開始
 
@@ -49,10 +55,10 @@ ros2 launch graphen_bt bt.launch.py                 # 行為層（另開終端�
 # 五個 controller 都應該是 active
 ros2 control list_controllers
 
-# 預設 forward 模式：joint_arm1 以約 0.5 rad/s 往 1.5 移動，joint_gripper1 往 0.05，imu/raw_data 為 1.23
+# 預設 forward 模式：L_SHOULDER_P、R_SHOULDER_P 以約 0.5 rad/s 往 1.5 移動，imu/raw_data 為 1.23
 ros2 topic echo --once /switch_group_controller/states
 
-# 用 action 切換到 reverse 模式：result 附上切換當下的 state 快照，之後 joint_arm1 往 -1.5 移動
+# 用 action 切換到 reverse 模式：result 附上切換當下的 state 快照，之後兩個肩關節往 -1.5 移動
 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: reverse}"
 
 # 不在 modes 中的名稱會被 reject
@@ -61,7 +67,7 @@ ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/ac
 # 也可以用 topic 切換（QoS 必須相容）
 ros2 topic pub --once /switch_group_controller/mode std_msgs/msg/String "{data: forward}" \
   --qos-durability transient_local --qos-reliability reliable
-ros2 topic echo --once /arm_group_controller/references
+ros2 topic echo --once /left_arm_group_controller/references
 ```
 
 ### 行為層
@@ -92,7 +98,26 @@ ros2 launch graphen_bt bt.launch.py \
   tree_file:=$(ros2 pkg prefix graphen_bt)/share/graphen_bt/trees/joint_reciprocate.xml
 ```
 
-tree 依目前方向分成 `Forward` / `Reverse` 兩個分支，跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向。用 Groot v1 連線可以看到目前亮著的分支和換向的瞬間；log 會每隔約 4 秒交替印出 `SwitchMode: switched to mode [ forward ]` / `[ reverse ]`，`/switch_group_controller/states` 中的 joint_arm1 會在約 ±1.0 之間往返。門檻在 tree XML 中修改（必須落在兩個模式的 arm 目標 ±1.5 之間）。
+tree 依目前方向分成 `Forward` / `Reverse` 兩個分支，跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向。用 Groot v1 連線可以看到目前亮著的分支和換向的瞬間；log 會每隔約 4 秒交替印出 `SwitchMode: switched to mode [ forward ]` / `[ reverse ]`，`/switch_group_controller/states` 中的 L_SHOULDER_P 會在約 ±1.0 之間往返。門檻在 tree XML 中修改（必須落在兩個模式的目標 ±1.5 之間）。
+
+### 靈巧手（mock）
+
+```bash
+ros2 launch graphen_bringup bringup.launch.py use_hands:=true
+ros2 control list_hardware_components               # 多出 left_hand_hardware、right_hand_hardware
+```
+
+目前沒有 controller 驅動手部 joint，只會發布狀態。
+
+### T170 實機
+
+> 會對馬達送出指令。未確認機器人狀態與安全措施前不要執行。
+
+```bash
+ros2 launch graphen_bringup bringup.launch.py use_mock_hardware:=false
+```
+
+CAN 通道與馬達對應在 [can_driver_config.json](src/graphen_bringup/config/can_driver_config.json)，實機初始位置在 [real_initial_positions.yaml](src/graphen_bringup/config/real_initial_positions.yaml)。加上 `use_hands:=true` 時靈巧手也會改用實機（`left_hand_port`、`right_hand_port`、`hand_baudrate`）。
 
 ### 實機 IMU（FSS-IMU16460-C）
 

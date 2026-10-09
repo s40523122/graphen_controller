@@ -22,8 +22,14 @@ graph LR
   subgraph 控制層
     utils[graphen_control_utils<br/>header-only]
     ctrl[graphen_controllers<br/>controller plugin]
-    desc[graphen_description<br/>URDF]
     bringup[graphen_bringup<br/>config + launch]
+  end
+  subgraph 機器人（外部套件）
+    desc[ti5_170a_graphen<br/>URDF + ros2_control xacro]
+    ti5hw[ti5_hardware<br/>CAN system plugin]
+    can[can_driver<br/>SocketCAN lib]
+    handdesc[dexterous_hand_description<br/>手部 ros2_control xacro]
+    handhw[dexterous_hand_hardware<br/>RS485 system plugin]
   end
   subgraph IMU 驅動
     imucore[imu16460_core<br/>純 C++，無 ROS]
@@ -40,6 +46,10 @@ graph LR
   bringup -.->|exec| desc
   imuhw -->|build| imucore
   desc -.->|xacro include| imuhw
+  desc -.->|xacro include| handdesc
+  desc -.->|exec| ti5hw
+  ti5hw -->|build| can
+  handdesc -.->|exec| handhw
   bt -.->|runtime 載入| btnodes
 ```
 
@@ -75,14 +85,20 @@ graph LR
   mode[/"~/mode (String)"/] --> sw
   sw <-->|模式目標 / 最新位置目標| planner[LocomotionPlanner<br/>non-RT thread]
   sw -->|"~/states"| bt
-  sw -->|arm_group_controller/position| arm[arm_group_controller<br/>SubGroupController]
-  sw -->|gripper_group_controller/position| grip[gripper_group_controller<br/>SubGroupController]
-  arm -->|joint_arm1/position| hw[(mock hardware)]
-  grip -->|joint_gripper1/position| hw
+  sw -->|left_arm_group_controller/position| larm[left_arm_group_controller<br/>SubGroupController]
+  sw -->|right_arm_group_controller/position| rarm[right_arm_group_controller<br/>SubGroupController]
+  larm -->|L_SHOULDER_P/position| hw[(T170 本體 UpperBody<br/>mock 或 Ti5Hardware)]
+  rarm -->|R_SHOULDER_P/position| hw
   hw -->|state interfaces| sw
   hw --> jsb[joint_state_broadcaster]
-  fwd[sensor_forwarder<br/>ForwardCommandController] -->|imu/raw_data| hw
+  fwd[sensor_forwarder<br/>ForwardCommandController] -->|imu/raw_data| mimu[(MockImu<br/>mock system)]
+  mimu --> sw
 ```
+
+- 本體 `UpperBody` 有 32 個 joint（雙臂、腰、頭、雙腿），每個 joint 為 position 指令、position/velocity/acceleration 狀態。目前只有 `L_SHOULDER_P`、`R_SHOULDER_P` 由 controller 驅動，其他 joint 只發布狀態。
+- `use_mock_hardware:=false` 時本體改為 `ti5_hardware/Ti5Hardware`（CAN），參數來自 [can_driver_config.json](../src/graphen_bringup/config/can_driver_config.json) 與 [real_initial_positions.yaml](../src/graphen_bringup/config/real_initial_positions.yaml)。
+- `use_hands:=true` 時另外加入左右手兩個 system（各 13 個 joint，mock / 實機跟隨 `use_mock_hardware`），目前沒有 controller 驅動。
+- joint 分組（left_arm、right_arm、left_hand、right_hand、waist、head）定義在 [ti5_170a_graphen.srdf](../src/ti5_170a_graphen/config/ti5_170a_graphen.srdf)，目前只作為參考，程式尚未讀取。
 
 上圖是預設的 mock IMU（`use_mock_imu:=true`）。實機 IMU（`use_mock_imu:=false`）時：
 
@@ -94,11 +110,11 @@ graph LR
   imuhw -->|imu_sensor/angular_velocity.z| sw[switch_group_controller]
 ```
 
-- mock system 不再有 `imu/raw_data`，`sensor_forwarder` 不啟動；改為獨立的 sensor 硬體元件 `imu16460`，與 mock system 由同一個 controller_manager 管理。
+- 不建立 `MockImu`，`sensor_forwarder` 不啟動；改為獨立的 sensor 硬體元件 `imu16460`，與本體由同一個 controller_manager 管理。
 - `switch_group_controller.sensor` 由 `controllers_imu16460.yaml` 覆寫為 `imu_sensor/angular_velocity.z`。
 
 - `SwitchGroupController` 不直接操作硬體，而是寫入下層 `SubGroupController` 導出的 **reference interface**（ros2_control chaining）。
-- `sensor_forwarder` 用來模擬 sensor 資料：mock hardware 開啟了 `mock_sensor_commands`，所以可以透過 `/sensor_forwarder/commands` 寫入 `imu/raw_data`。
+- `sensor_forwarder` 用來模擬 sensor 資料：`MockImu` 開啟了 `mock_sensor_commands`，所以可以透過 `/sensor_forwarder/commands` 寫入 `imu/raw_data`。`MockImu` 獨立於本體，本體改用實機時 mock IMU 仍可單獨使用。
 
 ### 2.2 SwitchGroupController
 
@@ -115,13 +131,13 @@ graph LR
 **模式對照表**
 - 模式以**名稱**識別。`modes` 列出可用的名稱，每個名稱同時是該模式參數的前綴，`<mode>.targets` 依 `command_interfaces` 的順序給目標位置：
   ```yaml
-  command_interfaces: [arm_group_controller/position, gripper_group_controller/position]
+  command_interfaces: [left_arm_group_controller/position, right_arm_group_controller/position]
   modes: [forward, reverse]
   default_mode: forward
   forward:
-    targets: [ 1.5, 0.05]   # arm, gripper
+    targets: [ 1.5,  1.5]   # left arm, right arm
   reverse:
-    targets: [-1.5, 0.05]
+    targets: [-1.5, -1.5]
   ```
 - BT、action、`~/mode` topic 都使用同一組名稱，不需要額外的數字對照。
 - 名稱只允許 `[A-Za-z0-9_]`（要當作參數前綴），不可為空、不可重複。controller node 會自動宣告 YAML 中的 `<mode>.targets`；沒有寫的話，`on_configure` 會補宣告，再因為長度不符而回傳 ERROR。
@@ -167,7 +183,7 @@ graph LR
 原始碼：[sub_group_controller.hpp](../src/graphen_controllers/include/graphen_controllers/sub_group_controller.hpp) / [.cpp](../src/graphen_controllers/src/sub_group_controller.cpp)
 類型：`controller_interface::ChainableControllerInterface`
 
-- 依 `input_interfaces` 導出 reference interface，全名為 `<controller 名稱>/<input>`，例如 `arm_group_controller/position`。實際的儲存空間是基類的 `reference_interfaces_`。
+- 依 `input_interfaces` 導出 reference interface，全名為 `<controller 名稱>/<input>`，例如 `left_arm_group_controller/position`。實際的儲存空間是基類的 `reference_interfaces_`。
 - **只支援 chained 模式**：沒有 topic 訂閱，`update_reference_from_subscribers()` 是空實作。
 - `update_and_write_commands()`：把**第一個** reference 寫到所有 output command interface；其餘 reference 只發布到 `~/references`，目前沒有實際用途。
 - reference 初始化為 NaN，代表上層還沒寫入；這段期間不輸出，避免把 NaN 寫進硬體。
@@ -199,7 +215,7 @@ graph LR
 
 把一組具名的 double 值以 `control_msgs/DynamicJointState` 發布，兩個 controller 都使用它。
 
-- 名稱以**最後一個 `/`** 拆成 prefix 和 interface（例如 `joint_arm1/position` 拆成 `joint_arm1` + `position`），依 prefix 分組。
+- 名稱以**最後一個 `/`** 拆成 prefix 和 interface（例如 `L_SHOULDER_P/position` 拆成 `L_SHOULDER_P` + `position`），依 prefix 分組。
 - msg 在建構時預先配置，`publish()` 只填值，符合 RT 的要求。
 - 用累積的 `period` 控制發布頻率，並保留餘數以維持準確的頻率；落後太多時歸零，避免連續補發。
 - 使用 `RealtimePublisher::trylock()`，拿不到 lock 就跳過這一次，不會阻塞 `update()`。
@@ -210,7 +226,7 @@ graph LR
 [bringup.launch.py](../src/graphen_bringup/launch/bringup.launch.py) 以 `OnProcessExit` 串接 spawner：
 
 ```
-joint_state_broadcaster ─▶ arm_group_controller ─▶ gripper_group_controller ─▶ switch_group_controller
+joint_state_broadcaster ─▶ left_arm_group_controller ─▶ right_arm_group_controller ─▶ switch_group_controller
 sensor_forwarder（與 JSB 並行，use_mock_imu:=true）
 imu_sensor_broadcaster（與 JSB 並行，use_mock_imu:=false）
 ```
@@ -221,11 +237,16 @@ launch argument：
 
 | 參數 | 預設值 | 說明 |
 |---|---|---|
+| `use_mock_hardware` | `true` | `true`：本體使用 `mock_components/GenericSystem`；`false`：T170 實機（`ti5_hardware`，CAN） |
+| `hw_read_timeout_ms` | `20` | `ti5_hardware` 的 CAN 讀取 timeout |
+| `use_hands` | `false` | 啟用靈巧手 ros2_control（mock / 實機跟隨 `use_mock_hardware`） |
+| `left_hand_port` / `right_hand_port` | `/dev/ttyUSB1` / `/dev/ttyUSB0` | 實機靈巧手的 serial port |
+| `hand_baudrate` | `115200` | 實機靈巧手的鮑率 |
 | `use_mock_imu` | `true` | `true`：mock `imu/raw_data` + `sensor_forwarder`（原本的行為）；`false`：實機 IMU，額外載入 [controllers_imu16460.yaml](../src/graphen_bringup/config/controllers_imu16460.yaml) |
 | `imu_port` | `/dev/ttyTHS1` | 實機 IMU 的 serial port |
 | `imu_baudrate` | `921600` | 實機 IMU 的鮑率 |
 
-`use_mock_imu` 同時傳給 xacro（切換 URDF 中的 sensor 區塊）和 controller_manager 的參數檔組合（ROS 參數檔無法以 condition 切換，所以 controller_manager 在 `OpaqueFunction` 中建立）。
+`use_mock_hardware`、`use_hands` 只傳給 xacro。`use_mock_imu` 同時傳給 xacro（切換 URDF 中的 sensor 區塊）和 controller_manager 的參數檔組合（ROS 參數檔無法以 condition 切換，所以 controller_manager 在 `OpaqueFunction` 中建立）。
 
 ### 2.7 Imu16460SensorInterface（imu16460_hardware）
 
@@ -319,7 +340,7 @@ Fallback
 
 ```
 Sequence
-├─ GetStateValue joint=joint_arm1 interface=position → {arm_pos}
+├─ GetStateValue joint=L_SHOULDER_P interface=position → {arm_pos}
 └─ Fallback
    ├─ BlackboardCheckString "Forward"  {direction} == forward
    │  └─ Fallback
@@ -389,6 +410,7 @@ Sequence
 | D11 | IMU 驅動獨立命名（`imu16460_*`），core 不依賴 ROS | 它是裝置驅動，與 graphen 的控制邏輯無關，可以直接搬到其他機器人或非 ROS 程式；協議、parser、Driver 不依賴 ROS，可以用 GoogleTest + pty 在沒有實機的環境測試 |
 | D12 | mock / 實機 IMU 以 `use_mock_imu` 切換，mock 完全保留 | 開發機（WSL）沒有實體設備，mock 是日常開發的預設；實機差異集中在 xacro 的 `xacro:if/unless` 和疊加的 `controllers_imu16460.yaml`，不修改原本的 `controllers.yaml` |
 | D13 | IMU 由背景 thread 依自身頻率更新，`read()` 只取最新一筆 | serial I/O 不進 RT 路徑；IMU 頻率與 controller_manager 的 `update_rate` 互不影響（不提供平均模式，避免引入額外延遲） |
+| D14 | 機器人描述改用 `ti5_170a_graphen`，控制層先做最小替換（兩個肩關節） | 沿用既有的 Switch/SubGroup + BT 架構驗證連動；`SubGroupController` 目前只用第一個 reference，完整的部位分組等 LocomotionPlanner 擴充時再做（分組參考 SRDF）。外部套件（`ti5_*`、`can_driver`、`dexterous_hand_*`）保留原本命名，不套 `graphen_` 慣例 |
 
 ---
 
@@ -435,7 +457,9 @@ Sequence
     - plugin 不能用 `auto_declare`，要用 `declare_parameter`，宣告前先檢查 `has_parameter`。
 - **BT 的方向與 controller 的模式可能不一致**：controller 被 reconfigure 回到 `default_mode` 時，BT 的 `{direction}` 不會跟著改變，要等到下一次換向才會重新同步。
 - **planner 的速度受 non-RT 排程影響**：`planner_max_steps` 是「每週期」的量，planner thread 被延遲時，實際速度會變慢（WSL 在高負載下觀察得到）。
-- **SubGroupController 只使用第一個 reference**：多 reference 的用法尚未定義。
+- **SubGroupController 只使用第一個 reference**：多 reference 的用法尚未定義。T170 目前只有 `L_SHOULDER_P`、`R_SHOULDER_P` 受控。
+- **ti5_hardware 的 state interface 語意**：`velocity` 實際綁到 error code、`acceleration` 綁到 filter current（[ti5_hardware.cpp](../src/ti5_hardware/src/ti5_hardware.cpp) `export_state_interfaces`），實機時不可當作速度 / 加速度使用。
+- **T170 實機尚未在本架構下驗證**：`use_mock_hardware:=false`、`use_hands:=true` + 實機只做過 xacro 展開檢查；`robot.urdf`（Ti5Hardware 讀限位用）需確認與 xacro 同步；IMU 在 T170 上的安裝位置待確認（`TODO(verify-on-hw)`）。
 - **RateControl 的並行存取**：worker thread 和主樹會並行存取 child 和 blackboard（沿用原型設計）。因此 `sys_count` 可能略微超過 target（實測約 3006）。若要嚴格同步，需要重新設計。
 - **CheckSysCount 的 target（3000）寫死在 tree XML**：可以考慮改成 blackboard 變數。
 - **Groot 只支援 v1**：要改用 Groot2 必須升級到 BT.CPP v4。

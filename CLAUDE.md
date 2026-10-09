@@ -1,23 +1,27 @@
 # graphen_ws
 
-ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchGroupController` → chainable `SubGroupController` → mock hardware），以及 BehaviorTree.CPP v3 行為層（`bt_runner` + plugin 節點）。兩層透過 `SwitchMode` action（切換模式）和 `~/states` topic（BT 取得 joint 狀態）連動。
+ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchGroupController` → chainable `SubGroupController` → Ti5 T170 本體，預設 mock），以及 BehaviorTree.CPP v3 行為層（`bt_runner` + plugin 節點）。兩層透過 `SwitchMode` action（切換模式）和 `~/states` topic（BT 取得 joint 狀態）連動。
 架構、參數、設計決策見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；使用方式見 [README.md](README.md)。
 
 ## 套件
 - `graphen_interfaces`：action 定義（`SwitchMode`），控制層與行為層共用
 - `graphen_control_utils`：header-only 共用元件（`StateInterfacePublisher`）
 - `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`；`LocomotionPlanner` 是內部元件（不是 plugin）
-- `graphen_description`：URDF / ros2_control
-- `graphen_bringup`：`config/controllers.yaml`、`launch/bringup.launch.py`
+- `graphen_bringup`：`config/controllers.yaml`、`config/can_driver_config.json`（T170 實機 CAN 設定）、`launch/bringup.launch.py`
 - `graphen_bt_nodes`：BT 節點 plugin，全部在 `register_nodes.cpp` 註冊
 - `graphen_bt`：`bt_runner`、`trees/`、`config/bt_runner.yaml`、`launch/bt.launch.py`
 - `src/imu16460/imu16460_core`：FSS-IMU16460-C 驅動，純 CMake、**程式碼不得 include ROS 標頭**；含 `imu16460_cli` 與 GoogleTest。協議見 [docs/IMU16460.md](docs/IMU16460.md)
 - `src/imu16460/imu16460_hardware`：IMU 的 ros2_control `SensorInterface` plugin（`imu16460_hardware/Imu16460SensorInterface`）與 xacro macro
+- 外部套件（沿用原本命名，不套 `graphen_` 慣例）：
+  - `ti5_170a_graphen`：robot_description。頂層 xacro 為 `urdf/ti5_170a_graphen.urdf.xacro`，本體 ros2_control 為 `urdf/ti5_170a_graphen.ros2_control.xacro`，joint 分組 SRDF 為 `config/ti5_170a_graphen.srdf`（目前只作參考）
+  - `ti5_hardware`（`ti5_hardware/Ti5Hardware`，CAN）、`can_driver`：T170 關節實機
+  - `dexterous_hands/`：`dexterous_hand_description`（ros2_control xacro macro）、`dexterous_hand_hardware`（RS485）；MoveIt 設定已移除
 
 ## 建置與執行
 - `colcon build --symlink-install`；只改一個套件時加 `--packages-select <pkg>`
 - 執行前先 `source install/setup.bash`（BT plugin 依賴 LD_LIBRARY_PATH 載入）
 - `ros2 launch graphen_bringup bringup.launch.py`、`ros2 launch graphen_bt bt.launch.py`
+- 本體以 launch 參數 `use_mock_hardware`（預設 true）切換 mock / CAN 實機；靈巧手以 `use_hands`（預設 false）啟用，mock / 實機跟隨 `use_mock_hardware`
 - IMU 以 launch 參數 `use_mock_imu`（預設 true）切換 mock / 實機；mock 的行為（`imu/raw_data`、`sensor_forwarder`）不可改動。實機設定放在 `config/controllers_imu16460.yaml`
 
 ## 慣例
@@ -33,6 +37,9 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 - IMU 驅動例外：使用自己的命名（`imu16460_*`、namespace `imu16460` / `imu16460_hardware`），不套用 `graphen_` 慣例；協議常數集中在 `protocol.hpp`，不寫魔術數字
 - IMU 的 `read()` 只取 Driver 背景 thread 的最新樣本，不可阻塞、不可配置記憶體
 - 待實機驗證的項目以 `// TODO(verify-on-hw):` 標記，不要自行假設為正確
+
+## T170 / 靈巧手實機安全
+- **未經使用者同意，不得以 `use_mock_hardware:=false` 啟動**（會對馬達送出指令）。WSL 開發機沒有 CAN / RS485：實機路徑只驗證 xacro 展開與建置
 
 ## IMU 實機安全
 - **未經使用者同意，不得對實機送出會改變持久設定的指令**（存 FLASH、改鮑率、改坐標系、重啟）。開發與測試只做讀取；hardware plugin 不送任何命令
