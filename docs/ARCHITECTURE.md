@@ -133,7 +133,7 @@ graph LR
   ```yaml
   command_interfaces: [left_arm_group_controller/position, right_arm_group_controller/position]
   modes: [forward, reverse]
-  default_mode: forward
+  default_mode: ""        # 空字串：啟動時保持位置，收到命令才移動
   forward:
     targets: [ 1.5,  1.5]   # left arm, right arm
   reverse:
@@ -156,6 +156,9 @@ graph LR
 - `~/mode` 的 QoS 設為 **reliable + transient_local**：模式切換不能遺失，而且晚啟動的 controller 也能收到最後一次設定的模式。發布端必須使用相容的 QoS（見 README 的指令）。
 - 每次 configure 都會回到 `default_mode`。
 - `on_activate` 以 `target_state_interfaces` 的目前值作為 planner 的起點，啟動瞬間輸出不會跳動；`on_deactivate` 停止 planner。
+- **保持模式**：`default_mode` 為空字串時，啟動後不進入任何模式。`on_activate` 把 planner 的起點與目標都設為保持位置，收到第一個模式命令（BT、action 或 `~/mode`）才開始移動。
+  - 保持位置優先取下游 reference 的值。下游在 activate 時，會以硬體目前的 command 值初始化 reference，也就是 Ti5Hardware 從 `real_initial_positions.yaml` 或 encoder 得到的值；reference 無效時才用 `target_state_interfaces`。
+  - 這樣實機馬達還在走向初始姿態時，不會被停在半路。
 
 **sensor 處理**：若有設定 `sensor`，但它不在 `state_interfaces` 中，會自動附加到最後，並記錄它的 index。
 
@@ -167,7 +170,7 @@ graph LR
 | `state_publish_rate` | double | 50.0 | `~/states` 的發布頻率（Hz） |
 | `modes` | string[] | `[]`（必填） | 模式名稱，不可重複，只允許 `[A-Za-z0-9_]` |
 | `<mode>.targets` | double[] | （必填） | 該模式的目標位置；長度必須等於 `command_interfaces` 數 |
-| `default_mode` | string | `""`（必填） | 必須列在 `modes` 中 |
+| `default_mode` | string | `""` | 啟動時的模式，必須列在 `modes` 中；空字串表示保持位置，直到收到第一個模式命令 |
 | `planner_rate` | double | 100.0 | planner 的規劃頻率（Hz），必須 > 0 |
 | `planner_max_steps` | double[] | `[]`（必填） | 每個 command interface 在每個規劃週期最多移動的量，每個值必須 > 0 |
 | `target_state_interfaces` | string[] | `[]`（必填） | 與 `command_interfaces` 一一對應，必須列在 `state_interfaces` 中；activate 時作為 planner 起點 |
@@ -186,7 +189,8 @@ graph LR
 - 依 `input_interfaces` 導出 reference interface，全名為 `<controller 名稱>/<input>`，例如 `left_arm_group_controller/position`。實際的儲存空間是基類的 `reference_interfaces_`。
 - **只支援 chained 模式**：沒有 topic 訂閱，`update_reference_from_subscribers()` 是空實作。
 - `update_and_write_commands()`：把**第一個** reference 寫到所有 output command interface；其餘 reference 只發布到 `~/references`，目前沒有實際用途。
-- reference 初始化為 NaN，代表上層還沒寫入；這段期間不輸出，避免把 NaN 寫進硬體。
+- configure 時 reference 初始化為 NaN，這段期間不輸出，避免把 NaN 寫進硬體。
+- `on_activate` 以對應 output 目前的 command 值初始化 reference（沒有對應 output 的為 NaN），讓上層可以據此保持位置。
 
 | 參數 | 型別 | 預設值 | 說明 |
 |---|---|---|---|
@@ -239,6 +243,7 @@ launch argument：
 |---|---|---|
 | `use_mock_hardware` | `true` | `true`：本體使用 `mock_components/GenericSystem`；`false`：T170 實機（`ti5_hardware`，CAN） |
 | `hw_read_timeout_ms` | `20` | `ti5_hardware` 的 CAN 讀取 timeout |
+| `max_command_velocity` | `0.5` | `ti5_hardware` 送往馬達的指令最大變化速度（rad/s，0 為不限速）；開機走向 `real_initial_positions` 時也受限，應 >= planner 速度 |
 | `use_hands` | `false` | 啟用靈巧手 ros2_control（mock / 實機跟隨 `use_mock_hardware`） |
 | `left_hand_port` / `right_hand_port` | `/dev/ttyUSB1` / `/dev/ttyUSB0` | 實機靈巧手的 serial port |
 | `hand_baudrate` | `115200` | 實機靈巧手的鮑率 |
@@ -459,6 +464,10 @@ Sequence
 - **planner 的速度受 non-RT 排程影響**：`planner_max_steps` 是「每週期」的量，planner thread 被延遲時，實際速度會變慢（WSL 在高負載下觀察得到）。
 - **SubGroupController 只使用第一個 reference**：多 reference 的用法尚未定義。T170 目前只有 `L_SHOULDER_P`、`R_SHOULDER_P` 受控。
 - **ti5_hardware 的 state interface 語意**：`velocity` 實際綁到 error code、`acceleration` 綁到 filter current（[ti5_hardware.cpp](../src/ti5_hardware/src/ti5_hardware.cpp) `export_state_interfaces`），實機時不可當作速度 / 加速度使用。
+- **Ti5Hardware 的開機與限速**：
+  - `on_activate` 讀 encoder 作為輸出起點；有列在 `real_initial_positions.yaml` 的 joint，目標為該值，沒列的保持目前位置。
+  - `write()` 送出的指令以 `max_command_velocity` 限速逼近 `hw_commands_`。
+  - 原本 activate 時的 encoder 讀取被註解掉，需實機確認此時讀取是否可靠（`TODO(verify-on-hw)`）。
 - **T170 實機尚未在本架構下驗證**：`use_mock_hardware:=false`、`use_hands:=true` + 實機只做過 xacro 展開檢查；`robot.urdf`（Ti5Hardware 讀限位用）需確認與 xacro 同步；IMU 在 T170 上的安裝位置待確認（`TODO(verify-on-hw)`）。
 - **RateControl 的並行存取**：worker thread 和主樹會並行存取 child 和 blackboard（沿用原型設計）。因此 `sys_count` 可能略微超過 target（實測約 3006）。若要嚴格同步，需要重新設計。
 - **CheckSysCount 的 target（3000）寫死在 tree XML**：可以考慮改成 blackboard 變數。

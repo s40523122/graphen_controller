@@ -55,7 +55,7 @@ ros2 launch graphen_bt bt.launch.py                 # 行為層（另開終端�
 # 五個 controller 都應該是 active
 ros2 control list_controllers
 
-# 預設 forward 模式：L_SHOULDER_P、R_SHOULDER_P 以約 0.5 rad/s 往 1.5 移動，imu/raw_data 為 1.23
+# 啟動後不進入任何模式，所有 joint 保持初始位置（default_mode: ""），imu/raw_data 為 1.23
 ros2 topic echo --once /switch_group_controller/states
 
 # 用 action 切換到 reverse 模式：result 附上切換當下的 state 快照，之後兩個肩關節往 -1.5 移動
@@ -117,7 +117,7 @@ ros2 control list_hardware_components               # 多出 left_hand_hardware�
 ros2 launch graphen_bringup bringup.launch.py use_mock_hardware:=false
 ```
 
-CAN 通道與馬達對應在 [can_driver_config.json](src/graphen_bringup/config/can_driver_config.json)，實機初始位置在 [real_initial_positions.yaml](src/graphen_bringup/config/real_initial_positions.yaml)。加上 `use_hands:=true` 時靈巧手也會改用實機（`left_hand_port`、`right_hand_port`、`hand_baudrate`）。
+CAN 通道與馬達對應在 [can_driver_config.json](src/graphen_bringup/config/can_driver_config.json)，實機初始位置在 [real_initial_positions.yaml](src/graphen_bringup/config/real_initial_positions.yaml)：開機時有列出的 joint 會以 `max_command_velocity`（預設 0.5 rad/s）限速走到該值，沒列的保持目前位置；之後要等 BT 或 action 下命令才會動。加上 `use_hands:=true` 時靈巧手也會改用實機（`left_hand_port`、`right_hand_port`、`hand_baudrate`）。
 
 ### 實機 IMU（FSS-IMU16460-C）
 
