@@ -9,19 +9,49 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
 
-    description_share = get_package_share_directory('graphen_description')
+    description_share = get_package_share_directory('ti5_170a_graphen')
     bringup_share = get_package_share_directory('graphen_bringup')
 
-    xacro_file = os.path.join(description_share, 'urdf', 'robot.urdf.xacro')
+    xacro_file = os.path.join(description_share, 'urdf', 'ti5_170a_graphen.urdf.xacro')
     controllers_yaml_file = os.path.join(bringup_share, 'config', 'controllers.yaml')
+    # 實機本體（ti5_hardware）使用的 CAN 設定與初始位置
+    can_config_file = os.path.join(bringup_share, 'config', 'can_driver_config.json')
+    real_initial_positions_file = os.path.join(
+        bringup_share, 'config', 'real_initial_positions.yaml')
     # 實機 IMU 時疊加的設定（imu_sensor_broadcaster、switch_group_controller 的 sensor）
     imu_yaml_file = os.path.join(bringup_share, 'config', 'controllers_imu16460.yaml')
 
+    use_mock_hardware = LaunchConfiguration('use_mock_hardware')
+    hw_read_timeout_ms = LaunchConfiguration('hw_read_timeout_ms')
+    use_hands = LaunchConfiguration('use_hands')
+    left_hand_port = LaunchConfiguration('left_hand_port')
+    right_hand_port = LaunchConfiguration('right_hand_port')
+    hand_baudrate = LaunchConfiguration('hand_baudrate')
     use_mock_imu = LaunchConfiguration('use_mock_imu')
     imu_port = LaunchConfiguration('imu_port')
     imu_baudrate = LaunchConfiguration('imu_baudrate')
 
     declare_args = [
+        DeclareLaunchArgument(
+            'use_mock_hardware', default_value='true',
+            description='true: mock_components/GenericSystem; '
+                        'false: real T170 joints via ti5_hardware (CAN)'),
+        DeclareLaunchArgument(
+            'hw_read_timeout_ms', default_value='20',
+            description='CAN read timeout of ti5_hardware (use_mock_hardware:=false)'),
+        DeclareLaunchArgument(
+            'use_hands', default_value='false',
+            description='Enable dexterous hands ros2_control '
+                        '(mock or real follows use_mock_hardware)'),
+        DeclareLaunchArgument(
+            'left_hand_port', default_value='/dev/ttyUSB1',
+            description='Serial port of the real left hand'),
+        DeclareLaunchArgument(
+            'right_hand_port', default_value='/dev/ttyUSB0',
+            description='Serial port of the real right hand'),
+        DeclareLaunchArgument(
+            'hand_baudrate', default_value='115200',
+            description='Baudrate of the real hands'),
         DeclareLaunchArgument(
             'use_mock_imu', default_value='true',
             description='true: mock imu/raw_data (sensor_forwarder); '
@@ -36,6 +66,14 @@ def generate_launch_description():
 
     robot_description_raw = Command([
         'xacro ', xacro_file,
+        ' use_mock_hardware:=', use_mock_hardware,
+        ' can_config_path:=', can_config_file,
+        ' real_initial_positions_file:=', real_initial_positions_file,
+        ' hw_read_timeout_ms:=', hw_read_timeout_ms,
+        ' use_hands:=', use_hands,
+        ' left_hand_port:=', left_hand_port,
+        ' right_hand_port:=', right_hand_port,
+        ' hand_baudrate:=', hand_baudrate,
         ' use_mock_imu:=', use_mock_imu,
         ' imu_port:=', imu_port,
         ' imu_baudrate:=', imu_baudrate,
@@ -91,19 +129,19 @@ def generate_launch_description():
         condition=UnlessCondition(use_mock_imu)
     )
 
-    # 4. 下游 Arm
-    spawn_arm_group_controller = Node(
+    # 4. 下游左臂
+    spawn_left_arm_group_controller = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['arm_group_controller'],
+        arguments=['left_arm_group_controller'],
         output='screen'
     )
 
-    # 5. 下游 Gripper
-    spawn_gripper_group_controller = Node(
+    # 5. 下游右臂
+    spawn_right_arm_group_controller = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['gripper_group_controller'],
+        arguments=['right_arm_group_controller'],
         output='screen'
     )
 
@@ -117,26 +155,26 @@ def generate_launch_description():
 
     # ===== 嚴格順序控制：確保廣播器與所有下游 Controller 完全就緒後，才啟動頂層 SwitchGroupController =====
 
-    # Broadcaster 完成 -> 啟動 arm
-    delay_arm_controller = RegisterEventHandler(
+    # Broadcaster 完成 -> 啟動左臂
+    delay_left_arm_controller = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=spawn_joint_state_broadcaster,
-            on_exit=[spawn_arm_group_controller]
+            on_exit=[spawn_left_arm_group_controller]
         )
     )
 
-    # Arm 完成 -> 啟動 gripper
-    delay_gripper_controller = RegisterEventHandler(
+    # 左臂完成 -> 啟動右臂
+    delay_right_arm_controller = RegisterEventHandler(
         event_handler=OnProcessExit(
-            target_action=spawn_arm_group_controller,
-            on_exit=[spawn_gripper_group_controller]
+            target_action=spawn_left_arm_group_controller,
+            on_exit=[spawn_right_arm_group_controller]
         )
     )
 
-    # Gripper 完成 -> 啟動頂層 switch_group_controller
+    # 右臂完成 -> 啟動頂層 switch_group_controller
     delay_switch_group_controller = RegisterEventHandler(
         event_handler=OnProcessExit(
-            target_action=spawn_gripper_group_controller,
+            target_action=spawn_right_arm_group_controller,
             on_exit=[spawn_switch_group_controller]
         )
     )
@@ -147,7 +185,7 @@ def generate_launch_description():
         spawn_joint_state_broadcaster,
         spawn_sensor_forwarder,
         spawn_imu_sensor_broadcaster,
-        delay_arm_controller,
-        delay_gripper_controller,
+        delay_left_arm_controller,
+        delay_right_arm_controller,
         delay_switch_group_controller
     ])

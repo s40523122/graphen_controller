@@ -1,14 +1,14 @@
 controller_manager:
   ros__parameters:
-    update_rate: 1000
+    update_rate: 100   # 實機 CAN 讀取有 timeout，不使用過高的頻率
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    arm_group_controller:
+    left_arm_group_controller:
       type: graphen_control/SubGroupController
 
-    gripper_group_controller:
+    right_arm_group_controller:
       type: graphen_control/SubGroupController
 
     switch_group_controller:
@@ -28,40 +28,40 @@ switch_group_controller:
     sensor: imu/raw_data
     state_publish_rate: 50.0
     state_interfaces:
-      - joint_arm1/position
-      - joint_gripper1/position
+      - L_SHOULDER_P/position
+      - R_SHOULDER_P/position
     command_interfaces:
-      - arm_group_controller/position
-      - gripper_group_controller/position
+      - left_arm_group_controller/position
+      - right_arm_group_controller/position
     # 模式以名稱識別（BT、action、~/mode topic 都用這些名稱），名稱同時是下面參數的前綴。
     # forward 往正方向（正轉）、reverse 往負方向（反轉）。
-    # BT 以遲滯門檻換向時，門檻必須落在兩個模式的 arm 目標之間（目前 BT 用 ±1.0）
+    # BT 以遲滯門檻換向時，門檻必須落在兩個模式的 L_SHOULDER_P 目標之間（目前 BT 用 ±1.0）
     modes: [forward, reverse]
     default_mode: forward
     forward:
-      targets: [ 1.5, 0.05]   # 依 command_interfaces 順序：arm, gripper
+      targets: [ 1.5,  1.5]   # 依 command_interfaces 順序：left arm, right arm
     reverse:
-      targets: [-1.5, 0.05]
+      targets: [-1.5, -1.5]
     # planner 以 planner_rate 往模式目標內插，每週期最多移動 planner_max_steps
     planner_rate: 100.0
-    planner_max_steps: [0.005, 0.001]   # 100 Hz 下 arm 約 0.5 rad/s、gripper 約 0.1 m/s
+    planner_max_steps: [0.005, 0.005]   # 100 Hz 下約 0.5 rad/s
     # activate 時以這些 state 作為 planner 起點（順序對應 command_interfaces）
     target_state_interfaces:
-      - joint_arm1/position
-      - joint_gripper1/position
+      - L_SHOULDER_P/position
+      - R_SHOULDER_P/position
 
-arm_group_controller:
+left_arm_group_controller:
   ros__parameters:
     input_interfaces:
       - position
     output_interfaces:
-      - joint_arm1/position
+      - L_SHOULDER_P/position
     reference_publish_rate: 50.0
 
-gripper_group_controller:
+right_arm_group_controller:
   ros__parameters:
     input_interfaces:
       - position
     output_interfaces:
-      - joint_gripper1/position
+      - R_SHOULDER_P/position
     reference_publish_rate: 50.0

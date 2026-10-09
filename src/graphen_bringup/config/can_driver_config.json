@@ -1,0 +1,141 @@
+{
+    "Encoder": {
+        "single_inner": 65536,
+        "dual_outer": 262144
+    },
+    "CAN": {
+        "right_leg_upper": {
+            "enable": true,
+            "channel": "can2",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 1,
+            "dof": 3,
+            "motors": [
+                { "name": "R_HIP_P", "encoder_type": "DualOuter" },
+                { "name": "R_HIP_R", "encoder_type": "DualOuter" },
+                { "name": "R_HIP_Y", "encoder_type": "DualOuter" }
+            ]
+        },
+        "right_leg_lower": {
+            "enable": true,
+            "channel": "can3",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 4,
+            "dof": 3,
+            "motors": [
+                { "name": "R_KNEE_P", "encoder_type": "DualOuter" },
+                { "name": "R_ANKLE_P", "encoder_type": "DualOuter" },
+                { "name": "R_ANKLE_R", "encoder_type": "DualOuter" }
+            ]
+        },
+        "left_leg_upper": {
+            "enable": true,
+            "channel": "can6",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 7,
+            "dof": 3,
+            "motors": [
+                { "name": "L_HIP_P", "encoder_type": "DualOuter" },
+                { "name": "L_HIP_R", "encoder_type": "DualOuter" },
+                { "name": "L_HIP_Y", "encoder_type": "DualOuter" }
+            ]
+        },
+        "left_leg_lower": {
+            "enable": true,
+            "channel": "can5",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 10,
+            "dof": 3,
+            "motors": [
+                { "name": "L_KNEE_P", "encoder_type": "DualOuter" },
+                { "name": "L_ANKLE_P", "encoder_type": "DualOuter" },
+                { "name": "L_ANKLE_R", "encoder_type": "DualOuter" }
+            ]
+        },
+        "waist": {
+            "enable": true,
+            "channel": "can4",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 13,
+            "dof": 3,
+            "motors": [
+                { "name": "WAIST_Y", "encoder_type": "DualOuter" },
+                { "name": "WAIST_R", "encoder_type": "DualOuter" },
+                { "name": "WAIST_P", "encoder_type": "DualOuter" }
+            ]
+        },
+        "right_arm_upper": {
+            "enable": true,
+            "channel": "can7",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 16,
+            "dof": 4,
+            "motors": [
+                { "name": "R_SHOULDER_P", "encoder_type": "DualOuter" },
+                { "name": "R_SHOULDER_R", "encoder_type": "DualOuter" },
+                { "name": "R_SHOULDER_Y", "encoder_type": "DualOuter" },
+                { "name": "R_ELBOW_Y", "encoder_type": "DualOuter" }
+            ]
+        },
+        "right_arm_lower": {
+            "enable": true,
+            "channel": "can10",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 20,
+            "dof": 3,
+            "motors": [
+                
+                { "name": "R_WRIST_P", "encoder_type": "DualOuter" },
+                { "name": "R_WRIST_Y", "encoder_type": "DualOuter" },
+                { "name": "R_WRIST_R", "encoder_type": "DualOuter" }
+            ]
+        },
+        "left_arm_upper": {
+            "enable": true,
+            "channel": "can8",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 23,
+            "dof": 4,
+            "motors": [
+                { "name": "L_SHOULDER_P", "encoder_type": "DualOuter" },
+                { "name": "L_SHOULDER_R", "encoder_type": "DualOuter" },
+                { "name": "L_SHOULDER_Y", "encoder_type": "DualOuter" },
+                { "name": "L_ELBOW_Y", "encoder_type": "DualOuter" }
+            ]
+        },
+        "left_arm_lower": {
+            "enable": true,
+            "channel": "can11",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 27,
+            "dof": 3,
+            "motors": [
+                { "name": "L_WRIST_P", "encoder_type": "DualOuter" },
+                { "name": "L_WRIST_Y", "encoder_type": "DualOuter" },
+                { "name": "L_WRIST_R", "encoder_type": "DualOuter" }
+            ]
+        },
+        "head": {
+            "enable": true,
+            "channel": "can9",
+            "bitrate": 1000000,
+            "txqueuelen": 1000,
+            "can_id": 30,
+            "dof": 3,
+            "motors": [
+                { "name": "NECK_Y", "encoder_type": "DualOuter" },
+                { "name": "NECK_P", "encoder_type": "DualOuter" },
+                { "name": "NECK_R", "encoder_type": "DualOuter" }
+            ]
+        }
+    }
+}
