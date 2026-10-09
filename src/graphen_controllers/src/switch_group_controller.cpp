@@ -94,8 +94,9 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     mode_targets_.push_back(std::move(targets));
   }
 
+  // 空字串表示啟動時不進入任何模式，保持目前位置，直到收到第一個模式命令
   default_mode_ = get_node()->get_parameter("default_mode").as_string();
-  if (targets_for_mode(default_mode_) == nullptr) {
+  if (!default_mode_.empty() && targets_for_mode(default_mode_) == nullptr) {
     RCLCPP_ERROR(logger, "'default_mode' [ %s ] is not listed in 'modes'.", default_mode_.c_str());
     return controller_interface::CallbackReturn::ERROR;
   }
@@ -187,17 +188,21 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     std::bind(&SwitchGroupController::handle_switch_mode_cancel, this, _1),
     std::bind(&SwitchGroupController::handle_switch_mode_accepted, this, _1));
 
-  // reconfigure 時回到預設模式（planner 未啟動前設定的目標會保留到 activate）
+  // reconfigure 時回到預設模式（planner 未啟動前設定的目標會保留到 activate）；
+  // 沒有預設模式時，保持的目標在 activate 時才決定
   {
     std::lock_guard<std::mutex> lock(mode_mutex_);
     current_mode_ = default_mode_;
-    planner_->set_goal(*targets_for_mode(default_mode_));
+    if (!default_mode_.empty()) {
+      planner_->set_goal(*targets_for_mode(default_mode_));
+    }
   }
 
   RCLCPP_INFO(logger,
     "SwitchGroupController configured with %zu command interfaces, %zu state interfaces "
     "and %zu modes (default mode [ %s ], planner %.1f Hz).",
-    num_commands, state_interface_names_.size(), mode_names_.size(), default_mode_.c_str(),
+    num_commands, state_interface_names_.size(), mode_names_.size(),
+    default_mode_.empty() ? "(hold)" : default_mode_.c_str(),
     planner_rate);
 
   return controller_interface::CallbackReturn::SUCCESS;
@@ -217,6 +222,24 @@ controller_interface::CallbackReturn SwitchGroupController::on_activate(
       return controller_interface::CallbackReturn::ERROR;
     }
     initial_positions.push_back(value);
+  }
+
+  // 尚未進入任何模式時保持位置。保持的目標優先取下游 reference 的值（下游 activate 時
+  // 以硬體目前的 command 初始化，也就是硬體正在前往的初始姿態）；無效時才用目前的 state。
+  // 若直接用 state，實機馬達還在走向初始姿態時會被停在半路
+  {
+    std::lock_guard<std::mutex> lock(mode_mutex_);
+    if (current_mode_.empty()) {
+      for (size_t i = 0; i < initial_positions.size(); ++i) {
+        const double reference = command_interfaces_[i].get_value();
+        if (std::isfinite(reference)) {
+          initial_positions[i] = reference;
+        }
+      }
+      planner_->set_goal(initial_positions);
+      RCLCPP_INFO(get_node()->get_logger(),
+        "No mode selected, holding current positions until a mode command is received.");
+    }
   }
   planner_->start(initial_positions, &target_buffer_);
   return controller_interface::CallbackReturn::SUCCESS;

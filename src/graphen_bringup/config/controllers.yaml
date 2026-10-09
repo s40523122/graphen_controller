@@ -37,7 +37,9 @@ switch_group_controller:
     # forward 往正方向（正轉）、reverse 往負方向（反轉）。
     # BT 以遲滯門檻換向時，門檻必須落在兩個模式的 L_SHOULDER_P 目標之間（目前 BT 用 ±1.0）
     modes: [forward, reverse]
-    default_mode: forward
+    # 空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
+    # 收到 BT / action / ~/mode 的命令後才開始移動
+    default_mode: ""
     forward:
       targets: [ 1.5,  1.5]   # 依 command_interfaces 順序：left arm, right arm
     reverse:

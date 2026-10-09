@@ -26,14 +26,15 @@ namespace graphen::control {
 // update() 只讀取最新值輸出。
 //
 // 參數：
-//   command_interfaces       下游 reference interface（例如 arm_group_controller/position）
+//   command_interfaces       下游 reference interface（例如 left_arm_group_controller/position）
 //   state_interfaces         要讀取並發布的 state interface
 //   sensor                   （選填）sensor state interface，會自動加入 state_interfaces
 //   state_publish_rate       ~/states 的發布頻率 (Hz)
 //   modes                    可用的模式名稱，同時作為下面各模式參數的前綴
 //                            （只允許 [A-Za-z0-9_]）
 //   <mode>.targets           該模式的目標位置，長度 = command_interfaces 數量
-//   default_mode             configure 時的初始模式名稱
+//   default_mode             configure 時的初始模式名稱；空字串表示不進入任何模式，
+//                            activate 時保持目前位置，直到收到第一個模式命令
 //   planner_rate             planner 的規劃頻率 (Hz)
 //   planner_max_steps        每個 command interface 在每個規劃週期最多移動的量
 //   target_state_interfaces  與 command_interfaces 一一對應的 state interface，

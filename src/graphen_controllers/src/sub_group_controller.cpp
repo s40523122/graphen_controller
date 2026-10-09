@@ -51,6 +51,17 @@ controller_interface::CallbackReturn SubGroupController::on_configure(
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
+// reference 以對應 output 目前的 command 值初始化（沒有對應 output 時為 NaN）。
+// 上層 activate 時讀到的就是硬體正在前往的位置，可以直接保持，不會造成跳動
+controller_interface::CallbackReturn SubGroupController::on_activate(
+  const rclcpp_lifecycle::State & /*previous_state*/) {
+  for (size_t i = 0; i < reference_interfaces_.size(); ++i) {
+    reference_interfaces_[i] = i < command_interfaces_.size() ?
+      command_interfaces_[i].get_value() : std::numeric_limits<double>::quiet_NaN();
+  }
+  return controller_interface::CallbackReturn::SUCCESS;
+}
+
 controller_interface::InterfaceConfiguration
 SubGroupController::command_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
@@ -73,7 +84,7 @@ controller_interface::return_type SubGroupController::update_reference_from_subs
 }
 
 // 依 input_interfaces 導出 reference interface，全名為 <node_name>/<input>，
-// 例如 arm_group_controller/position
+// 例如 left_arm_group_controller/position
 std::vector<hardware_interface::CommandInterface>
 SubGroupController::on_export_reference_interfaces() {
   std::vector<hardware_interface::CommandInterface> interfaces;

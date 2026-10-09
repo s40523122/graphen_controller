@@ -20,12 +20,15 @@ namespace graphen::control {
 //   reference_publish_rate  ~/references 的發布頻率 (Hz)
 //
 // 目前行為：第一個 reference 寫到所有 output；所有 reference 皆發布到 ~/references 供觀察。
+// activate 時 reference 以對應 output 目前的 command 值初始化，上層可據此保持位置。
 class SubGroupController : public controller_interface::ChainableControllerInterface {
 public:
   SubGroupController() = default;
 
   controller_interface::CallbackReturn on_init() override;
   controller_interface::CallbackReturn on_configure(
+    const rclcpp_lifecycle::State & previous_state) override;
+  controller_interface::CallbackReturn on_activate(
     const rclcpp_lifecycle::State & previous_state) override;
 
   controller_interface::InterfaceConfiguration command_interface_configuration() const override;
