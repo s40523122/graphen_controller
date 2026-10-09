@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>imu16460_core</name>
+  <version>0.1.0</version>
+  <description>ROS-independent C++17 driver for the FSS-IMU16460-C (serial, frame parsing, CRC, commands).</description>
+  <maintainer email="riverji@graphen.ai">jin</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>cmake</buildtool_depend>
+
+  <test_depend>gtest</test_depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>
