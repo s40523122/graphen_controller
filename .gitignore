@@ -1,3 +1,7 @@
 build/
 install/
 log/
+
+# BVH 動作檔只追蹤預設檔，其他自行加入的動作不進版控
+*.bvh
+!src/graphen_bringup/motions/t170wk_walk1_subject1.bvh

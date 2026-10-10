@@ -135,23 +135,26 @@ def generate_launch_description():
         condition=UnlessCondition(use_mock_imu)
     )
 
-    # 4. 下游左臂
-    spawn_left_arm_group_controller = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['left_arm_group_controller'],
-        output='screen'
-    )
+    # 4. 下游子群組（32 軸，依部位分組），依序啟動
+    sub_group_controllers = [
+        'left_arm_group_controller',
+        'right_arm_group_controller',
+        'waist_group_controller',
+        'head_group_controller',
+        'left_leg_group_controller',
+        'right_leg_group_controller',
+    ]
+    spawn_sub_group_controllers = [
+        Node(
+            package='controller_manager',
+            executable='spawner',
+            arguments=[name],
+            output='screen'
+        )
+        for name in sub_group_controllers
+    ]
 
-    # 5. 下游右臂
-    spawn_right_arm_group_controller = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['right_arm_group_controller'],
-        output='screen'
-    )
-
-    # 6. 上游 Switch Group
+    # 5. 上游 Switch Group
     spawn_switch_group_controller = Node(
         package='controller_manager',
         executable='spawner',
@@ -160,30 +163,18 @@ def generate_launch_description():
     )
 
     # ===== 嚴格順序控制：確保廣播器與所有下游 Controller 完全就緒後，才啟動頂層 SwitchGroupController =====
-
-    # Broadcaster 完成 -> 啟動左臂
-    delay_left_arm_controller = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=spawn_joint_state_broadcaster,
-            on_exit=[spawn_left_arm_group_controller]
+    # Broadcaster -> 子群組 1 -> ... -> 子群組 N -> switch_group_controller
+    spawn_chain = [spawn_joint_state_broadcaster] + spawn_sub_group_controllers + [
+        spawn_switch_group_controller]
+    delayed_spawners = [
+        RegisterEventHandler(
+            event_handler=OnProcessExit(
+                target_action=previous,
+                on_exit=[following]
+            )
         )
-    )
-
-    # 左臂完成 -> 啟動右臂
-    delay_right_arm_controller = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=spawn_left_arm_group_controller,
-            on_exit=[spawn_right_arm_group_controller]
-        )
-    )
-
-    # 右臂完成 -> 啟動頂層 switch_group_controller
-    delay_switch_group_controller = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=spawn_right_arm_group_controller,
-            on_exit=[spawn_switch_group_controller]
-        )
-    )
+        for previous, following in zip(spawn_chain[:-1], spawn_chain[1:])
+    ]
 
     return LaunchDescription(declare_args + [
         node_robot_state_publisher,
@@ -191,7 +182,4 @@ def generate_launch_description():
         spawn_joint_state_broadcaster,
         spawn_sensor_forwarder,
         spawn_imu_sensor_broadcaster,
-        delay_left_arm_controller,
-        delay_right_arm_controller,
-        delay_switch_group_controller
-    ])
+    ] + delayed_spawners)

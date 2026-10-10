@@ -4,7 +4,7 @@ project(graphen_bringup)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY config launch
+  DIRECTORY config launch motions
   DESTINATION share/${PROJECT_NAME}
 )
 
