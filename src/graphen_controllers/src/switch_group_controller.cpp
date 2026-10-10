@@ -5,6 +5,7 @@
 #include <cmath>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
@@ -375,6 +376,13 @@ std::shared_ptr<Motion> SwitchGroupController::create_motion(const std::string &
     return std::make_shared<TargetMotion>(std::move(full_targets), std::move(max_steps));
   }
 
+  // 保持進入模式時的位置（全部 NaN）；用於停止動作，再切到其他模式時會重新 on_enter
+  if (type == "hold") {
+    return std::make_shared<TargetMotion>(
+      std::vector<double>(num_commands, std::numeric_limits<double>::quiet_NaN()),
+      std::move(max_steps));
+  }
+
   if (type == "bvh") {
     const auto file = get_or_declare<std::string>(node, mode + ".file", "");
     if (file.empty()) {
@@ -443,7 +451,7 @@ std::shared_ptr<Motion> SwitchGroupController::create_motion(const std::string &
   }
 
   throw std::invalid_argument(
-    "unknown type '" + type + "' in '" + mode + ".type' (expected 'target' or 'bvh')");
+    "unknown type '" + type + "' in '" + mode + ".type' (expected 'target', 'hold' or 'bvh')");
 }
 
 void SwitchGroupController::apply_mode(const std::string & mode) {

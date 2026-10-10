@@ -38,11 +38,12 @@ namespace graphen::control {
 //   planner_rate             planner 的規劃頻率 (Hz)
 //   planner_max_steps        每個 command interface 在每個規劃週期最多移動的量（各模式的預設值）
 //   modes                    可用的模式名稱，同時作為下面各模式參數的前綴（只允許 [A-Za-z0-9_]）
-//   <mode>.type              target（預設）或 bvh
+//   <mode>.type              target（預設）、hold 或 bvh
 //   <mode>.max_steps         （選填）該模式的每週期最大移動量（bvh 為播放時），預設為 planner_max_steps
 //   type: target
 //     <mode>.joints          （選填）要移動的 joint；省略時為全部，依 command_interfaces 順序
 //     <mode>.targets         對應 joints 的目標位置；沒有列出的 joint 保持進入模式時的位置
+//   type: hold               保持進入模式時的位置（停止），沒有其他參數
 //   type: bvh
 //     <mode>.file            BVH 檔案路徑，支援 package://<pkg>/<path>
 //     <mode>.loop            播放到結尾後是否循環（預設 true）

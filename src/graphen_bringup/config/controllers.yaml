@@ -163,7 +163,7 @@ switch_group_controller:
 
     # 模式以名稱識別（BT、action、~/mode topic 都用這些名稱），名稱同時是下面參數的前綴。
     # controller 不認得任何特定模式，行為完全由 type 與參數決定
-    modes: [forward, reverse, walk]
+    modes: [forward, reverse, walk, stop]
     # 空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
     # 收到 BT / action / ~/mode 的命令後才開始移動
     default_mode: ""
@@ -197,6 +197,11 @@ switch_group_controller:
                   0.21, 0.16, 0.25,                           # head
                   0.28, 0.13, 0.24, 0.67, 0.24, 0.44,         # left leg
                   0.28, 0.13, 0.24, 0.67, 0.24, 0.44]         # right leg
+
+    # type: hold，停在進入模式時的位置；BT 在 walk 與往返都關閉時切到這裡。
+    # 之後再切到 walk 會重新 approach 第 0 幀（重置 locomotion 狀態）
+    stop:
+      type: hold
 
     # BVH 轉換：BVH 節點名稱 = URDF link 名稱，姿態以 base_link 為基準（BVH 的浮動基座會被忽略）
     bvh:

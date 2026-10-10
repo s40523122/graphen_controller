@@ -132,7 +132,7 @@ graph LR
 **模式對照表**
 - 模式以**名稱**識別。`modes` 列出可用的名稱，每個名稱同時是該模式參數的前綴。`<mode>.type` 決定 Motion 的種類：
   ```yaml
-  modes: [forward, reverse, walk]
+  modes: [forward, reverse, walk, stop]
   default_mode: ""          # 空字串：啟動時保持位置，收到命令才移動
   forward:
     type: target            # 往固定目標移動
@@ -143,6 +143,8 @@ graph LR
     file: package://graphen_bringup/motions/t170wk_walk1_subject1.bvh
     loop: true
     max_steps: [...]        # 32 個，播放時的每週期上限
+  stop:
+    type: hold              # 停在進入模式時的位置
   ```
 - joint 名稱取自 `target_state_interfaces` 的 prefix（`L_WRIST_P/position` → `L_WRIST_P`），`<mode>.joints` 與 BVH 對應都使用它。
 - BT、action、`~/mode` topic 都使用同一組名稱，不需要額外的數字對照。
@@ -181,7 +183,7 @@ graph LR
 | `planner_max_steps` | double[] | `[]`（必填） | 每個 command interface 在每個規劃週期最多移動的量，每個值必須 > 0；各模式未指定 max_steps 時使用 |
 | `modes` | string[] | `[]`（必填） | 模式名稱，不可重複，只允許 `[A-Za-z0-9_]` |
 | `default_mode` | string | `""` | 啟動時的模式，必須列在 `modes` 中；空字串表示保持位置，直到收到第一個模式命令 |
-| `<mode>.type` | string | `target` | `target` 或 `bvh` |
+| `<mode>.type` | string | `target` | `target`、`hold` 或 `bvh` |
 | `<mode>.max_steps` | double[] | `planner_max_steps` | 該模式的每週期上限（bvh 為播放時） |
 | `<mode>.joints` | string[] | 全部 | （target）要移動的 joint；沒有列出的保持進入模式時的位置 |
 | `<mode>.targets` | double[] | （必填） | （target）對應 `joints` 的目標位置 |
@@ -245,7 +247,7 @@ graph LR
 
 **Motion 介面**：`on_enter(current)` / `update(dt, current, desired)` / `max_steps()` / `sample_period()`。同一個實例可以重複進入，`on_enter` 會重設狀態；`max_steps()` 與 `sample_period()` 在每次 `update()` 之後讀取，可以依階段改變。`sample_period()` 預設為 0（輸出已連續，下游不插補）。
 
-**TargetMotion**（`type: target`）：往固定目標移動；目標為 NaN 的介面在 `on_enter` 時記住目前位置並保持。
+**TargetMotion**（`type: target`）：往固定目標移動；目標為 NaN 的介面在 `on_enter` 時記住目前位置並保持。`type: hold` 是全部為 NaN 的 TargetMotion，用來停止（保持進入模式時的位置）。
 
 **BvhMotion**（`type: bvh`）：
 - **Approach**：以 `approach_max_steps` 走向第 0 幀（`on_enter` 時以目前位置為初始值解出），所有介面都在一步之內時開始播放。
