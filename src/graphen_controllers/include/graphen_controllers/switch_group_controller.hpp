@@ -11,6 +11,7 @@
 #include "controller_interface/controller_interface.hpp"
 #include "graphen_control_utils/state_interface_publisher.hpp"
 #include "graphen_controllers/locomotion_planner.hpp"
+#include "graphen_controllers/motion.hpp"
 #include "graphen_interfaces/action/switch_mode.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -21,27 +22,41 @@ namespace graphen::control {
 
 // 頂層切換 controller：依目前模式，寫入下游 SubGroupController 的 reference interface。
 //
-// 模式只決定「目標位置」；實際輸出由 LocomotionPlanner 以 planner_rate 的頻率、
-// 每週期最多 planner_max_steps 的幅度往目標內插，寫入 target_buffer_，
-// update() 只讀取最新值輸出。
+// 每個模式對應一個 Motion（固定目標或 BVH 動作），由 LocomotionPlanner 在 non-RT thread 中以
+// planner_rate 播放、每週期最多移動 max_steps，寫入 target_buffer_；update() 只讀取最新值輸出。
+// controller 本身只認得模式名稱，不包含任何特定模式的邏輯。
 //
 // 參數：
-//   command_interfaces       下游 reference interface（例如 left_arm_group_controller/position）
+//   command_interfaces       下游 reference interface（例如 left_arm_group_controller/L_SHOULDER_P）
+//   sample_period_interfaces （選填）下游的 sample_period reference（例如 left_arm_group_controller/sample_period），
+//                            每週期寫入目前 Motion 的輸出點間隔，供下游插補
 //   state_interfaces         要讀取並發布的 state interface
 //   sensor                   （選填）sensor state interface，會自動加入 state_interfaces
 //   state_publish_rate       ~/states 的發布頻率 (Hz)
-//   modes                    可用的模式名稱，同時作為下面各模式參數的前綴
-//                            （只允許 [A-Za-z0-9_]）
-//   <mode>.targets           該模式的目標位置，長度 = command_interfaces 數量
+//   target_state_interfaces  與 command_interfaces 一一對應的 state interface，activate 時作為
+//                            planner 的起點；其 prefix（最後一個 '/' 之前）即為該介面的 joint 名稱
+//   planner_rate             planner 的規劃頻率 (Hz)
+//   planner_max_steps        每個 command interface 在每個規劃週期最多移動的量（各模式的預設值）
+//   modes                    可用的模式名稱，同時作為下面各模式參數的前綴（只允許 [A-Za-z0-9_]）
+//   <mode>.type              target（預設）或 bvh
+//   <mode>.max_steps         （選填）該模式的每週期最大移動量（bvh 為播放時），預設為 planner_max_steps
+//   type: target
+//     <mode>.joints          （選填）要移動的 joint；省略時為全部，依 command_interfaces 順序
+//     <mode>.targets         對應 joints 的目標位置；沒有列出的 joint 保持進入模式時的位置
+//   type: bvh
+//     <mode>.file            BVH 檔案路徑，支援 package://<pkg>/<path>
+//     <mode>.loop            播放到結尾後是否循環（預設 true）
+//     <mode>.time_scale      播放速度倍率（預設 1.0）
+//     <mode>.approach_max_steps  （選填）走向第 0 幀時的每週期最大移動量，預設為 planner_max_steps
+//   bvh.base_link            BVH 與 URDF 共同的基準 link（使用 bvh 模式時必填）
+//   bvh.axis_tolerance / bvh.max_iterations / bvh.damping / bvh.residual_tolerance
+//                            BvhRetargeter 的分組與求解設定
 //   default_mode             configure 時的初始模式名稱；空字串表示不進入任何模式，
 //                            activate 時保持目前位置，直到收到第一個模式命令
-//   planner_rate             planner 的規劃頻率 (Hz)
-//   planner_max_steps        每個 command interface 在每個規劃週期最多移動的量
-//   target_state_interfaces  與 command_interfaces 一一對應的 state interface，
-//                            activate 時作為 planner 的起點
+//   robot_description        （使用 bvh 模式時必要）URDF，由 launch 傳給 controller_manager
 //
 // 介面：
-//   ~/mode        (std_msgs/String, 訂閱)                切換模式
+//   ~/mode        (std_msgs/String, 訂閱)                切換模式；未知模式會被忽略
 //   ~/switch_mode (graphen_interfaces/action/SwitchMode) 切換模式，result 附 state 快照
 //   ~/states      (control_msgs/DynamicJointState)        發布所有 state interface
 class SwitchGroupController : public controller_interface::ControllerInterface {
@@ -67,10 +82,13 @@ public:
     const rclcpp::Duration & period) override;
 
 private:
-  // 依模式取得各 command interface 的目標值；未知模式回傳 nullptr
-  const std::vector<double> * targets_for_mode(const std::string & mode) const;
+  // 依模式名稱取得 Motion；未知模式回傳 nullptr
+  std::shared_ptr<Motion> motion_for_mode(const std::string & mode) const;
 
-  // 切換模式並更新 planner 的目標（non-RT）；未知模式時目標全部設為 0
+  // 讀取 <mode>.* 參數並建立該模式的 Motion；設定錯誤時丟出例外
+  std::shared_ptr<Motion> create_motion(const std::string & mode);
+
+  // 切換模式並交給 planner 播放（non-RT）；未知模式或與目前模式相同時不做任何事
   void apply_mode(const std::string & mode);
 
   // action server callback（皆在 executor thread 執行）
@@ -82,12 +100,16 @@ private:
   void handle_switch_mode_accepted(std::shared_ptr<SwitchModeGoalHandle> goal_handle);
 
   std::vector<std::string> command_interface_names_;
+  std::vector<std::string> sample_period_interface_names_;
   std::vector<std::string> state_interface_names_;
 
-  // mode_names_[i] 對應 mode_targets_[i]，於 on_configure 建立，之後唯讀
+  // 各 command interface 對應的 joint 名稱（取自 target_state_interfaces）
+  std::vector<std::string> joint_names_;
+  std::vector<double> default_max_steps_;  // planner_max_steps
+
+  // mode_names_[i] 對應 mode_motions_[i]，於 on_configure 建立，之後只有 planner thread 使用 Motion
   std::vector<std::string> mode_names_;
-  std::vector<std::vector<double>> mode_targets_;
-  std::vector<double> zero_targets_;  // 未知模式時的目標
+  std::vector<std::shared_ptr<Motion>> mode_motions_;
   std::string default_mode_;
 
   // ~/mode 與 action 可能在不同 executor thread 同時切換模式

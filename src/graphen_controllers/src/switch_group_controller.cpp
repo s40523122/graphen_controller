@@ -5,7 +5,13 @@
 #include <cmath>
 #include <functional>
 #include <iterator>
+#include <stdexcept>
 
+#include "ament_index_cpp/get_package_share_directory.hpp"
+#include "graphen_controllers/bvh_motion.hpp"
+#include "graphen_controllers/target_motion.hpp"
+#include "graphen_motion/bvh_clip.hpp"
+#include "graphen_motion/bvh_retargeter.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
@@ -20,11 +26,39 @@ bool is_valid_mode_name(const std::string & name) {
            });
 }
 
+// 模式參數以 <mode>. 為前綴，無法在 on_init 預先宣告：YAML 有寫的會被 controller node 自動宣告，
+// 沒寫的在這裡以預設值宣告
+template<typename T>
+T get_or_declare(
+  const std::shared_ptr<rclcpp_lifecycle::LifecycleNode> & node,
+  const std::string & name, const T & default_value) {
+  if (!node->has_parameter(name)) {
+    node->declare_parameter<T>(name, default_value);
+  }
+  return node->get_parameter(name).get_value<T>();
+}
+
+// package://<pkg>/<path> 轉成安裝後的絕對路徑；其他字串原樣回傳
+std::string resolve_path(const std::string & path) {
+  const std::string scheme = "package://";
+  if (path.rfind(scheme, 0) != 0) {
+    return path;
+  }
+  const auto rest = path.substr(scheme.size());
+  const auto slash = rest.find('/');
+  if (slash == std::string::npos || slash == 0) {
+    throw std::invalid_argument("Invalid package path '" + path + "'");
+  }
+  return ament_index_cpp::get_package_share_directory(rest.substr(0, slash)) +
+         rest.substr(slash);
+}
+
 }  // namespace
 
 controller_interface::CallbackReturn SwitchGroupController::on_init() {
   try {
     auto_declare<std::vector<std::string>>("command_interfaces", std::vector<std::string>{});
+    auto_declare<std::vector<std::string>>("sample_period_interfaces", std::vector<std::string>{});
     auto_declare<std::vector<std::string>>("state_interfaces", std::vector<std::string>{});
     auto_declare<std::string>("sensor", std::string{});
     auto_declare<double>("state_publish_rate", 50.0);
@@ -33,6 +67,11 @@ controller_interface::CallbackReturn SwitchGroupController::on_init() {
     auto_declare<double>("planner_rate", 100.0);
     auto_declare<std::vector<double>>("planner_max_steps", std::vector<double>{});
     auto_declare<std::vector<std::string>>("target_state_interfaces", std::vector<std::string>{});
+    auto_declare<std::string>("bvh.base_link", std::string{});
+    auto_declare<double>("bvh.axis_tolerance", 1e-4);
+    auto_declare<int>("bvh.max_iterations", 50);
+    auto_declare<double>("bvh.damping", 1e-6);
+    auto_declare<double>("bvh.residual_tolerance", 1e-3);
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception caught during init: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -56,49 +95,23 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
   }
   const size_t num_commands = command_interface_names_.size();
 
-  // 模式以名稱識別，名稱同時是該模式參數的前綴（<mode>.targets）
-  const auto modes = get_node()->get_parameter("modes").as_string_array();
-  if (modes.empty()) {
-    RCLCPP_ERROR(logger, "'modes' parameter is empty!");
-    return controller_interface::CallbackReturn::ERROR;
-  }
-
-  mode_names_.clear();
-  mode_targets_.clear();
-  zero_targets_.assign(num_commands, 0.0);
-  for (const auto & mode : modes) {
-    if (!is_valid_mode_name(mode)) {
+  // 下游插補用的點間隔，接在 command_interfaces 之後 claim
+  sample_period_interface_names_ =
+    get_node()->get_parameter("sample_period_interfaces").as_string_array();
+  for (size_t i = 0; i < sample_period_interface_names_.size(); ++i) {
+    const auto & name = sample_period_interface_names_[i];
+    const bool duplicated = std::find(
+      sample_period_interface_names_.begin() + static_cast<std::ptrdiff_t>(i) + 1,
+      sample_period_interface_names_.end(), name) != sample_period_interface_names_.end();
+    const bool overlaps = std::find(
+      command_interface_names_.begin(), command_interface_names_.end(), name) !=
+      command_interface_names_.end();
+    if (duplicated || overlaps) {
       RCLCPP_ERROR(logger,
-        "Invalid mode name [ %s ]: must be non-empty and contain only [A-Za-z0-9_].",
-        mode.c_str());
+        "Sample period interface [ %s ] is duplicated or also listed in 'command_interfaces'.",
+        name.c_str());
       return controller_interface::CallbackReturn::ERROR;
     }
-    if (std::find(mode_names_.begin(), mode_names_.end(), mode) != mode_names_.end()) {
-      RCLCPP_ERROR(logger, "Duplicate mode [ %s ] in 'modes'.", mode.c_str());
-      return controller_interface::CallbackReturn::ERROR;
-    }
-
-    // controller node 會自動宣告 YAML 中的參數；沒寫在 YAML 時才在這裡宣告，再由下方檢查報錯
-    const std::string targets_param = mode + ".targets";
-    if (!get_node()->has_parameter(targets_param)) {
-      get_node()->declare_parameter<std::vector<double>>(targets_param, std::vector<double>{});
-    }
-    auto targets = get_node()->get_parameter(targets_param).as_double_array();
-    if (targets.size() != num_commands) {
-      RCLCPP_ERROR(logger,
-        "'%s' must contain %zu entries (one per command interface), got %zu.",
-        targets_param.c_str(), num_commands, targets.size());
-      return controller_interface::CallbackReturn::ERROR;
-    }
-    mode_names_.push_back(mode);
-    mode_targets_.push_back(std::move(targets));
-  }
-
-  // 空字串表示啟動時不進入任何模式，保持目前位置，直到收到第一個模式命令
-  default_mode_ = get_node()->get_parameter("default_mode").as_string();
-  if (!default_mode_.empty() && targets_for_mode(default_mode_) == nullptr) {
-    RCLCPP_ERROR(logger, "'default_mode' [ %s ] is not listed in 'modes'.", default_mode_.c_str());
-    return controller_interface::CallbackReturn::ERROR;
   }
 
   state_interface_names_ = get_node()->get_parameter("state_interfaces").as_string_array();
@@ -135,7 +148,10 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     return controller_interface::CallbackReturn::ERROR;
   }
   target_state_indices_.clear();
+  joint_names_.clear();
   for (const auto & name : target_state_names) {
+    // L_WRIST_P/position → L_WRIST_P
+    joint_names_.push_back(name.substr(0, name.rfind('/')));
     const auto it = std::find(state_interface_names_.begin(), state_interface_names_.end(), name);
     if (it == state_interface_names_.end()) {
       RCLCPP_ERROR(logger,
@@ -151,18 +167,55 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     RCLCPP_ERROR(logger, "'planner_rate' must be greater than zero, got %f.", planner_rate);
     return controller_interface::CallbackReturn::ERROR;
   }
-  const auto max_steps = get_node()->get_parameter("planner_max_steps").as_double_array();
-  if (max_steps.size() != num_commands) {
+  default_max_steps_ = get_node()->get_parameter("planner_max_steps").as_double_array();
+  if (default_max_steps_.size() != num_commands) {
     RCLCPP_ERROR(logger,
       "'planner_max_steps' must contain %zu entries (one per command interface), got %zu.",
-      num_commands, max_steps.size());
+      num_commands, default_max_steps_.size());
     return controller_interface::CallbackReturn::ERROR;
   }
-  if (std::any_of(max_steps.begin(), max_steps.end(), [](double s) {return !(s > 0.0);})) {
+  if (std::any_of(default_max_steps_.begin(), default_max_steps_.end(),
+    [](double s) {return !(s > 0.0);}))
+  {
     RCLCPP_ERROR(logger, "Every entry of 'planner_max_steps' must be greater than zero.");
     return controller_interface::CallbackReturn::ERROR;
   }
-  planner_ = std::make_unique<LocomotionPlanner>(planner_rate, max_steps);
+  planner_ = std::make_unique<LocomotionPlanner>(planner_rate, num_commands);
+
+  // 模式以名稱識別，名稱同時是該模式參數的前綴（<mode>.*）
+  const auto modes = get_node()->get_parameter("modes").as_string_array();
+  if (modes.empty()) {
+    RCLCPP_ERROR(logger, "'modes' parameter is empty!");
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  mode_names_.clear();
+  mode_motions_.clear();
+  for (const auto & mode : modes) {
+    if (!is_valid_mode_name(mode)) {
+      RCLCPP_ERROR(logger,
+        "Invalid mode name [ %s ]: must be non-empty and contain only [A-Za-z0-9_].",
+        mode.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    if (std::find(mode_names_.begin(), mode_names_.end(), mode) != mode_names_.end()) {
+      RCLCPP_ERROR(logger, "Duplicate mode [ %s ] in 'modes'.", mode.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    try {
+      mode_motions_.push_back(create_motion(mode));
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(logger, "Failed to configure mode [ %s ]: %s", mode.c_str(), e.what());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    mode_names_.push_back(mode);
+  }
+
+  // 空字串表示啟動時不進入任何模式，保持目前位置，直到收到第一個模式命令
+  default_mode_ = get_node()->get_parameter("default_mode").as_string();
+  if (!default_mode_.empty() && motion_for_mode(default_mode_) == nullptr) {
+    RCLCPP_ERROR(logger, "'default_mode' [ %s ] is not listed in 'modes'.", default_mode_.c_str());
+    return controller_interface::CallbackReturn::ERROR;
+  }
 
   state_snapshot_.assign(state_interface_names_.size(), std::numeric_limits<double>::quiet_NaN());
 
@@ -188,14 +241,10 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     std::bind(&SwitchGroupController::handle_switch_mode_cancel, this, _1),
     std::bind(&SwitchGroupController::handle_switch_mode_accepted, this, _1));
 
-  // reconfigure 時回到預設模式（planner 未啟動前設定的目標會保留到 activate）；
-  // 沒有預設模式時，保持的目標在 activate 時才決定
+  // reconfigure 時回到預設模式，實際交給 planner 是在 activate 時
   {
     std::lock_guard<std::mutex> lock(mode_mutex_);
     current_mode_ = default_mode_;
-    if (!default_mode_.empty()) {
-      planner_->set_goal(*targets_for_mode(default_mode_));
-    }
   }
 
   RCLCPP_INFO(logger,
@@ -236,9 +285,14 @@ controller_interface::CallbackReturn SwitchGroupController::on_activate(
           initial_positions[i] = reference;
         }
       }
-      planner_->set_goal(initial_positions);
+      // 全部為 NaN 的目標：保持進入時的位置
+      planner_->set_motion(std::make_shared<TargetMotion>(
+        std::vector<double>(initial_positions.size(), std::numeric_limits<double>::quiet_NaN()),
+        default_max_steps_));
       RCLCPP_INFO(get_node()->get_logger(),
         "No mode selected, holding current positions until a mode command is received.");
+    } else {
+      planner_->set_motion(motion_for_mode(current_mode_));
     }
   }
   planner_->start(initial_positions, &target_buffer_);
@@ -255,7 +309,11 @@ controller_interface::InterfaceConfiguration
 SwitchGroupController::command_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
+  // 位置在前，sample_period 在後；update() 依此順序寫入
   config.names = command_interface_names_;
+  config.names.insert(
+    config.names.end(), sample_period_interface_names_.begin(),
+    sample_period_interface_names_.end());
   return config;
 }
 
@@ -267,30 +325,142 @@ SwitchGroupController::state_interface_configuration() const {
   return config;
 }
 
-const std::vector<double> * SwitchGroupController::targets_for_mode(
-  const std::string & mode) const {
+std::shared_ptr<Motion> SwitchGroupController::motion_for_mode(const std::string & mode) const {
   const auto it = std::find(mode_names_.begin(), mode_names_.end(), mode);
   if (it == mode_names_.end()) {
     return nullptr;
   }
-  return &mode_targets_[static_cast<size_t>(std::distance(mode_names_.begin(), it))];
+  return mode_motions_[static_cast<size_t>(std::distance(mode_names_.begin(), it))];
+}
+
+std::shared_ptr<Motion> SwitchGroupController::create_motion(const std::string & mode) {
+  const auto node = get_node();
+  const auto logger = node->get_logger();
+  const size_t num_commands = joint_names_.size();
+
+  auto max_steps = get_or_declare<std::vector<double>>(node, mode + ".max_steps", {});
+  if (max_steps.empty()) {
+    max_steps = default_max_steps_;
+  } else if (max_steps.size() != num_commands) {
+    throw std::invalid_argument(
+      "'" + mode + ".max_steps' must contain " + std::to_string(num_commands) + " entries");
+  }
+
+  const auto type = get_or_declare<std::string>(node, mode + ".type", "target");
+  if (type == "target") {
+    auto joints = get_or_declare<std::vector<std::string>>(node, mode + ".joints", {});
+    const auto targets = get_or_declare<std::vector<double>>(node, mode + ".targets", {});
+    if (joints.empty()) {
+      joints = joint_names_;
+    }
+    if (targets.size() != joints.size()) {
+      throw std::invalid_argument(
+        "'" + mode + ".targets' must contain " + std::to_string(joints.size()) +
+        " entries (one per joint), got " + std::to_string(targets.size()));
+    }
+    // 沒有列出的 joint 為 NaN：保持進入模式時的位置
+    std::vector<double> full_targets(num_commands, std::numeric_limits<double>::quiet_NaN());
+    for (size_t i = 0; i < joints.size(); ++i) {
+      const auto it = std::find(joint_names_.begin(), joint_names_.end(), joints[i]);
+      if (it == joint_names_.end()) {
+        throw std::invalid_argument(
+          "joint '" + joints[i] + "' in '" + mode + ".joints' is not a commanded joint");
+      }
+      auto & target = full_targets[static_cast<size_t>(std::distance(joint_names_.begin(), it))];
+      if (!std::isnan(target)) {
+        throw std::invalid_argument("duplicate joint '" + joints[i] + "' in '" + mode + ".joints'");
+      }
+      target = targets[i];
+    }
+    return std::make_shared<TargetMotion>(std::move(full_targets), std::move(max_steps));
+  }
+
+  if (type == "bvh") {
+    const auto file = get_or_declare<std::string>(node, mode + ".file", "");
+    if (file.empty()) {
+      throw std::invalid_argument("'" + mode + ".file' is empty");
+    }
+    // 走向第 0 幀（含循環時接回起點）的速度，預設為 planner_max_steps
+    auto approach_max_steps =
+      get_or_declare<std::vector<double>>(node, mode + ".approach_max_steps", {});
+    if (approach_max_steps.empty()) {
+      approach_max_steps = default_max_steps_;
+    } else if (approach_max_steps.size() != num_commands) {
+      throw std::invalid_argument(
+        "'" + mode + ".approach_max_steps' must contain " + std::to_string(num_commands) +
+        " entries");
+    }
+
+    BvhMotion::Options motion_options;
+    motion_options.loop = get_or_declare<bool>(node, mode + ".loop", true);
+    motion_options.time_scale = get_or_declare<double>(node, mode + ".time_scale", 1.0);
+
+    motion::BvhRetargeter::Options retarget_options;
+    retarget_options.base_link = node->get_parameter("bvh.base_link").as_string();
+    retarget_options.axis_tolerance = node->get_parameter("bvh.axis_tolerance").as_double();
+    retarget_options.max_iterations =
+      static_cast<int>(node->get_parameter("bvh.max_iterations").as_int());
+    retarget_options.damping = node->get_parameter("bvh.damping").as_double();
+    retarget_options.residual_tolerance =
+      node->get_parameter("bvh.residual_tolerance").as_double();
+    if (retarget_options.base_link.empty()) {
+      throw std::invalid_argument("'bvh.base_link' is required for bvh modes");
+    }
+
+    // Humble 的 controller 沒有 robot_description API；launch 以參數檔傳給 controller_manager 的
+    // robot_description 會套用到同一個 process 中的 controller node
+    if (!node->has_parameter("robot_description")) {
+      throw std::invalid_argument("parameter 'robot_description' is not available");
+    }
+    const auto urdf = node->get_parameter("robot_description").as_string();
+
+    const auto path = resolve_path(file);
+    auto clip = std::make_shared<const motion::BvhClip>(motion::parse_bvh_file(path));
+    auto retargeter = std::make_shared<const motion::BvhRetargeter>(
+      clip, urdf, joint_names_, retarget_options);
+
+    RCLCPP_INFO(logger, "Mode [ %s ]: BVH '%s', %zu frames, frame time %.4f s, loop %s.",
+      mode.c_str(), path.c_str(), clip->num_frames(), clip->frame_time,
+      motion_options.loop ? "true" : "false");
+    for (const auto & group : retargeter->groups()) {
+      if (group.bvh_node.empty()) {
+        continue;
+      }
+      std::string joints;
+      for (const auto & joint : group.joints) {
+        joints += (joints.empty() ? "" : ", ") + joint;
+      }
+      RCLCPP_INFO(logger, "  [%s] <- BVH %s", joints.c_str(), group.bvh_node.c_str());
+    }
+    for (size_t i = 0; i < num_commands; ++i) {
+      if (!retargeter->covered()[i]) {
+        RCLCPP_WARN(logger, "  Joint [ %s ] has no BVH data, it holds its position.",
+          joint_names_[i].c_str());
+      }
+    }
+    return std::make_shared<BvhMotion>(
+      std::move(retargeter), motion_options, std::move(max_steps), std::move(approach_max_steps));
+  }
+
+  throw std::invalid_argument(
+    "unknown type '" + type + "' in '" + mode + ".type' (expected 'target' or 'bvh')");
 }
 
 void SwitchGroupController::apply_mode(const std::string & mode) {
   std::lock_guard<std::mutex> lock(mode_mutex_);
-  const auto * targets = targets_for_mode(mode);
-  // 未知模式：目標全部設為 0（沿用原本的行為）
-  planner_->set_goal(targets != nullptr ? *targets : zero_targets_);
+  auto motion = motion_for_mode(mode);
+  if (!motion) {
+    // 32 軸含腿部，未知模式時不移動（不再歸零）
+    RCLCPP_WARN(get_node()->get_logger(), "Unknown mode [ %s ], ignored.", mode.c_str());
+    return;
+  }
+  // 已在該模式時不重新開始（例如 BVH 不會從頭播放）
   if (current_mode_ == mode) {
     return;
   }
   current_mode_ = mode;
-  if (targets == nullptr) {
-    RCLCPP_WARN(get_node()->get_logger(),
-      "Unknown mode [ %s ], moving all targets to 0.0", mode.c_str());
-  } else {
-    RCLCPP_INFO(get_node()->get_logger(), "Change mode to [ %s ]", mode.c_str());
-  }
+  planner_->set_motion(std::move(motion));
+  RCLCPP_INFO(get_node()->get_logger(), "Change mode to [ %s ]", mode.c_str());
 }
 
 rclcpp_action::GoalResponse SwitchGroupController::handle_switch_mode_goal(
@@ -302,7 +472,7 @@ rclcpp_action::GoalResponse SwitchGroupController::handle_switch_mode_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
   // mode 表在 configure 後即唯讀，可在 executor thread 安全查詢
-  if (targets_for_mode(goal->mode) == nullptr) {
+  if (motion_for_mode(goal->mode) == nullptr) {
     RCLCPP_WARN(get_node()->get_logger(),
       "Rejected switch_mode goal: unknown mode [ %s ].", goal->mode.c_str());
     return rclcpp_action::GoalResponse::REJECT;
@@ -354,10 +524,16 @@ controller_interface::return_type SwitchGroupController::update(
   }
 
   // 輸出 planner 的最新目標；planner 尚未寫入（長度不符）時不輸出
-  const auto * targets = target_buffer_.readFromRT();
-  if (targets != nullptr && targets->size() == command_interfaces_.size()) {
-    for (size_t i = 0; i < command_interfaces_.size(); ++i) {
-      command_interfaces_[i].set_value((*targets)[i]);
+  const auto * output = target_buffer_.readFromRT();
+  const size_t num_commands = command_interface_names_.size();
+  if (output != nullptr && output->positions.size() == num_commands &&
+    command_interfaces_.size() >= num_commands)
+  {
+    for (size_t i = 0; i < num_commands; ++i) {
+      command_interfaces_[i].set_value(output->positions[i]);
+    }
+    for (size_t i = num_commands; i < command_interfaces_.size(); ++i) {
+      command_interfaces_[i].set_value(output->sample_period);
     }
   }
 
