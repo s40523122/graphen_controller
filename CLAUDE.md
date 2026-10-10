@@ -6,8 +6,10 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 ## 套件
 - `graphen_interfaces`：action 定義（`SwitchMode`），控制層與行為層共用
 - `graphen_control_utils`：header-only 共用元件（`StateInterfacePublisher`）
-- `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`；`LocomotionPlanner` 是內部元件（不是 plugin）
-- `graphen_bringup`：`config/controllers.yaml`、`config/can_driver_config.json`（T170 實機 CAN 設定）、`launch/bringup.launch.py`
+- `graphen_motion`：BVH 解析與 BVH → URDF 1-DOF joint 轉換（`BvhRetargeter`）、`bvh_retarget_cli`；不依賴 rclcpp
+- `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`；`LocomotionPlanner`、`Motion`（`TargetMotion` / `BvhMotion`）是內部元件（不是 plugin）
+- 模式由 YAML 的 `<mode>.type`（`target` / `bvh`）決定行為，controller 不寫死任何模式；BVH 動作檔放在 `graphen_bringup/motions/`
+- `graphen_bringup`：`config/controllers.yaml`（32 軸 → 6 個子群組）、`config/can_driver_config.json`（T170 實機 CAN 設定）、`motions/`、`launch/bringup.launch.py`
 - `graphen_bt_nodes`：BT 節點 plugin，全部在 `register_nodes.cpp` 註冊
 - `graphen_bt`：`bt_runner`、`trees/`、`config/bt_runner.yaml`、`launch/bt.launch.py`
 - `src/imu16460/imu16460_core`：FSS-IMU16460-C 驅動，純 CMake、**程式碼不得 include ROS 標頭**；含 `imu16460_cli` 與 GoogleTest。協議見 [docs/IMU16460.md](docs/IMU16460.md)

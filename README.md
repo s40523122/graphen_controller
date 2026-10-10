@@ -24,8 +24,9 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 |---|---|---|---|
 | [graphen_interfaces](src/graphen_interfaces/) | 介面定義 | `SwitchMode` action | — |
 | [graphen_control_utils](src/graphen_control_utils/) | header-only lib | 共用元件 `StateInterfacePublisher` | — |
-| [graphen_controllers](src/graphen_controllers/) | controller plugin | `SwitchGroupController`（含 `LocomotionPlanner`）、`SubGroupController` | graphen_control_utils、graphen_interfaces |
-| [graphen_bringup](src/graphen_bringup/) | 資源 | controller 設定檔、CAN 設定與 launch | graphen_controllers、ti5_170a_graphen |
+| [graphen_motion](src/graphen_motion/) | C++ lib（不依賴 rclcpp） | BVH 解析、BVH → URDF 1-DOF joint 轉換（`BvhRetargeter`）、`bvh_retarget_cli` | — |
+| [graphen_controllers](src/graphen_controllers/) | controller plugin | `SwitchGroupController`（含 `LocomotionPlanner` 與 `TargetMotion` / `BvhMotion`）、`SubGroupController` | graphen_control_utils、graphen_interfaces、graphen_motion |
+| [graphen_bringup](src/graphen_bringup/) | 資源 | controller 設定檔、CAN 設定、BVH 動作檔（`motions/`）與 launch | graphen_controllers、ti5_170a_graphen |
 | [graphen_bt_nodes](src/graphen_bt_nodes/) | BT plugin | 自訂 BT 節點（RateControl、IsOk、SysCount、SwitchMode…） | graphen_interfaces |
 | [graphen_bt](src/graphen_bt/) | 執行檔 | `bt_runner`、tree XML、設定檔與 launch | graphen_bt_nodes（執行期載入） |
 | [imu16460_core](src/imu16460/imu16460_core/) | C++ lib（純 CMake，無 ROS） | IMU 協議、parser、serial、`Driver`、`imu16460_cli` | — |
@@ -52,22 +53,40 @@ ros2 launch graphen_bt bt.launch.py                 # 行為層（另開終端�
 ### 控制層
 
 ```bash
-# 五個 controller 都應該是 active
+# joint_state_broadcaster、sensor_forwarder、6 個子群組與 switch_group_controller 都應該是 active
 ros2 control list_controllers
 
 # 啟動後不進入任何模式，所有 joint 保持初始位置（default_mode: ""），imu/raw_data 為 1.23
 ros2 topic echo --once /switch_group_controller/states
 
-# 用 action 切換到 reverse 模式：result 附上切換當下的 state 快照，之後兩個肩關節往 -1.5 移動
+# 用 action 切換到 reverse 模式：result 附上切換當下的 state 快照，之後兩個手腕（L/R_WRIST_P）往 -1.5 移動，
+# 其他 30 軸保持
 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: reverse}"
 
-# 不在 modes 中的名稱會被 reject
+# 不在 modes 中的名稱會被 reject（topic 收到時則忽略並 WARN）
 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: unknown}"
 
 # 也可以用 topic 切換（QoS 必須相容）
 ros2 topic pub --once /switch_group_controller/mode std_msgs/msg/String "{data: forward}" \
   --qos-durability transient_local --qos-reliability reliable
 ros2 topic echo --once /left_arm_group_controller/references
+
+# 播放 BVH 步態（walk 模式）：先以約 0.5 rad/s 走向第 0 幀，再即時播放 32 軸，到結尾後接回起點循環。
+# planner 依檔案頻率（24 fps）送出原始幀，幀間插補由子群組依 sample_period 進行（約晚一幀）。
+# 已在 walk 時再送 walk 不會從頭播放；要重播請先切到其他模式
+ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: walk}"
+```
+
+> walk 是開環播放，沒有平衡控制；實機上只能在吊掛等安全條件下使用。
+
+### BVH 轉換檢查
+
+`bvh_retarget_cli` 把整段 BVH 轉成 CSV（time + 各 joint 角度，rad），並在 stderr 印出分組、每組最大殘差、各 joint 的範圍 / 限位 / 最大速度，用來檢查新的 BVH 或設定 `<mode>.max_steps`：
+
+```bash
+xacro $(ros2 pkg prefix ti5_170a_graphen)/share/ti5_170a_graphen/urdf/ti5_170a_graphen.urdf.xacro > /tmp/t170.urdf
+ros2 run graphen_motion bvh_retarget_cli \
+  $(ros2 pkg prefix graphen_bringup)/share/graphen_bringup/motions/t170wk_walk1_subject1.bvh /tmp/t170.urdf > /tmp/walk.csv
 ```
 
 ### 行為層
@@ -98,7 +117,7 @@ ros2 launch graphen_bt bt.launch.py \
   tree_file:=$(ros2 pkg prefix graphen_bt)/share/graphen_bt/trees/joint_reciprocate.xml
 ```
 
-tree 依目前方向分成 `Forward` / `Reverse` 兩個分支，跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向。用 Groot v1 連線可以看到目前亮著的分支和換向的瞬間；log 會每隔約 4 秒交替印出 `SwitchMode: switched to mode [ forward ]` / `[ reverse ]`，`/switch_group_controller/states` 中的 L_SHOULDER_P 會在約 ±1.0 之間往返。門檻在 tree XML 中修改（必須落在兩個模式的目標 ±1.5 之間）。
+tree 依目前方向分成 `Forward` / `Reverse` 兩個分支，跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向。用 Groot v1 連線可以看到目前亮著的分支和換向的瞬間；log 會每隔約 4 秒交替印出 `SwitchMode: switched to mode [ forward ]` / `[ reverse ]`，`/switch_group_controller/states` 中的 L_WRIST_P 會在約 ±1.0 之間往返。門檻在 tree XML 中修改（必須落在兩個模式的目標 ±1.5 之間）。
 
 ### 靈巧手（mock）
 
