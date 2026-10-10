@@ -17,3 +17,6 @@ bt_runner:
     gp_wait_seconds: 3
     gp_rate: 100.0
     gp_sys_count: 0
+    # joint_reciprocate.xml 的模式選擇：walk 優先；都為 false 時切到 stop 模式停止
+    gp_enable_walk: false
+    gp_enable_reciprocate: true

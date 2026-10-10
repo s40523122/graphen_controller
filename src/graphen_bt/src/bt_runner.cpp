@@ -33,6 +33,8 @@ int run(const rclcpp::Node::SharedPtr & node) {
   node->declare_parameter<int>("gp_wait_seconds", 3);
   node->declare_parameter<double>("gp_rate", 100.0);
   node->declare_parameter<int>("gp_sys_count", 0);
+  node->declare_parameter<bool>("gp_enable_walk", false);
+  node->declare_parameter<bool>("gp_enable_reciprocate", true);
 
   const auto tree_file = node->get_parameter("tree_file").as_string();
   if (tree_file.empty()) {
@@ -64,6 +66,9 @@ int run(const rclcpp::Node::SharedPtr & node) {
     "wait_seconds", static_cast<int>(node->get_parameter("gp_wait_seconds").as_int()));
   blackboard->set<double>("rate", node->get_parameter("gp_rate").as_double());
   blackboard->set<int>("sys_count", 0);
+  blackboard->set<bool>("enable_walk", node->get_parameter("gp_enable_walk").as_bool());
+  blackboard->set<bool>(
+    "enable_reciprocate", node->get_parameter("gp_enable_reciprocate").as_bool());
 
   auto tree = factory.createTreeFromFile(tree_file, blackboard);
   RCLCPP_INFO(logger, "Loaded tree from [ %s ]", tree_file.c_str());
@@ -83,6 +88,14 @@ int run(const rclcpp::Node::SharedPtr & node) {
         } else if (param.get_name() == "gp_rate") {
           blackboard->set<double>("rate", param.as_double());
           RCLCPP_INFO(logger, "Parameter changed: rate -> %f", param.as_double());
+        } else if (param.get_name() == "gp_enable_walk") {
+          blackboard->set<bool>("enable_walk", param.as_bool());
+          RCLCPP_INFO(logger, "Parameter changed: enable_walk -> %s",
+            param.as_bool() ? "true" : "false");
+        } else if (param.get_name() == "gp_enable_reciprocate") {
+          blackboard->set<bool>("enable_reciprocate", param.as_bool());
+          RCLCPP_INFO(logger, "Parameter changed: enable_reciprocate -> %s",
+            param.as_bool() ? "true" : "false");
         }
       }
       return result;

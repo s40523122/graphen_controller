@@ -414,34 +414,50 @@ Fallback
 
 ### 3.5 與控制層的連動
 
-[trees/joint_reciprocate.xml](../src/graphen_bt/trees/joint_reciprocate.xml) 依「目前方向」分支，換向在 Groot 中可以直接看出來：
+[trees/joint_reciprocate.xml](../src/graphen_bt/trees/joint_reciprocate.xml) 依 bt_runner 參數 `gp_enable_walk` / `gp_enable_reciprocate`（blackboard `{enable_walk}` / `{enable_reciprocate}`）選擇 walk、往返或停止；往返再依「目前方向」分支，換向在 Groot 中可以直接看出來。`{mode}` 記錄 BT 最後成功切換的模式：
 
 ```
-Sequence
-├─ GetStateValue joint=L_SHOULDER_P interface=position → {arm_pos}
-└─ Fallback
-   ├─ BlackboardCheckString "Forward"  {direction} == forward
+IfThenElse "WalkEnabled"
+├─ IsOk {enable_walk}
+├─ Fallback "Walk"                 # 兩個都 true 時也是 walk
+│  ├─ BlackboardCheckString "AlreadyWalking" {mode} == walk ─ AlwaysSuccess
+│  └─ Sequence "EnterWalk"
+│     ├─ SwitchMode mode=walk
+│     └─ SetBlackboard mode = walk
+└─ IfThenElse "ReciprocateEnabled"
+   ├─ IsOk {enable_reciprocate}
+   ├─ Sequence "Reciprocate"
+   │  ├─ GetStateValue joint=L_WRIST_P interface=position → {arm_pos}
    │  └─ Fallback
-   │     ├─ IsBelow "KeepForward"  {arm_pos} < 1.0
-   │     └─ Sequence "TurnToReverse"
-   │        ├─ SwitchMode mode=reverse
-   │        └─ SetBlackboard direction = reverse
-   ├─ BlackboardCheckString "Reverse"  {direction} == reverse
-   │  └─ Fallback
-   │     ├─ IsAbove "KeepReverse"  {arm_pos} > -1.0
-   │     └─ Sequence "TurnToForward"
+   │     ├─ BlackboardCheckString "Forward"  {mode} == forward
+   │     │  └─ Fallback
+   │     │     ├─ IsBelow "KeepForward"  {arm_pos} < 1.0
+   │     │     └─ Sequence "TurnToReverse"
+   │     │        ├─ SwitchMode mode=reverse
+   │     │        └─ SetBlackboard mode = reverse
+   │     ├─ BlackboardCheckString "Reverse"  {mode} == reverse
+   │     │  └─ Fallback
+   │     │     ├─ IsAbove "KeepReverse"  {arm_pos} > -1.0
+   │     │     └─ Sequence "TurnToForward"
+   │     │        ├─ SwitchMode mode=forward
+   │     │        └─ SetBlackboard mode = forward
+   │     └─ Sequence "Init"   # {mode} 既不是 forward 也不是 reverse（剛啟動、從 walk / stop 切過來）
+   │        ├─ Inverter ─ BlackboardCheckString {mode} == forward ─ AlwaysSuccess
+   │        ├─ Inverter ─ BlackboardCheckString {mode} == reverse ─ AlwaysSuccess
    │        ├─ SwitchMode mode=forward
-   │        └─ SetBlackboard direction = forward
-   └─ Sequence "Init"   # {direction} 既不是 forward 也不是 reverse（剛啟動）
-      ├─ Inverter ─ BlackboardCheckString {direction} == forward ─ AlwaysSuccess
-      ├─ Inverter ─ BlackboardCheckString {direction} == reverse ─ AlwaysSuccess
-      ├─ SwitchMode mode=forward
-      └─ SetBlackboard direction = forward
+   │        └─ SetBlackboard mode = forward
+   └─ Fallback "Stop"              # 兩個都 false
+      ├─ BlackboardCheckString "AlreadyStopped" {mode} == stop ─ AlwaysSuccess
+      └─ Sequence "EnterStop"
+         ├─ SwitchMode mode=stop
+         └─ SetBlackboard mode = stop
 ```
 
+- 用 `IfThenElse` 而不是 `Fallback` 選分支：已選定的分支失敗時（例如 SwitchMode 失敗）直接回傳 FAILURE，下一個 tick 重試，不會落到優先順序較低的分支而送出別的模式。
+- walk / stop 已是目前模式時不再送 SwitchMode（BVH 不會重新播放）。`stop` 是 `type: hold` 的模式，controller 停在目前位置；之後再切到 walk 會重新 `on_enter`，從第 0 幀 approach 開始。
 - 移動期間 `Forward`（forward 模式，往 +1.5）或 `Reverse`（reverse 模式，往 -1.5）分支持續成功；跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向，之後由另一個方向的分支接手。因此 joint 會在 ±1.0 之間往返。
-- 換向時**先 SwitchMode 再寫入方向**：action 失敗時方向不變，下一個 tick 會重試同一個換向分支。
-- `Init` 前面的兩個 Inverter 檢查，確保只有 `{direction}` 未設定時才會走到這裡；否則換向失敗時，Fallback 會誤落到 `Init` 而送出 forward。
+- 切換時**先 SwitchMode 再寫入 `{mode}`**：action 失敗時 `{mode}` 不變，下一個 tick 會重試同一個換向分支。
+- `Init` 前面的兩個 Inverter 檢查，確保只有 `{mode}` 不是 forward / reverse 時才會走到這裡；否則換向失敗時，Fallback 會誤落到 `Init` 而送出 forward。
 - `BlackboardCheckString`、`SetBlackboard`、`Inverter`、`AlwaysSuccess` 都是 BT.CPP v3 內建的節點。
 - 門檻必須落在兩個模式的 arm 目標之間，否則 joint 到達模式目標後就停住，不會換向。
 - 以預設值（planner 0.005 × 100 Hz ≈ 0.5 rad/s、BT tick 100 ms）實測，換向週期約 4.1 秒，超出門檻的量約 0.05（等於速度 × tick 延遲）。
@@ -461,6 +477,8 @@ Sequence
 | `gp_wait_seconds` | int | 3 | 對應 blackboard `wait_seconds` |
 | `gp_rate` | double | 100.0 | 對應 blackboard `rate` |
 | `gp_sys_count` | int | 0 | 由節點寫入，供外部觀察 `sys_count` |
+| `gp_enable_walk` | bool | false | 對應 blackboard `enable_walk`（joint_reciprocate.xml：啟用 walk，優先於往返） |
+| `gp_enable_reciprocate` | bool | true | 對應 blackboard `enable_reciprocate`（joint_reciprocate.xml：啟用 forward / reverse 往返；兩者都 false 時切到 stop） |
 
 `gp_*` 參數在執行中修改（`ros2 param set` 或 rqt）時，會由 parameter callback 同步寫入 blackboard。
 
@@ -484,7 +502,7 @@ Sequence
 | D7 | BT 節點透過 blackboard `"node"` 取得 ROS node | 以 plugin 載入時無法使用自訂建構子注入，改用 Nav2 慣例 |
 | D8 | 模式切換走 action，joint 狀態走既有的 `~/states` topic | 指令與狀態分開是 ROS 的主流分工（Nav2 也這樣做）：action 提供明確的接受、拒絕與結果，BT 可以據此判斷成敗；狀態用 topic，BT 隨時都拿得到最新值，不必等 goal |
 | D9 | 規劃放在 controller 內的 `LocomotionPlanner` thread，以 `RealtimeBuffer` 交接 | 規劃計算（包含 BVH 的逐幀轉換）不佔用 RT 的 `update()`；`update()` 只輸出最新目標。planner 不認識模式或 joint，可以重用在其他 controller |
-| D10 | 遲滯判斷放在 BT，以「方向分支 + `{direction}`」表達，不放在 controller | 門檻屬於任務邏輯，放在 tree XML 中修改不需要重新建置；controller 只負責「模式 → 目標」。用分支而不是單一變數切換，在 Groot 中可以直接看到目前的方向和換向的時間點 |
+| D10 | 遲滯判斷放在 BT，以「方向分支 + `{mode}`」表達，不放在 controller | 門檻屬於任務邏輯，放在 tree XML 中修改不需要重新建置；controller 只負責「模式 → 目標」。用分支而不是單一變數切換，在 Groot 中可以直接看到目前的方向和換向的時間點 |
 | D11 | IMU 驅動獨立命名（`imu16460_*`），core 不依賴 ROS | 它是裝置驅動，與 graphen 的控制邏輯無關，可以直接搬到其他機器人或非 ROS 程式；協議、parser、Driver 不依賴 ROS，可以用 GoogleTest + pty 在沒有實機的環境測試 |
 | D12 | mock / 實機 IMU 以 `use_mock_imu` 切換，mock 完全保留 | 開發機（WSL）沒有實體設備，mock 是日常開發的預設；實機差異集中在 xacro 的 `xacro:if/unless` 和疊加的 `controllers_imu16460.yaml`，不修改原本的 `controllers.yaml` |
 | D13 | IMU 由背景 thread 依自身頻率更新，`read()` 只取最新一筆 | serial I/O 不進 RT 路徑；IMU 頻率與 controller_manager 的 `update_rate` 互不影響（不提供平均模式，避免引入額外延遲） |
@@ -540,7 +558,7 @@ Sequence
   - **注意事項**：
     - `pluginlib::ClassLoader` 的生命週期必須比 Motion 實例長。
     - plugin 不能用 `auto_declare`，要用 `declare_parameter`，宣告前先檢查 `has_parameter`。
-- **BT 的方向與 controller 的模式可能不一致**：controller 被 reconfigure 回到 `default_mode` 時，BT 的 `{direction}` 不會跟著改變，要等到下一次換向才會重新同步。
+- **BT 的方向與 controller 的模式可能不一致**：controller 被 reconfigure 回到 `default_mode` 時，BT 的 `{mode}` 不會跟著改變，要等到下一次換向（或切換 `gp_enable_*`）才會重新同步。
 - **planner 的速度受 non-RT 排程影響**：max_steps 是「每週期」的量，planner thread 被延遲時，實際速度會變慢（WSL 在高負載下觀察得到）。BVH 的播放時間以實際經過時間推進，不受影響，但輸出仍受 max_steps 限制。
 - **BVH 步態是開環播放**：沒有平衡控制，浮動基座（root 位移、`BASE_S` 旋轉）被忽略；實機只能在吊掛等安全條件下使用。
 - **BVH 超出 T170 限位**：`t170wk_walk1_subject1.bvh` 的髖 roll（約 ±0.6 rad）、踝等會超出 URDF 限位而被截斷，組的殘差因此不為 0（約 0.3~0.6 rad）。

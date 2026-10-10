@@ -119,6 +119,14 @@ ros2 launch graphen_bt bt.launch.py \
 
 tree 依目前方向分成 `Forward` / `Reverse` 兩個分支，跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向。用 Groot v1 連線可以看到目前亮著的分支和換向的瞬間；log 會每隔約 4 秒交替印出 `SwitchMode: switched to mode [ forward ]` / `[ reverse ]`，`/switch_group_controller/states` 中的 L_WRIST_P 會在約 ±1.0 之間往返。門檻在 tree XML 中修改（必須落在兩個模式的目標 ±1.5 之間）。
 
+模式可在執行中用 rqt_reconfigure 或 `ros2 param set` 切換（walk 優先，兩個都 false 時切到 `stop` 停在目前位置）：
+
+```bash
+ros2 param set /bt_runner gp_enable_walk true          # 切到 walk（BVH 步行）
+ros2 param set /bt_runner gp_enable_walk false         # 回到往返（從 forward 開始）
+ros2 param set /bt_runner gp_enable_reciprocate false  # 兩個都 false：停止
+```
+
 ### 靈巧手（mock）
 
 ```bash

@@ -1,57 +1,89 @@
 <?xml version="1.0"?>
 <!--
-  L_SHOULDER_P 往返擺動：依「目前方向」分支，換向時切到另一個分支
-    Forward  分支：{direction} == forward，L_SHOULDER_P < 1.0 時維持正轉（forward 模式）；
-                   到達 1.0 時走 TurnToReverse，切成 reverse 模式並把方向記為 reverse
-    Reverse  分支：{direction} == reverse，L_SHOULDER_P > -1.0 時維持反轉（reverse 模式）；
-                   到達 -1.0 時走 TurnToForward，切成 forward 模式並把方向記為 forward
-    Init     分支：{direction} 尚未設定（剛啟動）時，先切成 forward 模式並記為 forward
+  依 bt_runner 參數選擇模式（rqt_reconfigure / ros2 param set 可在執行中切換）：
+    gp_enable_walk        → {enable_walk}
+    gp_enable_reciprocate → {enable_reciprocate}
+  {mode} 記錄 BT 最後成功切換的模式（forward / reverse / walk / stop），未設定表示剛啟動。
+
+  Walk         分支：{enable_walk} 為 true 時優先執行（兩個都 true 也是 walk）；
+                     已在 walk 時不再送 SwitchMode，避免 BVH 重新播放
+  Reciprocate  分支：{enable_reciprocate} 為 true 時，L_WRIST_P 在 forward / reverse 之間往返
+    Forward  分支：{mode} == forward，L_WRIST_P < 1.0 時維持正轉；到達 1.0 時走 TurnToReverse
+    Reverse  分支：{mode} == reverse，L_WRIST_P > -1.0 時維持反轉；到達 -1.0 時走 TurnToForward
+    Init     分支：{mode} 不是 forward / reverse（剛啟動、或從 walk / stop 切過來）時先切成 forward
+  Stop         分支：兩個都 false 時切到 stop（controller 停在目前位置，再進 walk 會從頭開始）
+
   模式名稱必須和 controllers.yaml 的 modes 一致。
-  換向時先 SwitchMode 再寫入方向：action 失敗時方向不變，下一個 tick 會重試同一個換向分支。
-  門檻必須落在 controllers.yaml 兩個模式的 L_SHOULDER_P 目標（±1.5）之間，否則 joint 會停在目標而不換向。
+  切換時先 SwitchMode 再寫入 {mode}：action 失敗時 {mode} 不變，下一個 tick 會重試同一個分支。
+  使用 IfThenElse：已選定的分支失敗時直接回傳 FAILURE，不會落到優先順序較低的分支而送出別的模式。
+  門檻必須落在 controllers.yaml 兩個模式的 L_WRIST_P 目標（±1.5）之間，否則 joint 會停在目標而不換向。
 -->
 <root main_tree_to_execute="BehaviorTree">
     <!-- ////////// -->
     <BehaviorTree ID="BehaviorTree">
-        <Sequence>
-            <Action ID="GetStateValue" joint="L_WRIST_P" interface="position" value="{arm_pos}"/>
-            <Fallback>
-                <BlackboardCheckString name="Forward" value_A="{direction}" value_B="forward" return_on_mismatch="FAILURE">
-                    <Fallback>
-                        <Condition ID="IsBelow" name="KeepForward" value="{arm_pos}" threshold="1.0"/>
-                        <Sequence name="TurnToReverse">
-                            <Action ID="SwitchMode" mode="reverse"/>
-                            <SetBlackboard output_key="direction" value="reverse"/>
-                        </Sequence>
-                    </Fallback>
+        <IfThenElse name="WalkEnabled">
+            <Condition ID="IsOk" is_ok_val="{enable_walk}"/>
+            <Fallback name="Walk">
+                <BlackboardCheckString name="AlreadyWalking" value_A="{mode}" value_B="walk" return_on_mismatch="FAILURE">
+                    <AlwaysSuccess/>
                 </BlackboardCheckString>
-                <BlackboardCheckString name="Reverse" value_A="{direction}" value_B="reverse" return_on_mismatch="FAILURE">
-                    <Fallback>
-                        <Condition ID="IsAbove" name="KeepReverse" value="{arm_pos}" threshold="-1.0"/>
-                        <Sequence name="TurnToForward">
-                            <Action ID="SwitchMode" mode="forward"/>
-                            <SetBlackboard output_key="direction" value="forward"/>
-                        </Sequence>
-                    </Fallback>
-                </BlackboardCheckString>
-                <!-- 只在 {direction} 不是 forward 也不是 reverse 時執行，
-                     避免上面的換向失敗時誤落到這裡而送出 forward -->
-                <Sequence name="Init">
-                    <Inverter>
-                        <BlackboardCheckString value_A="{direction}" value_B="forward" return_on_mismatch="FAILURE">
-                            <AlwaysSuccess/>
-                        </BlackboardCheckString>
-                    </Inverter>
-                    <Inverter>
-                        <BlackboardCheckString value_A="{direction}" value_B="reverse" return_on_mismatch="FAILURE">
-                            <AlwaysSuccess/>
-                        </BlackboardCheckString>
-                    </Inverter>
-                    <Action ID="SwitchMode" mode="forward"/>
-                    <SetBlackboard output_key="direction" value="forward"/>
+                <Sequence name="EnterWalk">
+                    <Action ID="SwitchMode" mode="walk"/>
+                    <SetBlackboard output_key="mode" value="walk"/>
                 </Sequence>
             </Fallback>
-        </Sequence>
+            <IfThenElse name="ReciprocateEnabled">
+                <Condition ID="IsOk" is_ok_val="{enable_reciprocate}"/>
+                <Sequence name="Reciprocate">
+                    <Action ID="GetStateValue" joint="L_WRIST_P" interface="position" value="{arm_pos}"/>
+                    <Fallback>
+                        <BlackboardCheckString name="Forward" value_A="{mode}" value_B="forward" return_on_mismatch="FAILURE">
+                            <Fallback>
+                                <Condition ID="IsBelow" name="KeepForward" value="{arm_pos}" threshold="1.0"/>
+                                <Sequence name="TurnToReverse">
+                                    <Action ID="SwitchMode" mode="reverse"/>
+                                    <SetBlackboard output_key="mode" value="reverse"/>
+                                </Sequence>
+                            </Fallback>
+                        </BlackboardCheckString>
+                        <BlackboardCheckString name="Reverse" value_A="{mode}" value_B="reverse" return_on_mismatch="FAILURE">
+                            <Fallback>
+                                <Condition ID="IsAbove" name="KeepReverse" value="{arm_pos}" threshold="-1.0"/>
+                                <Sequence name="TurnToForward">
+                                    <Action ID="SwitchMode" mode="forward"/>
+                                    <SetBlackboard output_key="mode" value="forward"/>
+                                </Sequence>
+                            </Fallback>
+                        </BlackboardCheckString>
+                        <!-- 只在 {mode} 不是 forward 也不是 reverse 時執行，
+                             避免上面的換向失敗時誤落到這裡而送出 forward -->
+                        <Sequence name="Init">
+                            <Inverter>
+                                <BlackboardCheckString value_A="{mode}" value_B="forward" return_on_mismatch="FAILURE">
+                                    <AlwaysSuccess/>
+                                </BlackboardCheckString>
+                            </Inverter>
+                            <Inverter>
+                                <BlackboardCheckString value_A="{mode}" value_B="reverse" return_on_mismatch="FAILURE">
+                                    <AlwaysSuccess/>
+                                </BlackboardCheckString>
+                            </Inverter>
+                            <Action ID="SwitchMode" mode="forward"/>
+                            <SetBlackboard output_key="mode" value="forward"/>
+                        </Sequence>
+                    </Fallback>
+                </Sequence>
+                <Fallback name="Stop">
+                    <BlackboardCheckString name="AlreadyStopped" value_A="{mode}" value_B="stop" return_on_mismatch="FAILURE">
+                        <AlwaysSuccess/>
+                    </BlackboardCheckString>
+                    <Sequence name="EnterStop">
+                        <Action ID="SwitchMode" mode="stop"/>
+                        <SetBlackboard output_key="mode" value="stop"/>
+                    </Sequence>
+                </Fallback>
+            </IfThenElse>
+        </IfThenElse>
     </BehaviorTree>
     <!-- ////////// -->
     <TreeNodesModel>
@@ -68,6 +100,9 @@
         <Condition ID="IsBelow">
             <input_port name="value" type="double"/>
             <input_port name="threshold" type="double"/>
+        </Condition>
+        <Condition ID="IsOk">
+            <input_port name="is_ok_val" type="bool"/>
         </Condition>
         <Action ID="SwitchMode">
             <input_port name="action_name" type="std::string" default="/switch_group_controller/switch_mode">SwitchMode action name</input_port>
