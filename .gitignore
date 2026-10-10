@@ -5,3 +5,8 @@ log/
 # BVH 動作檔只追蹤預設檔，其他自行加入的動作不進版控
 *.bvh
 !src/graphen_bringup/motions/t170wk_walk1_subject1.bvh
+
+# 各機器自己的本機設定，不進版控；範本為同目錄的 *.yaml.example，首次使用時複製一份
+src/graphen_bringup/config/controllers.yaml
+src/graphen_bringup/config/real_initial_positions.yaml
+src/graphen_bt/config/bt_runner.yaml

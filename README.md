@@ -39,6 +39,15 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 
 ## 快速開始
 
+首次使用時，先從範本複製本機設定檔（這三個檔案不進版控，各機器可自行修改，pull 時不會被覆蓋）：
+
+```bash
+cd ~/graphen_ws
+cp src/graphen_bringup/config/controllers.yaml.example src/graphen_bringup/config/controllers.yaml
+cp src/graphen_bringup/config/real_initial_positions.yaml.example src/graphen_bringup/config/real_initial_positions.yaml
+cp src/graphen_bt/config/bt_runner.yaml.example src/graphen_bt/config/bt_runner.yaml
+```
+
 ```bash
 cd ~/graphen_ws
 colcon build --symlink-install                      # 只改一個套件時加 --packages-select <pkg>
