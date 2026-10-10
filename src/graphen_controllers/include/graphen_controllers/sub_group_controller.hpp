@@ -1,6 +1,7 @@
 #ifndef GRAPHEN_CONTROLLERS__SUB_GROUP_CONTROLLER_HPP_
 #define GRAPHEN_CONTROLLERS__SUB_GROUP_CONTROLLER_HPP_
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -19,7 +20,12 @@ namespace graphen::control {
 //   output_interfaces       要寫入的硬體 command interface
 //   reference_publish_rate  ~/references 的發布頻率 (Hz)
 //
-// 目前行為：第一個 reference 寫到所有 output；所有 reference 皆發布到 ~/references 供觀察。
+// input 只有 1 個時寫到所有 output（廣播）；否則 input 與 output 數量必須相同，第 i 個 reference
+// 寫到第 i 個 output。所有 reference 皆發布到 ~/references 供觀察。
+//
+// 另外導出 <node_name>/sample_period：上游輸出點的間隔（秒）。reference 改變時，從目前輸出線性走到
+// 新值，花費 max(sample_period, 上一段剩下的時間)；sample_period 為 0 時直接輸出。
+// 例如上游依 BVH 檔頻率送出原始幀時，這裡在 RT 迴圈中做幀間插補（輸出約晚一個點）。
 // activate 時 reference 以對應 output 目前的 command 值初始化，上層可據此保持位置。
 class SubGroupController : public controller_interface::ChainableControllerInterface {
 public:
@@ -44,9 +50,21 @@ protected:
   bool on_set_chained_mode(bool chained_mode) override;
 
 private:
+  static constexpr const char * kSamplePeriodInterface = "sample_period";
+
+  // 每個 output 的插補狀態
+  struct Segment {
+    double start{std::numeric_limits<double>::quiet_NaN()};
+    double target{std::numeric_limits<double>::quiet_NaN()};
+    double duration{0.0};
+    double elapsed{0.0};
+    double output{std::numeric_limits<double>::quiet_NaN()};
+  };
+
   std::vector<std::string> input_interfaces_;
   std::vector<std::string> output_interfaces_;
-  bool chained_mode_{false};  // 是否由上層 controller 透過 reference interface 驅動
+  bool chained_mode_{false};
+  std::vector<Segment> segments_;  // 與 output_interfaces_ 對應  // 是否由上層 controller 透過 reference interface 驅動
 
   // 將所有 reference 值發布至 ~/references
   std::unique_ptr<StateInterfacePublisher> reference_publisher_;
