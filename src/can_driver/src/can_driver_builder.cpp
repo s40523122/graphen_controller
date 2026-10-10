@@ -214,13 +214,9 @@ bool CanDriverBuilder::moveToPositionRad(double target_rad) {
 }
 
 bool CanDriverBuilder::readFilterCurrent(size_t motor_index, double & out_ma, int timeout_ms) {
-    if (motor_index >= motors_.size()) {
-        return false;
-    }
+    if (motor_index >= motors_.size()) return false;
     auto & m = motors_[motor_index];
-    if (!m) return false;
-    if (!m->readFilterCurrent(out_ma, timeout_ms)) return false;
-    return m->readFilterCurrent(out_ma, timeout_ms);
+    return m ? m->readFilterCurrent(out_ma, timeout_ms) : false;
 }
 
 bool CanDriverBuilder::readError(size_t motor_index, uint32_t & out_error, int timeout_ms) {
