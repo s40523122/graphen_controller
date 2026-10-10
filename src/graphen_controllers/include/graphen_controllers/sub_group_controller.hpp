@@ -19,6 +19,8 @@ namespace graphen::control {
 //   input_interfaces        導出的 reference interface 名稱（全名為 <node_name>/<input>）
 //   output_interfaces       要寫入的硬體 command interface
 //   reference_publish_rate  ~/references 的發布頻率 (Hz)
+//   output_enabled          false 時不寫 command，硬體保留最後的 command，關節維持在最後狀態
+//                           （例如停用會碰撞或故障的部位）；只在 configure 時讀取
 //
 // input 只有 1 個時寫到所有 output（廣播）；否則 input 與 output 數量必須相同，第 i 個 reference
 // 寫到第 i 個 output。所有 reference 皆發布到 ~/references 供觀察。
@@ -63,8 +65,9 @@ private:
 
   std::vector<std::string> input_interfaces_;
   std::vector<std::string> output_interfaces_;
-  bool chained_mode_{false};
-  std::vector<Segment> segments_;  // 與 output_interfaces_ 對應  // 是否由上層 controller 透過 reference interface 驅動
+  bool chained_mode_{false};  // 是否由上層 controller 透過 reference interface 驅動
+  bool output_enabled_{true};
+  std::vector<Segment> segments_;  // 與 output_interfaces_ 對應
 
   // 將所有 reference 值發布至 ~/references
   std::unique_ptr<StateInterfacePublisher> reference_publisher_;

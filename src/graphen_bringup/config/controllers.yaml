@@ -206,6 +206,10 @@ switch_group_controller:
       damping: 1.0e-6
       residual_tolerance: 1.0e-3   # rad
 
+# output_enabled：false 時該群組不寫 command，關節維持最後的 command（不斷電、不卸力），
+# 用來停用會碰撞或故障的部位；只在啟動時讀取。
+# 注意：forward / reverse 只動手腕，BT 的 joint_reciprocate 等 L_WRIST_P 越過門檻才換向，
+# 關閉手臂時 BT 會一直等待，所以手臂只在跑 walk 等模式時才關閉
 left_arm_group_controller:
   ros__parameters:
     input_interfaces: [L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R]
@@ -218,6 +222,7 @@ left_arm_group_controller:
       - L_WRIST_Y/position
       - L_WRIST_R/position
     reference_publish_rate: 50.0
+    output_enabled: true
 
 right_arm_group_controller:
   ros__parameters:
@@ -231,6 +236,7 @@ right_arm_group_controller:
       - R_WRIST_Y/position
       - R_WRIST_R/position
     reference_publish_rate: 50.0
+    output_enabled: true
 
 waist_group_controller:
   ros__parameters:
@@ -240,6 +246,7 @@ waist_group_controller:
       - WAIST_R/position
       - WAIST_P/position
     reference_publish_rate: 50.0
+    output_enabled: true
 
 head_group_controller:
   ros__parameters:
@@ -249,6 +256,7 @@ head_group_controller:
       - NECK_P/position
       - NECK_R/position
     reference_publish_rate: 50.0
+    output_enabled: true
 
 left_leg_group_controller:
   ros__parameters:
@@ -261,6 +269,7 @@ left_leg_group_controller:
       - L_ANKLE_P/position
       - L_ANKLE_R/position
     reference_publish_rate: 50.0
+    output_enabled: true
 
 right_leg_group_controller:
   ros__parameters:
@@ -273,3 +282,4 @@ right_leg_group_controller:
       - R_ANKLE_P/position
       - R_ANKLE_R/position
     reference_publish_rate: 50.0
+    output_enabled: true

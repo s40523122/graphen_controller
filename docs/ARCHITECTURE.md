@@ -218,12 +218,14 @@ graph LR
   - 插補狀態（每個 output 的起點、目標、時間）在 `on_configure` 預先配置；`on_activate` 從目前的 command 開始，不會產生斜坡。
   - `input_interfaces` 不可使用保留名稱 `sample_period`。
 - `on_activate` 以對應 output 目前的 command 值初始化 reference（沒有對應 output 的為 NaN），讓上層可以據此保持位置。
+- **停用輸出**（`output_enabled: false`）：照常發布 `~/references`，但不更新插補、不寫 command。ros2_control 的 command interface 會保留最後的值，硬體（mock / `Ti5Hardware`）持續以它為目標，關節維持最後狀態（不斷電、不卸力）。上層照常運作，不受影響。用於停用會碰撞（例如 BVH 手臂打到大腿）或故障的部位；只在 configure 時讀取，執行中不能切換。
 
 | 參數 | 型別 | 預設值 | 說明 |
 |---|---|---|---|
 | `input_interfaces` | string[] | `[]`（必填） | 要導出的 reference interface 名稱；1 個（廣播）或與 `output_interfaces` 同數量（1:1） |
 | `output_interfaces` | string[] | `[]`（必填） | 要寫入的硬體 command interface |
 | `reference_publish_rate` | double | 50.0 | `~/references` 的發布頻率（Hz） |
+| `output_enabled` | bool | true | false 時不寫 command，關節維持最後的 command；只在 configure 時讀取 |
 
 | Topic | 型別 | 方向 |
 |---|---|---|

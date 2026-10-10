@@ -12,6 +12,7 @@ controller_interface::CallbackReturn SubGroupController::on_init() {
     auto_declare<std::vector<std::string>>("input_interfaces", std::vector<std::string>{});
     auto_declare<std::vector<std::string>>("output_interfaces", std::vector<std::string>{});
     auto_declare<double>("reference_publish_rate", 50.0);
+    auto_declare<bool>("output_enabled", true);
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception caught during init: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -32,6 +33,13 @@ controller_interface::CallbackReturn SubGroupController::on_configure(
   if (output_interfaces_.empty()) {
     RCLCPP_ERROR(get_node()->get_logger(), "'output_interfaces' parameter is empty!");
     return controller_interface::CallbackReturn::ERROR;
+  }
+
+  output_enabled_ = get_node()->get_parameter("output_enabled").as_bool();
+  if (!output_enabled_) {
+    RCLCPP_WARN(get_node()->get_logger(),
+      "[%s] Output disabled: commands are not written, joints hold their last command.",
+      get_node()->get_name());
   }
 
   // 1 個 input 時廣播到所有 output；否則第 i 個 input 對應第 i 個 output
@@ -147,6 +155,11 @@ controller_interface::return_type SubGroupController::update_and_write_commands(
   const rclcpp::Duration & period) {
 
   reference_publisher_->publish(reference_interfaces_, time, period);
+
+  // 停用輸出：reference 仍照常發布供觀察，但不寫 command，硬體保留最後的值
+  if (!output_enabled_) {
+    return controller_interface::return_type::OK;
+  }
 
   // sample_period：上游輸出點的間隔，無效值視為 0（不插補）
   const size_t num_inputs = input_interfaces_.size();
