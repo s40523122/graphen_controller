@@ -76,28 +76,6 @@ hardware_interface::CallbackReturn Ti5Hardware::on_init(const hardware_interface
         return CallbackReturn::ERROR;
     }
 
-    // 讀取關節限位判定容差（弧度），預設 0.0
-    auto it_eps = info.hardware_parameters.find("limit_epsilon_rad");
-    if (it_eps != info.hardware_parameters.end() && !it_eps->second.empty()) {
-        try {
-            const double eps = std::stod(it_eps->second);
-            if (eps < 0.0) {
-                RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"),
-                             "Invalid limit_epsilon_rad=%.9f (must be >= 0).", eps);
-                return CallbackReturn::ERROR;
-            }
-            limit_epsilon_rad_ = eps;
-        } catch (const std::exception & e) {
-            RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"),
-                         "Failed to parse limit_epsilon_rad='%s' (%s).",
-                         it_eps->second.c_str(), e.what());
-            return CallbackReturn::ERROR;
-        }
-    } else {
-        limit_epsilon_rad_ = 0.0;
-    }
-    joint_safety_control_.setLimitEpsilon(limit_epsilon_rad_);
-
     // 讀取指令最大變化速度（rad/s），預設 0.0（不限速）
     max_command_velocity_ = 0.0;
     auto it_vel = info.hardware_parameters.find("max_command_velocity");
@@ -196,6 +174,7 @@ hardware_interface::CallbackReturn Ti5Hardware::on_init(const hardware_interface
     hw_output_commands_.resize(joint_names_.size(), 0.0);
     hw_filter_currents_.resize(joint_names_.size(), 0.0);
     hw_error_codes_.resize(joint_names_.size(), 0.0);
+    is_clamping_.assign(joint_names_.size(), false);
 
     RCLCPP_INFO(rclcpp::get_logger("Ti5Hardware"),
                 "Initialized %zu joints (from URDF, mapped to CAN channels).", joint_names_.size());
@@ -267,8 +246,9 @@ hardware_interface::CallbackReturn Ti5Hardware::on_activate(const rclcpp_lifecyc
         return CallbackReturn::ERROR;
     }
 
-    // Lifecycle reset: 清除 is_over_limit_，允許再次輸出命令。
-    is_over_limit_ = false;
+    // Lifecycle reset: 清除 is_command_invalid_，允許再次輸出命令。
+    is_command_invalid_ = false;
+    is_clamping_.assign(joint_names_.size(), false);
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         const std::shared_ptr<can_driver::CanDriverBuilder> & b = joint_builders_[i];
         if (!b) {
@@ -333,7 +313,7 @@ hardware_interface::CallbackReturn Ti5Hardware::on_deactivate(const rclcpp_lifec
 
 hardware_interface::CallbackReturn Ti5Hardware::on_cleanup(const rclcpp_lifecycle::State &) {
     is_can_ready_ = false;
-    is_over_limit_ = false;
+    is_command_invalid_ = false;
     consecutive_read_fail_cycles_ = 0;
     joint_builders_.clear();
     if (can_manager_) {
@@ -346,7 +326,7 @@ hardware_interface::return_type Ti5Hardware::read(const rclcpp::Time & /* time *
     if (!is_can_ready_) {
         return hardware_interface::return_type::ERROR;
     }
-    if (is_over_limit_) {
+    if (is_command_invalid_) {
         return hardware_interface::return_type::ERROR;
     }
     for (size_t i = 0; i < joint_names_.size(); ++i) {
@@ -442,26 +422,19 @@ hardware_interface::return_type Ti5Hardware::write(const rclcpp::Time &, const r
     if (!is_can_ready_) {
         return hardware_interface::return_type::ERROR;
     }
-    if (is_over_limit_) {
+    if (is_command_invalid_) {
         return hardware_interface::return_type::ERROR;
     }
 
-    try {
-        for (size_t i = 0; i < joint_names_.size(); ++i) {
-            if (!joint_safety_control_.isCommandWithinLimits(i, hw_commands_[i])) {
-                double lim_min = 0.0, lim_max = 0.0;
-                joint_safety_control_.getLimit(i, lim_min, lim_max);
-                RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"),
-                             "Command out of limits: joint='%s' cmd=%.6f rad limit=[%.6f, %.6f]. Stop.",
-                             joint_names_[i].c_str(), hw_commands_[i], lim_min, lim_max);
-                is_over_limit_ = true;
-                return hardware_interface::return_type::ERROR;
-            }
+    // NaN / inf 無法 clamp，代表上層有問題：停止所有輸出，直到 lifecycle reset
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
+        if (!std::isfinite(hw_commands_[i])) {
+            RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"),
+                         "Command is not finite: joint='%s' cmd=%f. Stop.",
+                         joint_names_[i].c_str(), hw_commands_[i]);
+            is_command_invalid_ = true;
+            return hardware_interface::return_type::ERROR;
         }
-    } catch (const std::exception & e) {
-        RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"), "Joint limit check failed: %s", e.what());
-        is_over_limit_ = true;
-        return hardware_interface::return_type::ERROR;
     }
 
     // 每週期最多移動 max_command_velocity * dt；period 異常（<= 0）時本週期不移動
@@ -471,11 +444,29 @@ hardware_interface::return_type Ti5Hardware::write(const rclcpp::Time &, const r
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         const std::shared_ptr<can_driver::CanDriverBuilder> & b = joint_builders_[i];
         if (b) {
+            // 超出限位時夾在限位上繼續輸出；hw_commands_ 屬於 controller，不直接修改
+            const double target = joint_safety_control_.clamp(i, hw_commands_[i]);
+            const bool clamping = target != hw_commands_[i];
+            if (clamping != is_clamping_[i]) {
+                // 只在進入 / 離開 clamp 時各印一次，避免每週期洗 log
+                is_clamping_[i] = clamping;
+                if (clamping) {
+                    double lim_min = 0.0, lim_max = 0.0;
+                    joint_safety_control_.getLimit(i, lim_min, lim_max);
+                    RCLCPP_WARN(rclcpp::get_logger("Ti5Hardware"),
+                                "Command out of limits, clamped: joint='%s' cmd=%.6f rad limit=[%.6f, %.6f].",
+                                joint_names_[i].c_str(), hw_commands_[i], lim_min, lim_max);
+                } else {
+                    RCLCPP_INFO(rclcpp::get_logger("Ti5Hardware"),
+                                "Command back within limits: joint='%s'.", joint_names_[i].c_str());
+                }
+            }
+
             if (max_command_velocity_ > 0.0) {
                 hw_output_commands_[i] += std::clamp(
-                    hw_commands_[i] - hw_output_commands_[i], -max_step, max_step);
+                    target - hw_output_commands_[i], -max_step, max_step);
             } else {
-                hw_output_commands_[i] = hw_commands_[i];
+                hw_output_commands_[i] = target;
             }
             b->moveToPositionRad(joint_to_motor_index_[i], hw_output_commands_[i]);
         } else {

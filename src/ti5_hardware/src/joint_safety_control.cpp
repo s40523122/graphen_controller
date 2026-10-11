@@ -112,29 +112,11 @@ void JointSafetyControl::getLimit(size_t index, double & min_rad_out, double & m
     max_rad_out = limits_[index].second;
 }
 
-bool JointSafetyControl::isCommandWithinLimits(size_t index, double command_rad) const {
+double JointSafetyControl::clamp(size_t index, double command_rad) const {
     if (index >= limits_.size()) {
-        throw std::out_of_range("JointSafetyControl::isCommandWithinLimits index out of range");
+        throw std::out_of_range("JointSafetyControl::clamp index out of range");
     }
-    const double min_pos = limits_[index].first;
-    const double max_pos = limits_[index].second;
-    return (command_rad >= (min_pos - limit_epsilon_rad_) &&
-            command_rad <= (max_pos + limit_epsilon_rad_));
-}
-
-bool JointSafetyControl::areCommandsWithinLimits(const double * commands, size_t n) const {
-    if (!commands) {
-        return true;
-    }
-    if (n != limits_.size()) {
-        throw std::out_of_range("JointSafetyControl::areCommandsWithinLimits size mismatch");
-    }
-    for (size_t i = 0; i < n; ++i) {
-        if (!isCommandWithinLimits(i, commands[i])) {
-            return false;
-        }
-    }
-    return true;
+    return std::clamp(command_rad, limits_[index].first, limits_[index].second);
 }
 
 }  // namespace ti5_hardware

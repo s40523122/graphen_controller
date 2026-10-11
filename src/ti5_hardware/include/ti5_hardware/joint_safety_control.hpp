@@ -60,21 +60,12 @@ class JointSafetyControl {
         void getLimit(size_t index, double & min_rad_out, double & max_rad_out) const;
 
         /**
-        * @brief 檢查單一關節命令是否在限位內（弧度）
+        * @brief 將命令夾在第 index 個關節的限位內（弧度）
+        *
+        * command_rad 必須是有限值；NaN / inf 由呼叫端先行處理。
         * @throws std::out_of_range 當 index >= size()
         */
-        bool isCommandWithinLimits(size_t index, double command_rad) const;
-
-        /**
-        * @brief 檢查一組命令是否全都在限位內（弧度）
-        * @throws std::out_of_range 當 commands 數量或索引與 limits 不一致
-        */
-        bool areCommandsWithinLimits(const double * commands, size_t n) const;
-
-        /**
-        * @brief 設定限位比較容差（弧度）
-        */
-        void setLimitEpsilon(double epsilon_rad) noexcept { limit_epsilon_rad_ = epsilon_rad; }
+        double clamp(size_t index, double command_rad) const;
 
         /**
         * @brief 已設定的關節數量
@@ -91,11 +82,6 @@ class JointSafetyControl {
         * @brief 關節位置上下限（弧度），與 joint 順序一致
         */
         std::vector<LimitPair> limits_;
-
-        /**
-        * @brief 限位比較容差（弧度）
-        */
-        double limit_epsilon_rad_{0.0};
 };
 
 }  // namespace ti5_hardware

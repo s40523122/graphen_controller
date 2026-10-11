@@ -102,22 +102,22 @@ class Ti5Hardware : public hardware_interface::SystemInterface
         bool is_can_ready_{false};
 
         /**
-        * @brief 超限故障（例如：關節命令超出限位）
+        * @brief 命令無效故障（關節命令為 NaN / inf，無法 clamp）
         *
         * 一旦觸發，系統會拒絕後續 read/write，直到透過 lifecycle reset（例如 deactivate->activate）
-        * 清除此狀態。
+        * 清除此狀態。超出限位的有限命令不會觸發，而是 clamp 到限位後輸出。
         */
-        bool is_over_limit_{false};
+        bool is_command_invalid_{false};
+
+        /**
+        * @brief 各關節目前是否正在被 clamp（只用於在狀態轉換時印 log）
+        */
+        std::vector<bool> is_clamping_;
 
         /**
         * @brief CAN 讀取超時時間閥值（ms）
         */
         int hw_read_timeout_ms_;
-
-        /**
-        * @brief 關節限位判定容差（弧度）
-        */
-        double limit_epsilon_rad_{0.0};
 
         /**
         * @brief 送往馬達的指令最大變化速度（rad/s），<= 0 表示不限速
