@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <optional>
 #include <string>
 
 #include "can_driver/can_config_loader.hpp"
@@ -37,15 +36,13 @@ hardware_interface::CallbackReturn Ti5Hardware::on_init(const hardware_interface
         return CallbackReturn::ERROR;
     }
 
-    // 讀取 URDF 檔案路徑（用於讀取 <joint><limit lower/upper>）
-    auto it_urdf = info.hardware_parameters.find("urdf_path");
-    if (it_urdf == info.hardware_parameters.end() || it_urdf->second.empty()) {
+    // 關節限位從 robot_description 讀取（original_xml 是 resource manager 收到的完整 URDF）
+    if (info.original_xml.empty()) {
         RCLCPP_ERROR(
             rclcpp::get_logger("Ti5Hardware"),
-            "Missing or empty hardware parameter 'urdf_path'.");
+            "HardwareInfo::original_xml is empty; cannot read joint limits from robot_description.");
         return CallbackReturn::ERROR;
     }
-    urdf_path_ = it_urdf->second;
 
     // 讀取 CAN 設定檔路徑
     auto it = info.hardware_parameters.find("can_config_path");
@@ -186,7 +183,7 @@ hardware_interface::CallbackReturn Ti5Hardware::on_init(const hardware_interface
 
     try {
         joint_safety_control_.setLimitsFromJoints(
-            mapped_joints, std::optional<std::string>(urdf_path_), rclcpp::get_logger("Ti5Hardware"));
+            mapped_joints, info.original_xml, rclcpp::get_logger("Ti5Hardware"));
     } catch (const std::exception & e) {
         RCLCPP_ERROR(rclcpp::get_logger("Ti5Hardware"), "Failed to set joint limits: %s", e.what());
         return CallbackReturn::ERROR;
@@ -206,7 +203,7 @@ hardware_interface::CallbackReturn Ti5Hardware::on_init(const hardware_interface
         try {
             double lim_min, lim_max;
             joint_safety_control_.getLimit(i, lim_min, lim_max);
-            RCLCPP_DEBUG(rclcpp::get_logger("Ti5Hardware"),
+            RCLCPP_INFO(rclcpp::get_logger("Ti5Hardware"),
                          "Joint '%s' position limits [%.4f, %.4f] rad.",
                          joint_names_[i].c_str(), lim_min, lim_max);
         } catch (const std::exception & e) {

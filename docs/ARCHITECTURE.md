@@ -564,14 +564,14 @@ IfThenElse "WalkEnabled"
 - **BVH 超出 T170 限位**：`t170wk_walk1_subject1.bvh` 的髖 roll（約 ±0.6 rad）、踝等會超出 URDF 限位而被截斷，組的殘差因此不為 0（約 0.3~0.6 rad）。
 - **BVH 播放的延遲**：插補在子群組進行，輸出約晚一幀（1/24 s ≈ 42 ms）；開環播放沒有影響，切換模式的反應也會晚最多一幀。
 - **肩部奇異點**：肩 P/R/Y 為 Y-X-Y，`R ≈ 0`（手臂水平的 T-pose）時 P 與 Y 共線。BVH 開頭與結尾的 T-pose 段會讓 P/Y 快速擺動或換分支（離線最大約 75 rad/s），實際輸出受 `walk.max_steps` 限制；步行段連續。
-- **robot.urdf 軸向與 xacro 不一致**：`ti5_170a_graphen/urdf/robot.urdf`（Ti5Hardware 讀限位用）有 16 個 joint 的軸方向與 xacro 相反（例如 `L_HIP_R`、`L_ELBOW_Y`、`NECK_P`）。BVH 轉換以 robot_description（xacro）為準，實機的正負號需要確認（`TODO(verify-on-hw)`）。
+- **關節正負號以 xacro 為準**：Ti5Hardware 的限位、BVH 轉換都取自 robot_description（xacro）。原廠的靜態 `robot.urdf`（已刪除）有 16 個 joint 的軸方向與 xacro 相反（例如 `L_HIP_R`、`L_ELBOW_Y`、`NECK_P`），`R_KNEE_P`、`L_HIP_R`/`R_HIP_R`、`R_ANKLE_P` 的限位正負號也對調；上實機前需確認 xacro 的正負號與馬達一致，否則限位會落在錯誤的一側（`TODO(verify-on-hw)`）。
 - **實機速度**：Ti5Hardware 的 `max_command_velocity`（預設 0.5 rad/s）遠低於步態所需的速度（膝約 13 rad/s），實機播放會明顯落後；需要時以 `walk.time_scale` 放慢。
 - **ti5_hardware 的 state interface 語意**：`velocity` 實際綁到 error code、`acceleration` 綁到 filter current（[ti5_hardware.cpp](../src/ti5_hardware/src/ti5_hardware.cpp) `export_state_interfaces`），實機時不可當作速度 / 加速度使用。
 - **Ti5Hardware 的開機與限速**：
   - `on_activate` 讀 encoder 作為輸出起點；有列在 `real_initial_positions.yaml` 的 joint，目標為該值，沒列的保持目前位置。
   - `write()` 送出的指令以 `max_command_velocity` 限速逼近 `hw_commands_`。
   - 原本 activate 時的 encoder 讀取被註解掉，需實機確認此時讀取是否可靠（`TODO(verify-on-hw)`）。
-- **T170 實機尚未在本架構下驗證**：`use_mock_hardware:=false`、`use_hands:=true` + 實機只做過 xacro 展開檢查；`robot.urdf`（Ti5Hardware 讀限位用）需確認與 xacro 同步；IMU 在 T170 上的安裝位置待確認（`TODO(verify-on-hw)`）。
+- **T170 實機尚未在本架構下驗證**：`use_mock_hardware:=false`、`use_hands:=true` + 實機只做過 xacro 展開檢查；IMU 在 T170 上的安裝位置待確認（`TODO(verify-on-hw)`）。
 - **RateControl 的並行存取**：worker thread 和主樹會並行存取 child 和 blackboard（沿用原型設計）。因此 `sys_count` 可能略微超過 target（實測約 3006）。若要嚴格同步，需要重新設計。
 - **CheckSysCount 的 target（3000）寫死在 tree XML**：可以考慮改成 blackboard 變數。
 - **Groot 只支援 v1**：要改用 Groot2 必須升級到 BT.CPP v4。

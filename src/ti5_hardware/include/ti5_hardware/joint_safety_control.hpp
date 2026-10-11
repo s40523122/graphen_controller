@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,18 +34,20 @@ class JointSafetyControl {
         void setLimits(const std::vector<LimitPair> & limits);
 
         /**
-        * @brief 從 ros2_control + (可選)URDF 讀取關節限位並設定
+        * @brief 從 ros2_control + URDF 讀取關節限位並設定
         *
         * joints_in_order 的順序會直接決定 limits 的順序（需與 Ti5Hardware 的 joint_names_ 一致）。
         *
         * 優先順序：
         * - ros2_control command_interface(position) 的 min/max
         * - ros2_control joint.parameters["min"/"max"]
-        * - URDF <joint><limit lower/upper>（若 urdf_path 有提供且讀取成功）
-        * - 預設 [-pi, pi]
+        * - URDF <joint><limit lower/upper>
+        *
+        * @param urdf_xml URDF 內容（robot_description，即 HardwareInfo::original_xml）
+        * @throws std::runtime_error URDF 解析失敗，或 joint 沒有任何限位來源
         */
         void setLimitsFromJoints(const std::vector<hardware_interface::ComponentInfo> & joints_in_order,
-                                 const std::optional<std::string> & urdf_path,
+                                 const std::string & urdf_xml,
                                  const rclcpp::Logger & logger);
 
         /**

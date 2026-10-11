@@ -1,6 +1,6 @@
 #include "ti5_hardware/joint_safety_control.hpp"
 
-#include <cmath>
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -17,101 +17,88 @@ void JointSafetyControl::setLimits(const std::vector<LimitPair> & limits) {
 }
 
 void JointSafetyControl::setLimitsFromJoints(const std::vector<hardware_interface::ComponentInfo> & joints_in_order,
-                                             const std::optional<std::string> & urdf_path,
+                                             const std::string & urdf_xml,
                                              const rclcpp::Logger & logger) {
+    // 限位一律以 robot_description 為準，與 controller / BVH retarget 使用同一份 URDF
     urdf::Model urdf_model;
-    bool urdf_loaded = false;
-    if (urdf_path.has_value() && !urdf_path->empty()) {
-        if (urdf_model.initFile(*urdf_path)) {
-            urdf_loaded = true;
-            RCLCPP_INFO(logger, "Loaded URDF from '%s' for joint limits.", urdf_path->c_str());
-        } else {
-            RCLCPP_WARN(logger, "Failed to load URDF from '%s'; using ros2_control limits/defaults.", urdf_path->c_str());
-        }
+    if (!urdf_model.initString(urdf_xml)) {
+        throw std::runtime_error("Failed to parse URDF (robot_description) for joint limits");
     }
 
     std::vector<LimitPair> position_limits;
     position_limits.reserve(joints_in_order.size());
 
-    for (const auto & joint : joints_in_order) {
-        double min_pos = -M_PI;
-        double max_pos = M_PI;
-        bool has_explicit_minmax = false;
+    // 解析失敗時回傳 std::nullopt（並印 WARN），讓下一個來源補上
+    const auto parse = [&logger](const std::string & joint_name, const char * key, const std::string & text)
+        -> std::optional<double> {
+        if (text.empty()) {
+            return std::nullopt;
+        }
+        try {
+            return std::stod(text);
+        } catch (const std::exception &) {
+            RCLCPP_WARN(logger, "Joint '%s' position %s '%s' parse failed, ignored.",
+                        joint_name.c_str(), key, text.c_str());
+            return std::nullopt;
+        }
+    };
 
-        // 優先使用 ros2_control 的 command_interface min/max
+    for (const auto & joint : joints_in_order) {
+        // 上下限各自依優先順序取第一個有效來源，所以只設定其中一邊時另一邊仍由 URDF 補上
+        std::optional<double> min_pos;
+        std::optional<double> max_pos;
+
+        // 1. ros2_control 的 command_interface(position) min/max
         for (const hardware_interface::InterfaceInfo & iface : joint.command_interfaces) {
             if (iface.name == hardware_interface::HW_IF_POSITION) {
-                if (!iface.min.empty()) {
-                    try {
-                        min_pos = std::stod(iface.min);
-                        has_explicit_minmax = true;
-                    } catch (const std::exception &) {
-                        RCLCPP_WARN(
-                            logger, "Joint '%s' position min '%s' parse failed, use default.",
-                            joint.name.c_str(), iface.min.c_str());
-                    }
-                }
-                if (!iface.max.empty()) {
-                    try {
-                        max_pos = std::stod(iface.max);
-                        has_explicit_minmax = true;
-                    } catch (const std::exception &) {
-                        RCLCPP_WARN(
-                            logger, "Joint '%s' position max '%s' parse failed, use default.",
-                            joint.name.c_str(), iface.max.c_str());
-                    }
-                }
+                min_pos = parse(joint.name, "min", iface.min);
+                max_pos = parse(joint.name, "max", iface.max);
                 break;
             }
         }
 
-        // 其次使用 ros2_control 的 joint.parameters["min"/"max"]
-        auto pmin = joint.parameters.find("min");
-        auto pmax = joint.parameters.find("max");
-        if (pmin != joint.parameters.end() && !pmin->second.empty()) {
-            try {
-                min_pos = std::stod(pmin->second);
-                has_explicit_minmax = true;
-            } catch (const std::exception &) {}
+        // 2. ros2_control 的 joint.parameters["min"/"max"]
+        if (!min_pos) {
+            const auto it = joint.parameters.find("min");
+            if (it != joint.parameters.end()) {
+                min_pos = parse(joint.name, "min", it->second);
+            }
         }
-        if (pmax != joint.parameters.end() && !pmax->second.empty()) {
-            try {
-                max_pos = std::stod(pmax->second);
-                has_explicit_minmax = true;
-            } catch (const std::exception &) {}
+        if (!max_pos) {
+            const auto it = joint.parameters.find("max");
+            if (it != joint.parameters.end()) {
+                max_pos = parse(joint.name, "max", it->second);
+            }
         }
 
-        // 最終使用 URDF 的 <limit lower/upper>（當 ros2_control 沒提供時）
-        if (!has_explicit_minmax && urdf_loaded) {
+        // 3. URDF 的 <limit lower/upper>
+        if (!min_pos || !max_pos) {
             const urdf::JointConstSharedPtr uj = urdf_model.getJoint(joint.name);
             if (!uj) {
                 RCLCPP_ERROR(logger, "URDF is missing joint '%s' (required for limits).", joint.name.c_str());
                 throw std::runtime_error("URDF missing joint '" + joint.name + "'");
             }
-            if (!uj->limits) {
-                if (uj->type == urdf::Joint::CONTINUOUS) {
-                    RCLCPP_ERROR(
-                        logger,
-                        "Joint '%s' is continuous and has no <limit>; explicit limits are required.",
-                        joint.name.c_str());
-                    throw std::runtime_error("Joint '" + joint.name + "' has no limits (continuous)");
-                }
+            if (!uj->limits || uj->type == urdf::Joint::CONTINUOUS) {
                 RCLCPP_ERROR(
                     logger,
                     "Joint '%s' has no <limit lower/upper>; explicit limits are required.",
                     joint.name.c_str());
                 throw std::runtime_error("Joint '" + joint.name + "' has no limits");
             }
-            min_pos = uj->limits->lower;
-            max_pos = uj->limits->upper;
+            if (!min_pos) {
+                min_pos = uj->limits->lower;
+            }
+            if (!max_pos) {
+                max_pos = uj->limits->upper;
+            }
         }
 
-        if (min_pos > max_pos) {
-            std::swap(min_pos, max_pos);
+        if (*min_pos > *max_pos) {
+            std::swap(*min_pos, *max_pos);
             RCLCPP_WARN(logger, "Joint '%s' limits min > max, swapped.", joint.name.c_str());
         }
 
-        position_limits.emplace_back(min_pos, max_pos);
+        position_limits.emplace_back(*min_pos, *max_pos);
     }
 
     setLimits(position_limits);

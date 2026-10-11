@@ -97,11 +97,6 @@ class Ti5Hardware : public hardware_interface::SystemInterface
         YAML::Node initial_positions_;
 
         /**
-        * @brief URDF 檔案路徑
-        */
-        std::string urdf_path_;
-
-        /**
         * @brief CAN 準備狀態
         */
         bool is_can_ready_{false};
