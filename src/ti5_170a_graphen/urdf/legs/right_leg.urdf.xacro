@@ -65,7 +65,7 @@
       <child  link="${prefix}R_HIP_R_S"/>
       <axis xyz="1 0 0"/>
       <!-- 注意：右腳 lower/upper 與左腳相反 -->
-      <limit lower="-0.2616" upper="1.7444" effort="63" velocity="8.06"/>
+      <limit lower="-1.7444" upper="0.2616" effort="63" velocity="8.06"/>
     </joint>
 
     <!-- ===== R_HIP_Y ===== -->
@@ -125,7 +125,7 @@
       <child  link="${prefix}R_KNEE_P_S"/>
       <!-- 注意：右膝 axis 與左膝相反 -->
       <axis xyz="0 -1 0"/>
-      <limit lower="-2.3" upper="0.83" effort="267" velocity="5.76"/>
+      <limit lower="-2.3" upper="0.7" effort="267" velocity="5.76"/>
     </joint>
 
     <!-- ===== R_ANKLE_P ===== -->

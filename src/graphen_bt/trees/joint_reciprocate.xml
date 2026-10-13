@@ -35,11 +35,11 @@
             <IfThenElse name="ReciprocateEnabled">
                 <Condition ID="IsOk" is_ok_val="{enable_reciprocate}"/>
                 <Sequence name="Reciprocate">
-                    <Action ID="GetStateValue" joint="L_WRIST_P" interface="position" value="{arm_pos}"/>
+                    <Action ID="GetStateValue" joint="L_KNEE_P" interface="position" value="{arm_pos}"/>
                     <Fallback>
                         <BlackboardCheckString name="Forward" value_A="{mode}" value_B="forward" return_on_mismatch="FAILURE">
                             <Fallback>
-                                <Condition ID="IsBelow" name="KeepForward" value="{arm_pos}" threshold="1.0"/>
+                                <Condition ID="IsBelow" name="KeepForward" value="{arm_pos}" threshold="0.45"/>
                                 <Sequence name="TurnToReverse">
                                     <Action ID="SwitchMode" mode="reverse"/>
                                     <SetBlackboard output_key="mode" value="reverse"/>
@@ -48,7 +48,7 @@
                         </BlackboardCheckString>
                         <BlackboardCheckString name="Reverse" value_A="{mode}" value_B="reverse" return_on_mismatch="FAILURE">
                             <Fallback>
-                                <Condition ID="IsAbove" name="KeepReverse" value="{arm_pos}" threshold="-1.0"/>
+                                <Condition ID="IsAbove" name="KeepReverse" value="{arm_pos}" threshold="-0.45"/>
                                 <Sequence name="TurnToForward">
                                     <Action ID="SwitchMode" mode="forward"/>
                                     <SetBlackboard output_key="mode" value="forward"/>
