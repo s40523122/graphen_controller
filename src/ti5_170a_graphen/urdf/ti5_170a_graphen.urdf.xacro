@@ -17,7 +17,7 @@
   <xacro:arg name="right_hand_port" default="/dev/ttyUSB0"/>
   <xacro:arg name="hand_baudrate" default="115200"/>
 
-  <!-- IMU：use_mock_imu:=true 時使用 mock 的 imu/raw_data（原本的模擬方式），
+  <!-- IMU：use_mock_imu:=true 時使用 mock IMU（與實機同名的 imu_sensor/* 介面，可用 topic 寫入模擬值），
        false 時使用實機 FSS-IMU16460-C（imu16460_hardware） -->
   <xacro:arg name="use_mock_imu" default="true"/>
   <xacro:arg name="imu_port" default="/dev/ttyTHS1"/>
@@ -59,7 +59,9 @@
   </xacro:if>
 
   <!-- 4. IMU -->
-  <!-- 模擬 sensor：imu/raw_data。獨立成一個 mock system，讓本體改用實機時 mock IMU 仍可單獨使用 -->
+  <!-- 模擬 IMU：介面名稱與實機的 imu16460 xacro 相同，controller 設定在 mock 與實機下不需要更動。
+       獨立成一個 mock system，讓本體改用實機時 mock IMU 仍可單獨使用。
+       初始值為靜止水平：單位四元數，z 軸加速度 9.81（靜止時加速度計量到的值） -->
   <xacro:if value="$(arg use_mock_imu)">
     <ros2_control name="MockImu" type="system">
       <hardware>
@@ -67,10 +69,18 @@
         <!-- 為 sensor 產生同名 command interface，可用 topic 寫入模擬資料 -->
         <param name="mock_sensor_commands">true</param>
       </hardware>
-      <sensor name="imu">
-        <state_interface name="raw_data">
-          <param name="initial_value">1.23</param>
-        </state_interface>
+      <sensor name="imu_sensor">
+        <state_interface name="orientation.x"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="orientation.y"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="orientation.z"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="orientation.w"><param name="initial_value">1.0</param></state_interface>
+        <state_interface name="angular_velocity.x"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="angular_velocity.y"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="angular_velocity.z"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="linear_acceleration.x"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="linear_acceleration.y"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="linear_acceleration.z"><param name="initial_value">9.81</param></state_interface>
+        <state_interface name="temperature"><param name="initial_value">25.0</param></state_interface>
       </sensor>
     </ros2_control>
   </xacro:if>

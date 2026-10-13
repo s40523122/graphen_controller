@@ -8,6 +8,7 @@ endif()
 set(THIS_PACKAGE_INCLUDE_DEPENDS
   ament_index_cpp
   controller_interface
+  geometry_msgs
   graphen_interfaces
   hardware_interface
   lifecycle_msgs
@@ -21,6 +22,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
 
 find_package(ament_cmake REQUIRED)
 find_package(graphen_control_utils REQUIRED)
+find_package(graphen_locomotion REQUIRED)
 find_package(graphen_motion REQUIRED)
 foreach(dep IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${dep} REQUIRED)
@@ -29,6 +31,7 @@ endforeach()
 add_library(${PROJECT_NAME} SHARED
   src/bvh_motion.cpp
   src/locomotion_planner.cpp
+  src/plugin_motion.cpp
   src/switch_group_controller.cpp
   src/sub_group_controller.cpp
   src/target_motion.cpp
@@ -40,6 +43,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 target_link_libraries(${PROJECT_NAME} PUBLIC
   graphen_control_utils::graphen_control_utils
+  graphen_locomotion::graphen_locomotion
   graphen_motion::graphen_motion
 )
 ament_target_dependencies(${PROJECT_NAME} PUBLIC ${THIS_PACKAGE_INCLUDE_DEPENDS})
@@ -67,5 +71,5 @@ install(
 )
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(graphen_control_utils graphen_motion ${THIS_PACKAGE_INCLUDE_DEPENDS})
+ament_export_dependencies(graphen_control_utils graphen_locomotion graphen_motion ${THIS_PACKAGE_INCLUDE_DEPENDS})
 ament_package()

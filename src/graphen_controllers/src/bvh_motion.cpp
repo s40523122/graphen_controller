@@ -39,7 +39,8 @@ void BvhMotion::solve_frame(size_t frame, std::vector<double> & q) const {
   }
 }
 
-void BvhMotion::on_enter(const std::vector<double> & current) {
+void BvhMotion::on_enter(const RobotState & state) {
+  const auto & current = state.commanded_positions;
   hold_ = current;
   // 以目前位置作為初始值，從多個等價解中選出最接近目前姿態的
   first_frame_ = current;
@@ -47,8 +48,9 @@ void BvhMotion::on_enter(const std::vector<double> & current) {
   phase_ = Phase::kApproach;
 }
 
-void BvhMotion::update(
-  double dt, const std::vector<double> & current, std::vector<double> & desired) {
+void BvhMotion::update(double dt, const RobotState & state, JointCommand & command) {
+  const auto & current = state.commanded_positions;
+  auto & desired = command.positions;
   const size_t num_frames = retargeter_->clip().num_frames();
   const double frame_time = retargeter_->clip().frame_time;
 

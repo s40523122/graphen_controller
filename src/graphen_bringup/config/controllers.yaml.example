@@ -27,18 +27,42 @@ controller_manager:
     switch_group_controller:
       type: graphen_control/SwitchGroupController
 
+    # mock IMU 的模擬資料寫入（只在 use_mock_imu:=true 時啟動）
     sensor_forwarder:
-      type: forward_command_controller/ForwardCommandController
+      type: forward_command_controller/MultiInterfaceForwardCommandController
 
+# /sensor_forwarder/commands（Float64MultiArray）的 10 個值依 interface_names 的順序寫入 mock IMU
 sensor_forwarder:
   ros__parameters:
-    joints:
-      - imu
-    interface_name: raw_data
+    joint: imu_sensor
+    interface_names:
+      - orientation.x
+      - orientation.y
+      - orientation.z
+      - orientation.w
+      - angular_velocity.x
+      - angular_velocity.y
+      - angular_velocity.z
+      - linear_acceleration.x
+      - linear_acceleration.y
+      - linear_acceleration.z
 
 switch_group_controller:
   ros__parameters:
-    sensor: imu/raw_data
+    # mock 與實機 IMU 的介面名稱相同
+    sensor: imu_sensor/angular_velocity.z
+    # 交給 Motion（含外部演算法 plugin）的 IMU：讀取 imu_sensor/orientation.x … linear_acceleration.z
+    imu_sensor_name: imu_sensor
+    # 機身狀態估測器（graphen_locomotion::BaseStateEstimator 的 plugin），在 planner thread 中、
+    # 演算法之前執行，結果放在 RobotState::base（機身座標系的線速度、角速度、重力投影）。
+    # ImuLeakyEstimator 只用 IMU：線速度為 leaky 積分，只反映短時間的變化（見 ARCHITECTURE §2.9）
+    base_estimator:
+      plugin: graphen_locomotion/ImuLeakyEstimator
+      base_frame: base_link
+      imu_frame: imu_link
+      leak_time_constant: 2.0   # s，線速度積分的衰減時間常數
+    # ~/cmd_vel（geometry_msgs/Twist）的逾時（s）；超過時速度指令視為 0
+    command_timeout: 0.5
     state_publish_rate: 50.0
     state_interfaces:
       - L_SHOULDER_P/position
@@ -150,6 +174,40 @@ switch_group_controller:
       - R_KNEE_P/position
       - R_ANKLE_P/position
       - R_ANKLE_R/position
+    # 交給 Motion 的量測速度，順序對應 command_interfaces；不在 state_interfaces 中的會自動加入
+    velocity_state_interfaces:
+      - L_SHOULDER_P/velocity
+      - L_SHOULDER_R/velocity
+      - L_SHOULDER_Y/velocity
+      - L_ELBOW_Y/velocity
+      - L_WRIST_P/velocity
+      - L_WRIST_Y/velocity
+      - L_WRIST_R/velocity
+      - R_SHOULDER_P/velocity
+      - R_SHOULDER_R/velocity
+      - R_SHOULDER_Y/velocity
+      - R_ELBOW_Y/velocity
+      - R_WRIST_P/velocity
+      - R_WRIST_Y/velocity
+      - R_WRIST_R/velocity
+      - WAIST_Y/velocity
+      - WAIST_R/velocity
+      - WAIST_P/velocity
+      - NECK_Y/velocity
+      - NECK_P/velocity
+      - NECK_R/velocity
+      - L_HIP_P/velocity
+      - L_HIP_R/velocity
+      - L_HIP_Y/velocity
+      - L_KNEE_P/velocity
+      - L_ANKLE_P/velocity
+      - L_ANKLE_R/velocity
+      - R_HIP_P/velocity
+      - R_HIP_R/velocity
+      - R_HIP_Y/velocity
+      - R_KNEE_P/velocity
+      - R_ANKLE_P/velocity
+      - R_ANKLE_R/velocity
 
     # planner 以 planner_rate 播放目前模式，每週期最多移動 max_steps（各模式未指定時用 planner_max_steps）
     planner_rate: 100.0
@@ -163,7 +221,7 @@ switch_group_controller:
 
     # 模式以名稱識別（BT、action、~/mode topic 都用這些名稱），名稱同時是下面參數的前綴。
     # controller 不認得任何特定模式，行為完全由 type 與參數決定
-    modes: [forward, reverse, walk, stop]
+    modes: [forward, reverse, walk, stop, sine]
     # 空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
     # 收到 BT / action / ~/mode 的命令後才開始移動
     default_mode: ""
@@ -202,6 +260,18 @@ switch_group_controller:
     # 之後再切到 walk 會重新 approach 第 0 幀（重置 locomotion 狀態）
     stop:
       type: hold
+
+    # type: plugin，由外部演算法（graphen_locomotion::LocomotionAlgorithm 的 pluginlib plugin）產生
+    # 期望角度與速度前饋；其餘 <mode>.* 參數由演算法自行讀取，輸出仍受 max_steps 限制。
+    # sine 是範例演算法：讓頸部 yaw 以進入時的位置為中心擺動（最大速度 ≈ 0.31 rad/s），
+    # 並每秒 log 一次量測值與 IMU，用來確認資料通路
+    sine:
+      type: plugin
+      plugin: graphen_locomotion/SineWaveAlgorithm
+      joints: [NECK_Y]
+      amplitude: 0.2      # rad
+      frequency: 0.25     # Hz
+      log_period: 1.0     # s，0 表示不 log
 
     # BVH 轉換：BVH 節點名稱 = URDF link 名稱，姿態以 base_link 為基準（BVH 的浮動基座會被忽略）
     bvh:

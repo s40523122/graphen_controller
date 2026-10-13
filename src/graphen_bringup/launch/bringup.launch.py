@@ -59,7 +59,7 @@ def generate_launch_description():
             description='Baudrate of the real hands'),
         DeclareLaunchArgument(
             'use_mock_imu', default_value='true',
-            description='true: mock imu/raw_data (sensor_forwarder); '
+            description='true: mock imu_sensor/* written via sensor_forwarder; '
                         'false: real FSS-IMU16460-C via imu16460_hardware'),
         DeclareLaunchArgument(
             'imu_port', default_value='/dev/ttyTHS1',
@@ -117,7 +117,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3-1. 模擬 sensor 資料寫入 (imu/raw_data)，只在 mock IMU 時啟動
+    # 3-1. 模擬 IMU 資料寫入 (imu_sensor/*)，只在 mock IMU 時啟動
     spawn_sensor_forwarder = Node(
         package='controller_manager',
         executable='spawner',

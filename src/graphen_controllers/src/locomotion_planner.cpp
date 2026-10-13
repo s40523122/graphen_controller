@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -34,7 +35,9 @@ void LocomotionPlanner::set_motion(std::shared_ptr<Motion> motion) {
   pending_motion_ = std::move(motion);
 }
 
-void LocomotionPlanner::start(const std::vector<double> & initial_positions, TargetBuffer * sink) {
+void LocomotionPlanner::start(
+  const std::vector<double> & initial_positions, TargetBuffer * sink, StateReader read_state)
+{
   if (initial_positions.size() != num_interfaces_) {
     throw std::invalid_argument(
       "LocomotionPlanner: initial_positions size does not match the number of interfaces");
@@ -44,11 +47,20 @@ void LocomotionPlanner::start(const std::vector<double> & initial_positions, Tar
   }
   stop();
 
+  // 週期中使用的緩衝在這裡配置好大小，之後只覆寫內容
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
   output_.positions = initial_positions;
+  output_.velocities.assign(num_interfaces_, kNaN);
   output_.sample_period = 0.0;
-  desired_ = initial_positions;
+  state_ = RobotState{};
+  state_.measured_positions.assign(num_interfaces_, kNaN);
+  state_.measured_velocities.assign(num_interfaces_, kNaN);
+  state_.commanded_positions = initial_positions;
+  command_.positions.assign(num_interfaces_, kNaN);
+  command_.velocities.assign(num_interfaces_, kNaN);
   motion_.reset();
   sink_ = sink;
+  read_state_ = std::move(read_state);
   // 先寫入起點，controller 在第一個規劃週期之前就有值可以輸出
   sink_->writeFromNonRT(output_);
 
@@ -71,13 +83,20 @@ void LocomotionPlanner::loop() {
   auto next_wakeup = Clock::now();
   auto last_cycle = next_wakeup;
 
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
   while (running_.load()) {
+    // 先取得狀態，切換時的 on_enter 與 update 都使用同一份
+    if (read_state_) {
+      read_state_(state_);
+    }
+    state_.commanded_positions = output_.positions;
+
     {
       std::lock_guard<std::mutex> lock(motion_mutex_);
       if (pending_motion_) {
         motion_ = std::move(pending_motion_);
         pending_motion_.reset();
-        motion_->on_enter(output_.positions);
+        motion_->on_enter(state_);
       }
     }
 
@@ -88,13 +107,21 @@ void LocomotionPlanner::loop() {
 
     auto & current = output_.positions;
     if (motion_) {
-      motion_->update(dt, current, desired_);
+      // 沒有寫入的介面為 NaN（保持、沒有前饋）
+      std::fill(command_.positions.begin(), command_.positions.end(), kNaN);
+      std::fill(command_.velocities.begin(), command_.velocities.end(), kNaN);
+      motion_->update(dt, state_, command_);
       const auto & max_steps = motion_->max_steps();
-      for (size_t i = 0; i < current.size() && i < desired_.size(); ++i) {
-        // NaN 表示保持目前位置
-        if (std::isfinite(desired_[i])) {
-          current[i] += std::clamp(desired_[i] - current[i], -max_steps[i], max_steps[i]);
+      const auto & desired = command_.positions;
+      for (size_t i = 0; i < current.size() && i < desired.size(); ++i) {
+        // NaN 表示保持目前位置；inf 等異常值也一律保持
+        if (std::isfinite(desired[i])) {
+          current[i] += std::clamp(desired[i] - current[i], -max_steps[i], max_steps[i]);
         }
+      }
+      for (size_t i = 0; i < output_.velocities.size() && i < command_.velocities.size(); ++i) {
+        const double velocity = command_.velocities[i];
+        output_.velocities[i] = std::isfinite(velocity) ? velocity : kNaN;
       }
       output_.sample_period = motion_->sample_period();
     }

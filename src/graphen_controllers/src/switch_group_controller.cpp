@@ -1,15 +1,21 @@
 #include "graphen_controllers/switch_group_controller.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "graphen_controllers/bvh_motion.hpp"
+#include "graphen_controllers/plugin_motion.hpp"
 #include "graphen_controllers/target_motion.hpp"
 #include "graphen_motion/bvh_clip.hpp"
 #include "graphen_motion/bvh_retargeter.hpp"
@@ -54,6 +60,129 @@ std::string resolve_path(const std::string & path) {
          rest.substr(slash);
 }
 
+// IMU 的 10 個 state interface（<sensor>/<suffix>），順序對應 ImuState 的欄位；
+// 名稱與 imu_sensor_broadcaster / semantic_components::IMUSensor 的慣例相同
+constexpr std::array<const char *, 10> kImuInterfaceSuffixes = {
+  "orientation.x", "orientation.y", "orientation.z", "orientation.w",
+  "angular_velocity.x", "angular_velocity.y", "angular_velocity.z",
+  "linear_acceleration.x", "linear_acceleration.y", "linear_acceleration.z"};
+
+// 以 controller node 的 <mode>.* 參數實作演算法的參數介面。
+// 只讀取已宣告的參數（YAML 有寫的會被 controller node 自動宣告），沒有的回傳 nullopt
+class NodeParameterSource : public locomotion::ParameterSource {
+public:
+  NodeParameterSource(
+    std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node, std::string prefix)
+  : node_(std::move(node)), prefix_(std::move(prefix)) {}
+
+  std::optional<bool> get_bool(const std::string & name) const override {
+    const auto param = find(name);
+    if (!param) {
+      return std::nullopt;
+    }
+    expect(*param, rclcpp::ParameterType::PARAMETER_BOOL);
+    return param->as_bool();
+  }
+
+  std::optional<int64_t> get_int(const std::string & name) const override {
+    const auto param = find(name);
+    if (!param) {
+      return std::nullopt;
+    }
+    expect(*param, rclcpp::ParameterType::PARAMETER_INTEGER);
+    return param->as_int();
+  }
+
+  std::optional<double> get_double(const std::string & name) const override {
+    const auto param = find(name);
+    if (!param) {
+      return std::nullopt;
+    }
+    // YAML 寫成 1 而不是 1.0 時會是整數
+    if (param->get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+      return static_cast<double>(param->as_int());
+    }
+    expect(*param, rclcpp::ParameterType::PARAMETER_DOUBLE);
+    return param->as_double();
+  }
+
+  std::optional<std::string> get_string(const std::string & name) const override {
+    const auto param = find(name);
+    if (!param) {
+      return std::nullopt;
+    }
+    expect(*param, rclcpp::ParameterType::PARAMETER_STRING);
+    return param->as_string();
+  }
+
+  std::optional<std::vector<double>> get_double_array(const std::string & name) const override {
+    const auto param = find(name);
+    if (!param) {
+      return std::nullopt;
+    }
+    if (param->get_type() == rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY) {
+      const auto values = param->as_integer_array();
+      return std::vector<double>(values.begin(), values.end());
+    }
+    expect(*param, rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
+    return param->as_double_array();
+  }
+
+  std::optional<std::vector<std::string>> get_string_array(
+    const std::string & name) const override {
+    const auto param = find(name);
+    if (!param) {
+      return std::nullopt;
+    }
+    expect(*param, rclcpp::ParameterType::PARAMETER_STRING_ARRAY);
+    return param->as_string_array();
+  }
+
+private:
+  std::optional<rclcpp::Parameter> find(const std::string & name) const {
+    const auto full_name = prefix_ + name;
+    if (!node_->has_parameter(full_name)) {
+      return std::nullopt;
+    }
+    auto param = node_->get_parameter(full_name);
+    if (param.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) {
+      return std::nullopt;
+    }
+    return param;
+  }
+
+  static void expect(const rclcpp::Parameter & param, rclcpp::ParameterType type) {
+    if (param.get_type() != type) {
+      throw std::invalid_argument(
+        "parameter '" + param.get_name() + "' has type " +
+        rclcpp::to_string(param.get_type()) + ", expected " + rclcpp::to_string(type));
+    }
+  }
+
+  const std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
+  const std::string prefix_;
+};
+
+// 演算法的 log 輸出到 controller 的 logger（rclcpp 的 log 可在任何 thread 呼叫）
+locomotion::Logger make_algorithm_logger(const rclcpp::Logger & logger) {
+  return [logger](locomotion::LogLevel level, const std::string & message) {
+           switch (level) {
+             case locomotion::LogLevel::kDebug:
+               RCLCPP_DEBUG(logger, "%s", message.c_str());
+               break;
+             case locomotion::LogLevel::kInfo:
+               RCLCPP_INFO(logger, "%s", message.c_str());
+               break;
+             case locomotion::LogLevel::kWarn:
+               RCLCPP_WARN(logger, "%s", message.c_str());
+               break;
+             case locomotion::LogLevel::kError:
+               RCLCPP_ERROR(logger, "%s", message.c_str());
+               break;
+           }
+         };
+}
+
 }  // namespace
 
 controller_interface::CallbackReturn SwitchGroupController::on_init() {
@@ -68,6 +197,11 @@ controller_interface::CallbackReturn SwitchGroupController::on_init() {
     auto_declare<double>("planner_rate", 100.0);
     auto_declare<std::vector<double>>("planner_max_steps", std::vector<double>{});
     auto_declare<std::vector<std::string>>("target_state_interfaces", std::vector<std::string>{});
+    auto_declare<std::vector<std::string>>(
+      "velocity_state_interfaces", std::vector<std::string>{});
+    auto_declare<std::string>("imu_sensor_name", std::string{});
+    auto_declare<std::string>("base_estimator.plugin", std::string{});
+    auto_declare<double>("command_timeout", 0.5);
     auto_declare<std::string>("bvh.base_link", std::string{});
     auto_declare<double>("bvh.axis_tolerance", 1e-4);
     auto_declare<int>("bvh.max_iterations", 50);
@@ -86,8 +220,10 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
 
   // reconfigure 時先釋放上一次的介面，避免舊 callback 存取即將被替換的 planner
   mode_subscriber_.reset();
+  cmd_vel_subscriber_.reset();
   switch_mode_server_.reset();
   planner_.reset();
+  base_estimator_.reset();
 
   command_interface_names_ = get_node()->get_parameter("command_interfaces").as_string_array();
   if (command_interface_names_.empty()) {
@@ -117,20 +253,51 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
 
   state_interface_names_ = get_node()->get_parameter("state_interfaces").as_string_array();
 
-  // 若有指定 sensor interface，確保它在 state_interfaces 中（沒有就附加在最後），並記錄其 index
+  // 確保 name 在 state_interfaces 中（沒有就附加在最後），回傳其 index
+  const auto index_of_or_append = [this](const std::string & name) {
+      auto it = std::find(state_interface_names_.begin(), state_interface_names_.end(), name);
+      if (it == state_interface_names_.end()) {
+        state_interface_names_.push_back(name);
+        it = std::prev(state_interface_names_.end());
+      }
+      return static_cast<size_t>(std::distance(state_interface_names_.begin(), it));
+    };
+
+  // 若有指定 sensor interface，確保它在 state_interfaces 中，並記錄其 index
   sensor_interface_name_ = get_node()->get_parameter("sensor").as_string();
   sensor_index_.reset();
   if (!sensor_interface_name_.empty()) {
-    auto it = std::find(
-      state_interface_names_.begin(), state_interface_names_.end(), sensor_interface_name_);
-    if (it == state_interface_names_.end()) {
-      state_interface_names_.push_back(sensor_interface_name_);
-      it = std::prev(state_interface_names_.end());
-    }
-    sensor_index_ = static_cast<size_t>(std::distance(state_interface_names_.begin(), it));
+    sensor_index_ = index_of_or_append(sensor_interface_name_);
     RCLCPP_INFO(logger,
       "Sensor interface [ %s ] at state interface index %zu",
       sensor_interface_name_.c_str(), *sensor_index_);
+  }
+
+  // 交給 Motion 的量測速度（選填），與 command_interfaces 一一對應
+  const auto velocity_state_names =
+    get_node()->get_parameter("velocity_state_interfaces").as_string_array();
+  velocity_state_indices_.clear();
+  if (!velocity_state_names.empty()) {
+    if (velocity_state_names.size() != num_commands) {
+      RCLCPP_ERROR(logger,
+        "'velocity_state_interfaces' must be empty or contain %zu entries "
+        "(one per command interface), got %zu.",
+        num_commands, velocity_state_names.size());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    for (const auto & name : velocity_state_names) {
+      velocity_state_indices_.push_back(index_of_or_append(name));
+    }
+  }
+
+  // 交給 Motion 的 IMU（選填）：<imu_sensor_name>/orientation.x … linear_acceleration.z
+  const auto imu_sensor_name = get_node()->get_parameter("imu_sensor_name").as_string();
+  imu_state_indices_.clear();
+  if (!imu_sensor_name.empty()) {
+    for (const auto * suffix : kImuInterfaceSuffixes) {
+      imu_state_indices_.push_back(index_of_or_append(imu_sensor_name + "/" + suffix));
+    }
+    RCLCPP_INFO(logger, "IMU sensor [ %s ] provided to motions.", imu_sensor_name.c_str());
   }
 
   if (state_interface_names_.empty()) {
@@ -163,9 +330,9 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
       static_cast<size_t>(std::distance(state_interface_names_.begin(), it)));
   }
 
-  const double planner_rate = get_node()->get_parameter("planner_rate").as_double();
-  if (planner_rate <= 0.0) {
-    RCLCPP_ERROR(logger, "'planner_rate' must be greater than zero, got %f.", planner_rate);
+  planner_rate_ = get_node()->get_parameter("planner_rate").as_double();
+  if (planner_rate_ <= 0.0) {
+    RCLCPP_ERROR(logger, "'planner_rate' must be greater than zero, got %f.", planner_rate_);
     return controller_interface::CallbackReturn::ERROR;
   }
   default_max_steps_ = get_node()->get_parameter("planner_max_steps").as_double_array();
@@ -181,7 +348,35 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     RCLCPP_ERROR(logger, "Every entry of 'planner_max_steps' must be greater than zero.");
     return controller_interface::CallbackReturn::ERROR;
   }
-  planner_ = std::make_unique<LocomotionPlanner>(planner_rate, num_commands);
+  planner_ = std::make_unique<LocomotionPlanner>(planner_rate_, num_commands);
+
+  // 量測狀態的緩衝，先配置好大小，update() 中只覆寫內容
+  {
+    RobotState initial_state;
+    initial_state.measured_positions.assign(num_commands, std::numeric_limits<double>::quiet_NaN());
+    initial_state.measured_velocities.assign(
+      num_commands, std::numeric_limits<double>::quiet_NaN());
+    initial_state.commanded_positions.assign(
+      num_commands, std::numeric_limits<double>::quiet_NaN());
+    state_buffer_.reset(std::move(initial_state));
+  }
+
+  command_timeout_ = get_node()->get_parameter("command_timeout").as_double();
+  if (!(command_timeout_ > 0.0)) {
+    RCLCPP_ERROR(logger, "'command_timeout' must be greater than zero, got %f.", command_timeout_);
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  {
+    std::lock_guard<std::mutex> lock(command_mutex_);
+    velocity_command_ = VelocityCommand{};
+  }
+
+  try {
+    base_estimator_ = create_base_estimator();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger, "Failed to configure base estimator: %s", e.what());
+    return controller_interface::CallbackReturn::ERROR;
+  }
 
   // 模式以名稱識別，名稱同時是該模式參數的前綴（<mode>.*）
   const auto modes = get_node()->get_parameter("modes").as_string_array();
@@ -234,6 +429,21 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     sub_qos,
     [this](const std_msgs::msg::String::SharedPtr msg) {apply_mode(msg->data);});
 
+  // 速度指令只取最新值，逾時由 planner 端判斷
+  cmd_vel_subscriber_ = get_node()->create_subscription<geometry_msgs::msg::Twist>(
+    "~/cmd_vel", rclcpp::SystemDefaultsQoS(),
+    [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
+      const std::array<double, 3> velocity{msg->linear.x, msg->linear.y, msg->angular.z};
+      if (!std::all_of(velocity.begin(), velocity.end(), [](double v) {return std::isfinite(v);})) {
+        RCLCPP_WARN(get_node()->get_logger(), "Ignored non-finite cmd_vel.");
+        return;
+      }
+      std::lock_guard<std::mutex> lock(command_mutex_);
+      velocity_command_.velocity = velocity;
+      velocity_command_.stamp = std::chrono::steady_clock::now();
+      velocity_command_.received = true;
+    });
+
   using namespace std::placeholders;
   switch_mode_server_ = rclcpp_action::create_server<SwitchModeAction>(
     get_node(),
@@ -253,7 +463,7 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     "and %zu modes (default mode [ %s ], planner %.1f Hz).",
     num_commands, state_interface_names_.size(), mode_names_.size(),
     default_mode_.empty() ? "(hold)" : default_mode_.c_str(),
-    planner_rate);
+    planner_rate_);
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -296,7 +506,14 @@ controller_interface::CallbackReturn SwitchGroupController::on_activate(
       planner_->set_motion(motion_for_mode(current_mode_));
     }
   }
-  planner_->start(initial_positions, &target_buffer_);
+  // 先寫入一次目前的狀態，planner 第一個週期（含 on_enter）就有量測值可用
+  state_buffer_.try_write([this](RobotState & state) {read_robot_state(state);});
+  // 估測器在 planner thread 的第一個週期重設；planner thread 在這之後才啟動
+  estimator_needs_reset_ = true;
+  estimator_faulted_ = false;
+  planner_->start(
+    initial_positions, &target_buffer_,
+    [this](RobotState & state) {fill_planner_state(state);});
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
@@ -450,8 +667,110 @@ std::shared_ptr<Motion> SwitchGroupController::create_motion(const std::string &
       std::move(retargeter), motion_options, std::move(max_steps), std::move(approach_max_steps));
   }
 
+  if (type == "plugin") {
+    return create_plugin_motion(mode, std::move(max_steps));
+  }
+
   throw std::invalid_argument(
-    "unknown type '" + type + "' in '" + mode + ".type' (expected 'target', 'hold' or 'bvh')");
+    "unknown type '" + type + "' in '" + mode +
+    ".type' (expected 'target', 'hold', 'bvh' or 'plugin')");
+}
+
+std::shared_ptr<Motion> SwitchGroupController::create_plugin_motion(
+  const std::string & mode, std::vector<double> max_steps) {
+  const auto node = get_node();
+  const auto plugin = get_or_declare<std::string>(node, mode + ".plugin", "");
+  if (plugin.empty()) {
+    throw std::invalid_argument("'" + mode + ".plugin' is empty");
+  }
+
+  // loader 跨 reconfigure 保留：已建立的演算法實例需要它載入的 library
+  if (!algorithm_loader_) {
+    algorithm_loader_ =
+      std::make_unique<pluginlib::ClassLoader<locomotion::LocomotionAlgorithm>>(
+      "graphen_locomotion", "graphen::locomotion::LocomotionAlgorithm");
+  }
+  std::shared_ptr<locomotion::LocomotionAlgorithm> algorithm =
+    algorithm_loader_->createSharedInstance(plugin);
+
+  const NodeParameterSource params(node, mode + ".");
+  const auto log = make_algorithm_logger(node->get_logger().get_child(mode));
+  locomotion::Context context{
+    joint_names_,
+    planner_rate_,
+    node->has_parameter("robot_description") ?
+    node->get_parameter("robot_description").as_string() : std::string{},
+    params,
+    log};
+  algorithm->configure(context);
+
+  RCLCPP_INFO(node->get_logger(), "Mode [ %s ]: plugin '%s'.", mode.c_str(), plugin.c_str());
+  return std::make_shared<PluginMotion>(std::move(algorithm), std::move(max_steps), mode, log);
+}
+
+std::shared_ptr<locomotion::BaseStateEstimator> SwitchGroupController::create_base_estimator() {
+  const auto node = get_node();
+  const auto plugin = node->get_parameter("base_estimator.plugin").as_string();
+  if (plugin.empty()) {
+    RCLCPP_INFO(node->get_logger(), "No base estimator configured, base state is not provided.");
+    return nullptr;
+  }
+  if (!estimator_loader_) {
+    estimator_loader_ =
+      std::make_unique<pluginlib::ClassLoader<locomotion::BaseStateEstimator>>(
+      "graphen_locomotion", "graphen::locomotion::BaseStateEstimator");
+  }
+  std::shared_ptr<locomotion::BaseStateEstimator> estimator =
+    estimator_loader_->createSharedInstance(plugin);
+
+  const NodeParameterSource params(node, "base_estimator.");
+  locomotion::Context context{
+    joint_names_,
+    planner_rate_,
+    node->has_parameter("robot_description") ?
+    node->get_parameter("robot_description").as_string() : std::string{},
+    params,
+    make_algorithm_logger(node->get_logger().get_child("base_estimator"))};
+  estimator->configure(context);
+
+  RCLCPP_INFO(node->get_logger(), "Base estimator: plugin '%s'.", plugin.c_str());
+  return estimator;
+}
+
+void SwitchGroupController::fill_planner_state(RobotState & state) {
+  state_buffer_.read(state);
+
+  // 速度指令：逾時或尚未收到時為 0
+  {
+    std::lock_guard<std::mutex> lock(command_mutex_);
+    const double age = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - velocity_command_.stamp).count();
+    state.command.active = velocity_command_.received && age <= command_timeout_;
+    state.command.velocity = state.command.active ?
+      velocity_command_.velocity : std::array<double, 3>{0.0, 0.0, 0.0};
+  }
+
+  state.base = locomotion::BaseState{};
+  if (!base_estimator_ || estimator_faulted_) {
+    return;
+  }
+  try {
+    if (estimator_needs_reset_) {
+      base_estimator_->reset();
+      estimator_needs_reset_ = false;
+      last_state_time_ = state.time;
+    }
+    // 以量測時間的差值作為 dt；同一筆量測被讀兩次時為 0
+    const double dt = std::max(0.0, state.time - last_state_time_);
+    last_state_time_ = state.time;
+    base_estimator_->update(dt, state, state.base);
+  } catch (const std::exception & e) {
+    estimator_faulted_ = true;
+    state.base = locomotion::BaseState{};
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "Base estimator threw: %s. Base state is invalid until the controller is reactivated.",
+      e.what());
+  }
 }
 
 void SwitchGroupController::apply_mode(const std::string & mode) {
@@ -511,6 +830,34 @@ void SwitchGroupController::handle_switch_mode_accepted(
   goal_handle->succeed(result);
 }
 
+void SwitchGroupController::read_robot_state(RobotState & state) const {
+  state.time = std::chrono::duration<double>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
+  for (size_t i = 0; i < target_state_indices_.size(); ++i) {
+    state.measured_positions[i] = state_interfaces_[target_state_indices_[i]].get_value();
+  }
+  for (size_t i = 0; i < velocity_state_indices_.size(); ++i) {
+    state.measured_velocities[i] = state_interfaces_[velocity_state_indices_[i]].get_value();
+  }
+  auto & imu = state.imu;
+  if (imu_state_indices_.size() == kImuInterfaceSuffixes.size()) {
+    const auto value = [this](size_t i) {
+        return state_interfaces_[imu_state_indices_[i]].get_value();
+      };
+    for (size_t i = 0; i < 4; ++i) {
+      imu.orientation[i] = value(i);
+    }
+    for (size_t i = 0; i < 3; ++i) {
+      imu.angular_velocity[i] = value(4 + i);
+      imu.linear_acceleration[i] = value(7 + i);
+    }
+    imu.valid = true;
+    for (size_t i = 0; i < imu_state_indices_.size(); ++i) {
+      imu.valid = imu.valid && std::isfinite(value(i));
+    }
+  }
+}
+
 controller_interface::return_type SwitchGroupController::update(
   const rclcpp::Time & time, const rclcpp::Duration & period) {
 
@@ -531,7 +878,11 @@ controller_interface::return_type SwitchGroupController::update(
     }
   }
 
-  // 輸出 planner 的最新目標；planner 尚未寫入（長度不符）時不輸出
+  // 交給 planner 的量測狀態；拿不到 lock（planner 正在讀）就跳過這一次
+  state_buffer_.try_write([this](RobotState & state) {read_robot_state(state);});
+
+  // 輸出 planner 的最新目標；planner 尚未寫入（長度不符）時不輸出。
+  // Output::velocities（速度前饋）目前沒有寫往下游：子群組與硬體都只有 position 介面
   const auto * output = target_buffer_.readFromRT();
   const size_t num_commands = command_interface_names_.size();
   if (output != nullptr && output->positions.size() == num_commands &&

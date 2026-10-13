@@ -22,6 +22,7 @@ graph LR
   subgraph 控制層
     utils[graphen_control_utils<br/>header-only]
     motion[graphen_motion<br/>BVH 轉換，無 rclcpp]
+    loco[graphen_locomotion<br/>演算法 plugin 介面，無 rclcpp]
     ctrl[graphen_controllers<br/>controller plugin]
     bringup[graphen_bringup<br/>config + launch]
   end
@@ -42,6 +43,7 @@ graph LR
   end
   ctrl -->|build| utils
   ctrl -->|build| motion
+  ctrl -->|build| loco
   ctrl -->|build| ifaces
   btnodes -->|build| ifaces
   bringup -.->|exec| ctrl
@@ -85,15 +87,16 @@ graph LR
 graph LR
   bt[bt_runner] -->|"~/switch_mode (action)"| sw[switch_group_controller<br/>SwitchGroupController]
   mode[/"~/mode (String)"/] --> sw
-  sw <-->|模式的 Motion / 最新位置目標| planner[LocomotionPlanner<br/>non-RT thread<br/>TargetMotion / BvhMotion]
+  sw <-->|模式的 Motion / 量測狀態 / 最新位置目標| planner[LocomotionPlanner<br/>non-RT thread<br/>TargetMotion / BvhMotion / PluginMotion]
+  algo[/外部演算法 plugin<br/>LocomotionAlgorithm/] -.->|on_configure 載入| planner
   bvh[/BVH 檔 + robot_description/] -.->|on_configure 解析| planner
   sw -->|"~/states"| bt
   sw -->|"&lt;group&gt;_group_controller/&lt;joint&gt;（32 個）<br/>+ &lt;group&gt;_group_controller/sample_period"| subs[6 個 SubGroupController<br/>left/right_arm、waist、head、left/right_leg]
   subs -->|"&lt;joint&gt;/position（32 個）"| hw[(T170 本體 UpperBody<br/>mock 或 Ti5Hardware)]
   hw -->|state interfaces| sw
   hw --> jsb[joint_state_broadcaster]
-  fwd[sensor_forwarder<br/>ForwardCommandController] -->|imu/raw_data| mimu[(MockImu<br/>mock system)]
-  mimu --> sw
+  fwd[sensor_forwarder<br/>MultiInterfaceForwardCommandController] -->|"imu_sensor/*（10 個）"| mimu[(MockImu<br/>mock system)]
+  mimu -->|"imu_sensor/*"| sw
 ```
 
 - 本體 `UpperBody` 有 32 個 joint（雙臂、腰、頭、雙腿），每個 joint 為 position 指令；狀態為 position、velocity，以及自訂的 `current`（濾波電流）、`error_code`（馬達錯誤碼）。自訂介面不在 `/joint_states`（只有 position / velocity / effort），要從 `/dynamic_joint_states` 或 `~/states` 觀察；mock 中兩者沒有資料（NaN）。32 個 joint 都由 `switch_group_controller` 經 6 個 `SubGroupController`（左臂 7、右臂 7、腰 3、頭 3、左腿 6、右腿 6）驅動。
@@ -108,14 +111,14 @@ graph LR
   dev[(FSS-IMU16460-C<br/>UART ~1000 Hz)] -->|背景 thread| drv[imu16460::Driver]
   drv -->|最新樣本| imuhw[Imu16460SensorInterface<br/>imu_sensor/*]
   imuhw --> imub["imu_sensor_broadcaster<br/>→ /imu_sensor_broadcaster/imu"]
-  imuhw -->|imu_sensor/angular_velocity.z| sw[switch_group_controller]
+  imuhw -->|"imu_sensor/*"| sw[switch_group_controller]
 ```
 
 - 不建立 `MockImu`，`sensor_forwarder` 不啟動；改為獨立的 sensor 硬體元件 `imu16460`，與本體由同一個 controller_manager 管理。
-- `switch_group_controller.sensor` 由 `controllers_imu16460.yaml` 覆寫為 `imu_sensor/angular_velocity.z`。
+- mock 與實機 IMU 的 interface 名稱相同（`imu_sensor/orientation.x` … `linear_acceleration.z`、`temperature`），`switch_group_controller` 的設定不需要隨 `use_mock_imu` 改變。
 
 - `SwitchGroupController` 不直接操作硬體，而是寫入下層 `SubGroupController` 導出的 **reference interface**（ros2_control chaining）。除了位置，還會寫入目前 Motion 的輸出點間隔 `sample_period`，下層依此在 RT 迴圈中插補（BVH 依檔案頻率送出原始幀，插補在子群組進行）。
-- `sensor_forwarder` 用來模擬 sensor 資料：`MockImu` 開啟了 `mock_sensor_commands`，所以可以透過 `/sensor_forwarder/commands` 寫入 `imu/raw_data`。`MockImu` 獨立於本體，本體改用實機時 mock IMU 仍可單獨使用。
+- `sensor_forwarder` 用來模擬 IMU 資料：`MockImu` 開啟了 `mock_sensor_commands`，所以可以透過 `/sensor_forwarder/commands`（10 個值，依序為 orientation.xyzw、angular_velocity.xyz、linear_acceleration.xyz）寫入 `imu_sensor/*`。初始值為靜止水平（`orientation.w` = 1、`linear_acceleration.z` = 9.81）。`MockImu` 獨立於本體，本體改用實機時 mock IMU 仍可單獨使用。
 
 ### 2.2 SwitchGroupController
 
@@ -125,7 +128,8 @@ graph LR
 **行為**
 1. 每個週期讀取所有 state interface，依 `state_publish_rate` 的頻率發布到 `~/states`。
 2. 讀取 sensor 值，存到 `sensor_value_`，供之後的控制邏輯使用。
-3. 從 `target_buffer_` 讀取 `LocomotionPlanner` 的最新輸出，位置寫到 `command_interfaces`，`sample_period` 寫到 `sample_period_interfaces`。
+3. 把量測的關節角度（`target_state_interfaces`）、速度（`velocity_state_interfaces`）、IMU（`imu_sensor_name`）以 `TryLockBuffer<RobotState>` 交給 planner（拿不到 lock 就跳過這一次，不阻塞）。planner thread 讀取後補上 `~/cmd_vel` 的速度指令，並執行機身狀態估測器（見 [§2.9](#29-外部演算法介面graphen_locomotion)）。
+4. 從 `target_buffer_` 讀取 `LocomotionPlanner` 的最新輸出，位置寫到 `command_interfaces`，`sample_period` 寫到 `sample_period_interfaces`。
 
 模式（來自 `~/mode` topic 或 `~/switch_mode` action）只決定 planner 要播放哪一個 **Motion**；實際輸出由 planner 在 non-RT thread 中產生（見 [§2.4](#24-locomotionplanner)）。controller 本身不包含任何特定模式（例如 forward/reverse）的邏輯。
 
@@ -169,7 +173,7 @@ graph LR
   - 保持位置優先取下游 reference 的值。下游在 activate 時，會以硬體目前的 command 值初始化 reference，也就是 Ti5Hardware 從 `real_initial_positions.yaml` 或 encoder 得到的值；reference 無效時才用 `target_state_interfaces`。
   - 這樣實機馬達還在走向初始姿態時，不會被停在半路。
 
-**sensor 處理**：若有設定 `sensor`，但它不在 `state_interfaces` 中，會自動附加到最後，並記錄它的 index。
+**sensor 處理**：若有設定 `sensor`，但它不在 `state_interfaces` 中，會自動附加到最後，並記錄它的 index。`velocity_state_interfaces` 與 `imu_sensor_name` 展開的 10 個 interface 也一樣，會一併出現在 `~/states`。
 
 | 參數 | 型別 | 預設值 | 說明 |
 |---|---|---|---|
@@ -178,12 +182,16 @@ graph LR
 | `state_interfaces` | string[] | `[]` | 要讀取並發布的 state interface |
 | `sensor` | string | `""` | （選填）sensor state interface |
 | `state_publish_rate` | double | 50.0 | `~/states` 的發布頻率（Hz） |
-| `target_state_interfaces` | string[] | `[]`（必填） | 與 `command_interfaces` 一一對應，必須列在 `state_interfaces` 中；activate 時作為 planner 起點，prefix 即為 joint 名稱 |
+| `target_state_interfaces` | string[] | `[]`（必填） | 與 `command_interfaces` 一一對應，必須列在 `state_interfaces` 中；activate 時作為 planner 起點，也是交給 Motion 的量測角度；prefix 即為 joint 名稱 |
+| `velocity_state_interfaces` | string[] | `[]` | 與 `command_interfaces` 一一對應的速度 state interface，交給 Motion 的量測速度；空的時候為 NaN |
+| `base_estimator.plugin` | string | `""` | 機身狀態估測器（`graphen_locomotion::BaseStateEstimator` 的 plugin）；空字串表示不估測（`base.valid` 為 false）。其餘 `base_estimator.*` 參數由估測器讀取 |
+| `command_timeout` | double | 0.5 | `~/cmd_vel` 的逾時（秒），必須 > 0；超過時速度指令為 0、`command.active` 為 false |
+| `imu_sensor_name` | string | `""` | IMU sensor 名稱（例如 `imu_sensor`），讀取 `<name>/orientation.x` … `linear_acceleration.z` 共 10 個 interface 交給 Motion；空的時候 `imu.valid` 為 false |
 | `planner_rate` | double | 100.0 | planner 的規劃頻率（Hz），必須 > 0 |
 | `planner_max_steps` | double[] | `[]`（必填） | 每個 command interface 在每個規劃週期最多移動的量，每個值必須 > 0；各模式未指定 max_steps 時使用 |
 | `modes` | string[] | `[]`（必填） | 模式名稱，不可重複，只允許 `[A-Za-z0-9_]` |
 | `default_mode` | string | `""` | 啟動時的模式，必須列在 `modes` 中；空字串表示保持位置，直到收到第一個模式命令 |
-| `<mode>.type` | string | `target` | `target`、`hold` 或 `bvh` |
+| `<mode>.type` | string | `target` | `target`、`hold`、`bvh` 或 `plugin` |
 | `<mode>.max_steps` | double[] | `planner_max_steps` | 該模式的每週期上限（bvh 為播放時） |
 | `<mode>.joints` | string[] | 全部 | （target）要移動的 joint；沒有列出的保持進入模式時的位置 |
 | `<mode>.targets` | double[] | （必填） | （target）對應 `joints` 的目標位置 |
@@ -191,6 +199,7 @@ graph LR
 | `<mode>.loop` | bool | true | （bvh）播放到結尾後循環 |
 | `<mode>.time_scale` | double | 1.0 | （bvh）播放速度倍率，必須 > 0 |
 | `<mode>.approach_max_steps` | double[] | `planner_max_steps` | （bvh）走向第 0 幀（含循環接回）時的每週期上限 |
+| `<mode>.plugin` | string | （必填） | （plugin）`graphen_locomotion::LocomotionAlgorithm` 的 plugin 類別名稱；其餘 `<mode>.*` 參數由演算法自行讀取 |
 | `bvh.base_link` | string | `""` | BVH 與 URDF 共同的基準 link，有 bvh 模式時必填（T170 為 `BASE_S`） |
 | `bvh.axis_tolerance` | double | 1e-4 | 判斷軸線交於一點的距離容差（m） |
 | `bvh.max_iterations` | int | 50 | 每組求解的迭代上限 |
@@ -200,6 +209,7 @@ graph LR
 | 介面 | 型別 | 方向 |
 |---|---|---|
 | `~/mode` | std_msgs/String | 訂閱 |
+| `~/cmd_vel` | geometry_msgs/Twist | 訂閱（`linear.x`、`linear.y`、`angular.z`，機身座標系） |
 | `~/switch_mode` | graphen_interfaces/action/SwitchMode | action server |
 | `~/states` | control_msgs/DynamicJointState | 發布 |
 
@@ -235,19 +245,24 @@ graph LR
 
 ### 2.4 LocomotionPlanner 與 Motion
 
-原始碼：[locomotion_planner.hpp](../src/graphen_controllers/include/graphen_controllers/locomotion_planner.hpp)、[motion.hpp](../src/graphen_controllers/include/graphen_controllers/motion.hpp)、[target_motion.hpp](../src/graphen_controllers/include/graphen_controllers/target_motion.hpp)、[bvh_motion.hpp](../src/graphen_controllers/include/graphen_controllers/bvh_motion.hpp)
+原始碼：[locomotion_planner.hpp](../src/graphen_controllers/include/graphen_controllers/locomotion_planner.hpp)、[motion.hpp](../src/graphen_controllers/include/graphen_controllers/motion.hpp)、[target_motion.hpp](../src/graphen_controllers/include/graphen_controllers/target_motion.hpp)、[bvh_motion.hpp](../src/graphen_controllers/include/graphen_controllers/bvh_motion.hpp)、[plugin_motion.hpp](../src/graphen_controllers/include/graphen_controllers/plugin_motion.hpp)
 類型：一般類別（不是 plugin），由 `SwitchGroupController` 擁有。
 
 **LocomotionPlanner**
 - 在獨立的 non-RT thread 中以 `rate_hz` 執行（`sleep_until` 絕對時間排程；落後時重新對齊，不連續補跑）。
-- 每個週期：向目前的 Motion 取得期望位置（`update(dt, current, desired)`，`dt` 為實際經過時間），再 `current[i] += clamp(desired[i] - current[i], ±motion.max_steps()[i])`（NaN 表示保持），連同 `motion.sample_period()` 以 `Output{positions, sample_period}` `writeFromNonRT` 到呼叫端提供的 `TargetBuffer`。
-- `set_motion()` 可以在任何 thread 呼叫（mutex 保護），切換由 planner thread 在下一個週期執行（呼叫新 Motion 的 `on_enter(current)`），因此 Motion 只在單一 thread 中執行。未啟動時設定的 Motion 會保留到 `start()` 之後使用。
+- 每個週期：
+  1. 以呼叫端在 `start()` 提供的 `StateReader` 取得量測狀態，自己填入 `commanded_positions`（目前輸出），組成 `RobotState`。
+  2. 把 `JointCommand` 填滿 NaN，交給目前的 Motion（`update(dt, state, command)`，`dt` 為實際經過時間）。
+  3. `current[i] += clamp(command.positions[i] - current[i], ±motion.max_steps()[i])`，NaN、inf 都視為保持。
+  4. 連同速度前饋與 `motion.sample_period()`，以 `Output{positions, velocities, sample_period}` `writeFromNonRT` 到呼叫端提供的 `TargetBuffer`。
+- `RobotState` / `JointCommand` 在 `start()` 預先配置，週期中不配置記憶體。
+- `set_motion()` 可以在任何 thread 呼叫（mutex 保護），切換由 planner thread 在下一個週期執行（呼叫新 Motion 的 `on_enter(state)`），因此 Motion 只在單一 thread 中執行。未啟動時設定的 Motion 會保留到 `start()` 之後使用。
 - `start()` 會先把起點寫入 buffer，controller 在第一個規劃週期前就有值可以輸出。
 - 不認識 joint 或模式，可以重用在其他 controller。
 
-**Motion 介面**：`on_enter(current)` / `update(dt, current, desired)` / `max_steps()` / `sample_period()`。同一個實例可以重複進入，`on_enter` 會重設狀態；`max_steps()` 與 `sample_period()` 在每次 `update()` 之後讀取，可以依階段改變。`sample_period()` 預設為 0（輸出已連續，下游不插補）。
+**Motion 介面**：`on_enter(state)` / `update(dt, state, command)` / `max_steps()` / `sample_period()`。`RobotState`、`JointCommand` 定義在 `graphen_locomotion`（見 [§2.9](#29-外部演算法介面graphen_locomotion)）。同一個實例可以重複進入，`on_enter` 會重設狀態；`max_steps()` 與 `sample_period()` 在每次 `update()` 之後讀取，可以依階段改變。`sample_period()` 預設為 0（輸出已連續，下游不插補）。
 
-**TargetMotion**（`type: target`）：往固定目標移動；目標為 NaN 的介面在 `on_enter` 時記住目前位置並保持。`type: hold` 是全部為 NaN 的 TargetMotion，用來停止（保持進入模式時的位置）。
+**TargetMotion**（`type: target`）：以 `state.commanded_positions` 為目前位置，往固定目標移動；目標為 NaN 的介面在 `on_enter` 時記住目前位置並保持。`type: hold` 是全部為 NaN 的 TargetMotion，用來停止（保持進入模式時的位置）。
 
 **BvhMotion**（`type: bvh`）：
 - **Approach**：以 `approach_max_steps` 走向第 0 幀（`on_enter` 時以目前位置為初始值解出），所有介面都在一步之內時開始播放。
@@ -255,6 +270,8 @@ graph LR
 - `max_steps`（播放時）是對「一幀的跳動」的限制，要讓一個週期就能走完一幀，同時擋下異常的大跳動。
 - 播完最後一幀時：`loop: true` 回到 Approach（以 `approach_max_steps` 接回第 0 幀），否則保持最後一幀。Approach / Hold 時 `sample_period()` 為 0。
 - 沒有 BVH 資料的介面保持進入時的位置。
+
+**PluginMotion**（`type: plugin`）：把外部的 `LocomotionAlgorithm` 包成 Motion，`max_steps` 來自 `<mode>.max_steps`，`sample_period()` 為 0。演算法在 `on_enter` / `update` 丟出例外時，不讓例外離開 planner thread：記錄一次 ERROR，之後全部保持，直到下一次進入這個模式。
 
 ### 2.5 StateInterfacePublisher（graphen_control_utils）
 
@@ -290,7 +307,7 @@ launch argument：
 | `use_hands` | `false` | 啟用靈巧手 ros2_control（mock / 實機跟隨 `use_mock_hardware`） |
 | `left_hand_port` / `right_hand_port` | `/dev/ttyUSB1` / `/dev/ttyUSB0` | 實機靈巧手的 serial port |
 | `hand_baudrate` | `115200` | 實機靈巧手的鮑率 |
-| `use_mock_imu` | `true` | `true`：mock `imu/raw_data` + `sensor_forwarder`（原本的行為）；`false`：實機 IMU，額外載入 [controllers_imu16460.yaml](../src/graphen_bringup/config/controllers_imu16460.yaml) |
+| `use_mock_imu` | `true` | `true`：mock `imu_sensor/*` + `sensor_forwarder`；`false`：實機 IMU，額外載入 [controllers_imu16460.yaml](../src/graphen_bringup/config/controllers_imu16460.yaml) |
 | `imu_port` | `/dev/ttyTHS1` | 實機 IMU 的 serial port |
 | `imu_baudrate` | `921600` | 實機 IMU 的鮑率 |
 
@@ -338,6 +355,48 @@ launch argument：
 - 步行段最大速度：膝約 13 rad/s，其他約 2~8 rad/s。
 
 ---
+
+### 2.9 外部演算法介面（graphen_locomotion）
+
+原始碼：[locomotion_algorithm.hpp](../src/graphen_locomotion/include/graphen_locomotion/locomotion_algorithm.hpp)、[robot_state.hpp](../src/graphen_locomotion/include/graphen_locomotion/robot_state.hpp)、[parameter_source.hpp](../src/graphen_locomotion/include/graphen_locomotion/parameter_source.hpp)
+類型：header-only 介面（不依賴 rclcpp / ros2_control），外部演算法實作成 pluginlib plugin。
+
+- **`RobotState`**（每週期的輸入，vector 順序與 `Context::joint_names` 相同）：
+  - `time`：量測時間，steady clock 秒數
+  - `measured_positions` / `measured_velocities`：encoder 量測值，沒有設定的為 NaN
+  - `commanded_positions`：planner 上一次的輸出
+  - `imu`：原始 IMU 讀值（**IMU 座標系**）：`orientation`（xyzw）、`angular_velocity`、`linear_acceleration`、`valid`
+  - `base`：估測器輸出的機身狀態（**機身座標系**）：`linear_velocity`、`angular_velocity`、`projected_gravity`（`R_wbᵀ·[0,0,-1]`）、`valid`
+  - `command`：`~/cmd_vel` 的速度指令 `velocity`（vx, vy, wz）與 `active`；逾時或尚未收到時為 0、`active = false`
+- **`JointCommand`**（每週期的輸出）：`positions`（NaN 表示保持）、`velocities`（速度前饋，NaN 表示沒有）。進入 `update()` 前已填滿 NaN。
+- **`LocomotionAlgorithm`**：
+  - `configure(Context)`：controller configure 時呼叫一次，設定錯誤時丟例外，controller 會 configure 失敗
+  - `on_enter(state)`：每次切換到這個模式時呼叫
+  - `update(dt, state, command)`：之後每週期呼叫
+  - `on_enter` / `update` 都在 planner thread 中執行
+- **`Context`**：
+  - `joint_names`、`rate_hz`
+  - `robot_description`：URDF，可能為空
+  - `params`：`ParameterSource`，讀取 `<mode>.*` 參數；只在 `configure` 期間有效
+  - `log`：輸出到 controller 的 logger `<controller>.<mode>`，可在任何 thread 呼叫
+- **`ParameterSource`**：controller 以 node 參數實作。只讀 YAML 中有寫的參數（controller node 自動宣告），沒有的回傳 `std::nullopt`，型別不符時丟例外；`get_double` 也接受整數。
+- 範例 plugin：`graphen_locomotion/SineWaveAlgorithm`（[sine_wave_algorithm.cpp](../src/graphen_locomotion/src/sine_wave_algorithm.cpp)）
+  - 對 `joints` 做正弦擺動並輸出解析速度前饋
+  - `log_period` > 0 時定期 log 收到的量測值與 IMU
+  - `controllers.yaml` 的 `sine` 模式使用它
+- **`BaseStateEstimator`**（[base_state_estimator.hpp](../src/graphen_locomotion/include/graphen_locomotion/base_state_estimator.hpp)）：
+  - controller 以 `base_estimator.plugin` 建立一個實例，在 planner thread 中、演算法之前執行，**每週期執行，與模式無關**（切換模式時估測不中斷）
+  - `configure(Context)`：`params` 的前綴為 `base_estimator.`；`reset()`：每次 activate 後；`update(dt, state, base)`：`dt` 取自 `RobotState::time` 的差值
+  - 丟出例外時 `base.valid` 為 false，直到下次 activate
+  - 換估測器只要改 YAML，演算法不需要修改
+- **`ImuLeakyEstimator`**（`graphen_locomotion/ImuLeakyEstimator`，[imu_leaky_estimator.cpp](../src/graphen_locomotion/src/imu_leaky_estimator.cpp)）：只用 IMU 的估測器
+  - 參數：`base_frame`（預設 `base_link`）、`imu_frame`（預設 `imu_link`）、`leak_time_constant`（τ，秒）、`gravity`
+  - configure 時從 URDF 沿 fixed joint 求出 IMU 相對機身的旋轉 `R_bi`（路徑不存在或有可動 joint 時 configure 失敗）
+  - `ω_b = R_bi·ω_imu`；`R_wb = R_wi·R_biᵀ`；`g_b = R_wbᵀ·[0,0,-1]`
+  - 線速度：`a_w = R_wi·f_imu − [0,0,g]`（加速度計量到的是比力），`v_w ← v_w·e^(−dt/τ) + a_w·dt`，輸出 `R_wbᵀ·v_w`
+  - **限制**：線速度只反映短時間的變化（定加速度 a 時趨近 a·τ，停止加速後以 τ 衰減回 0），bias 與姿態誤差會被積分進去，不是長時間準確的速度；忽略 IMU 的槓桿臂效應。IMU16460 的姿態參考座標系與安裝姿態待實機驗證
+- **資料延遲**：RT `update()` 寫入狀態、planner 下一個週期讀取，最多約一個 controller 週期加一個 planner 週期。演算法可以用 `RobotState::time` 判斷。
+- **速度前饋**：目前不往下游寫，因為子群組與硬體都只有 position 介面（見 §6）。
 
 ## 3. 行為層（BehaviorTree.CPP v3）
 
@@ -504,12 +563,14 @@ IfThenElse "WalkEnabled"
 | D9 | 規劃放在 controller 內的 `LocomotionPlanner` thread，以 `RealtimeBuffer` 交接 | 規劃計算（包含 BVH 的逐幀轉換）不佔用 RT 的 `update()`；`update()` 只輸出最新目標。planner 不認識模式或 joint，可以重用在其他 controller |
 | D10 | 遲滯判斷放在 BT，以「方向分支 + `{mode}`」表達，不放在 controller | 門檻屬於任務邏輯，放在 tree XML 中修改不需要重新建置；controller 只負責「模式 → 目標」。用分支而不是單一變數切換，在 Groot 中可以直接看到目前的方向和換向的時間點 |
 | D11 | IMU 驅動獨立命名（`imu16460_*`），core 不依賴 ROS | 它是裝置驅動，與 graphen 的控制邏輯無關，可以直接搬到其他機器人或非 ROS 程式；協議、parser、Driver 不依賴 ROS，可以用 GoogleTest + pty 在沒有實機的環境測試 |
-| D12 | mock / 實機 IMU 以 `use_mock_imu` 切換，mock 完全保留 | 開發機（WSL）沒有實體設備，mock 是日常開發的預設；實機差異集中在 xacro 的 `xacro:if/unless` 和疊加的 `controllers_imu16460.yaml`，不修改原本的 `controllers.yaml` |
+| D12 | mock / 實機 IMU 以 `use_mock_imu` 切換，mock 的 interface 名稱與實機相同（`imu_sensor/*` 10 通道） | 開發機（WSL）沒有實體設備，mock 是日常開發的預設；名稱相同讓 controller 與演算法的設定在 mock 與實機下都一樣。實機差異集中在 xacro 的 `xacro:if/unless` 和疊加的 `controllers_imu16460.yaml`（原本的單一 `imu/raw_data` 已改為 10 通道，以提供演算法完整的 IMU） |
 | D13 | IMU 由背景 thread 依自身頻率更新，`read()` 只取最新一筆 | serial I/O 不進 RT 路徑；IMU 頻率與 controller_manager 的 `update_rate` 互不影響（不提供平均模式，避免引入額外延遲） |
 | D14 | 機器人描述改用 `ti5_170a_graphen`，32 軸依部位分成 6 個 `SubGroupController`（分組參考 SRDF），reference 與 output 1:1 | 每個部位可以獨立觀察（`~/references`）與替換；外部套件（`ti5_*`、`can_driver`、`dexterous_hand_*`）保留原本命名，不套 `graphen_` 慣例 |
 | D15 | BVH 以「組」分解：依軸線是否交於一點自動分組，追蹤組末端 link 相對 base_link 的姿態，從上一幀熱啟動並在失敗時多起點求解 | BVH 把一組關節的旋轉集中在任一節點，只有整組的姿態有意義；交於一點的組可以精確分解。以實際 FK 為基準追蹤全域姿態，1~2 軸的組丟掉的分量會由下游補償。自動分組不需要為每台機器人寫對照表；分組會在 configure 時印出供確認 |
 | D16 | 模式泛化成 `Motion` 介面（`TargetMotion` / `BvhMotion`），controller 只認得名稱 | 新增行為不必修改 controller；forward/reverse 只是 YAML 中的兩個 target 模式。介面與 §6 的 mode plugin 化規劃一致，之後改成 pluginlib 只需換掉建立 Motion 的地方 |
 | D18 | BVH 依檔案頻率輸出原始幀，幀間插補放在 RT 的 `SubGroupController`；間隔（`sample_period`）由 switch 經 chained reference interface 傳下去 | 與 JointTrajectoryController 相同的分工：上游給點，RT controller 依控制週期插補，時間基準是 controller_manager 的週期，不受 planner thread 的排程抖動影響。間隔由上游提供，換 BVH 的 fps 或 `time_scale` 時不需要修改設定；以 interface 傳遞，RT 安全。代價是 BVH 播放約晚一幀 |
+| D19 | 外部演算法以 pluginlib plugin 接入（`<mode>.type: plugin`），介面放在不依賴 rclcpp 的 `graphen_locomotion`；參數透過 `ParameterSource` 讀取 | 演算法在 planner thread 中執行，延遲最低，並沿用既有的模式切換、`max_steps` 限制與下游插補；換演算法不需要修改或重編 controller。介面套件很小，外部團隊只依賴它，不會被 controller 的改動影響；參數仍然放在 YAML。量測狀態由 RT 端以 try_lock 寫入（`TryLockBuffer`），不阻塞 `update()` |
+| D20 | 機身狀態估測器獨立成 plugin，在演算法之前執行，結果放在 `RobotState::base` | 估測方法會演進（先用 IMU，之後改 IMU + 腿部運動學），獨立出來之後只要換 YAML，演算法不必修改；座標轉換、重力投影也集中在一處，每個演算法拿到的都是同一份機身座標系的狀態。估測器與模式無關、每週期執行，切換模式時積分狀態不中斷 |
 | D17 | BVH 轉換放在獨立的 `graphen_motion`（不依賴 rclcpp），提供 `bvh_retarget_cli` | 轉換與 ros2_control 無關，可以離線檢查新的 BVH、決定 max_steps，也能在其他程式重用 |
 
 ---
@@ -535,6 +596,16 @@ IfThenElse "WalkEnabled"
 2. 先用 `bvh_retarget_cli` 檢查分組、殘差、限位截斷與最大速度。
 3. 在 `modes` 加上名稱，設定 `type: bvh`、`file`，並以「最大速度 × frame_time × 1.2」設定 `max_steps`（每幀的跳動上限）。幀間隔會自動傳給子群組，不需要其他設定。
 
+### 新增外部 locomotion 演算法
+1. 在自己的套件中依賴 `graphen_locomotion`，實作 `graphen::locomotion::LocomotionAlgorithm`，在 `.cpp` 結尾加上 `PLUGINLIB_EXPORT_CLASS(<Class>, graphen::locomotion::LocomotionAlgorithm)`。可以參考 [sine_wave_algorithm.cpp](../src/graphen_locomotion/src/sine_wave_algorithm.cpp)。
+2. 寫 plugin 描述檔（`base_class_type="graphen::locomotion::LocomotionAlgorithm"`），並在 CMake 中以 `pluginlib_export_plugin_description_file(graphen_locomotion <xml>)` 導出。第一個參數是 **base class 所在的套件**，不是自己的套件。
+3. 在 `controllers.yaml` 的 `modes` 加上名稱，設定 `type: plugin`、`plugin: <plugin 名稱>`、`max_steps`（每週期上限，建議依演算法的最大速度 / `planner_rate` 設定），其餘參數也寫在 `<mode>.` 下。
+4. 參數在 `configure()` 讀取並驗證，錯誤時丟例外；`update()` 中不要長時間阻塞（會拖慢 planner 週期）。
+5. 機身狀態用 `state.base`（機身座標系），速度指令用 `state.command`；使用前先檢查 `base.valid`、`command.active`。
+
+### 新增機身狀態估測器
+實作 `graphen::locomotion::BaseStateEstimator`，以 `PLUGINLIB_EXPORT_CLASS` 導出，plugin 描述檔同樣以 `pluginlib_export_plugin_description_file(graphen_locomotion <xml>)` 導出。在 `controllers.yaml` 把 `base_estimator.plugin` 換成新的名稱，參數寫在 `base_estimator.` 下。
+
 ### 新增 BT 節點
 1. 在 `graphen_bt_nodes` 新增 hpp/cpp（namespace `graphen::bt`），加入 CMake 的 `add_library`。
 2. 在 [register_nodes.cpp](../src/graphen_bt_nodes/src/register_nodes.cpp) 用 `registerNodeType` 註冊。
@@ -548,16 +619,12 @@ IfThenElse "WalkEnabled"
 
 ## 6. 已知限制與待辦
 
-- **TODO：Motion plugin 化**
-  - **現況**：模式已泛化成 `Motion` 介面（D16）。`TargetMotion` / `BvhMotion` 由 `SwitchGroupController::create_motion()` 依 `<mode>.type` 建立，切換由 planner thread 執行，`max_steps` 已移到各模式。
-  - **時機**：需要在不修改 `graphen_controllers` 的情況下新增動作種類時（例如正弦擺動、其他步態產生器）。
-  - **做法**：
-    - 把 `Motion` 移到獨立套件，加上 `configure(node, name, joint_names)`。
-    - `<mode>.type` 改為 plugin 名稱，`create_motion()` 改以 `pluginlib::ClassLoader` 建立。
-    - 名稱與 action、BT 介面不變。
-  - **注意事項**：
-    - `pluginlib::ClassLoader` 的生命週期必須比 Motion 實例長。
-    - plugin 不能用 `auto_declare`，要用 `declare_parameter`，宣告前先檢查 `has_parameter`。
+- **Motion plugin 化（已部分完成）**：外部演算法已可用 `type: plugin` 接入（D19），新增動作種類不必修改 `graphen_controllers`。`target` / `hold` / `bvh` 仍是內建的 Motion；如果之後需要，可以改寫成 `LocomotionAlgorithm` plugin。
+- **TODO：機身線速度估測**：目前的 `ImuLeakyEstimator` 只用 IMU，線速度只能當短時間的近似值。需要準確的線速度時（例如 RL policy 的 observation），改寫一個融合 IMU 與腿部運動學（足底接觸判斷）的 `BaseStateEstimator` plugin，換掉 `base_estimator.plugin` 即可。
+- **TODO：速度前饋往下游傳**：`JointCommand::velocities` 已傳到 `LocomotionPlanner::Output::velocities`，但子群組與硬體都只有 position 介面，目前不寫往下游。要使用時：
+  1. `SubGroupController` 導出 velocity reference。
+  2. 硬體加上 velocity command interface（`Ti5Hardware` 需要確認馬達協議是否支援）。
+  3. switch 加上對應的 `velocity_command_interfaces` 參數。
 - **BT 的方向與 controller 的模式可能不一致**：controller 被 reconfigure 回到 `default_mode` 時，BT 的 `{mode}` 不會跟著改變，要等到下一次換向（或切換 `gp_enable_*`）才會重新同步。
 - **planner 的速度受 non-RT 排程影響**：max_steps 是「每週期」的量，planner thread 被延遲時，實際速度會變慢（WSL 在高負載下觀察得到）。BVH 的播放時間以實際經過時間推進，不受影響，但輸出仍受 max_steps 限制。
 - **BVH 步態是開環播放**：沒有平衡控制，浮動基座（root 位移、`BASE_S` 旋轉）被忽略；實機只能在吊掛等安全條件下使用。

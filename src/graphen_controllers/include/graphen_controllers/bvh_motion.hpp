@@ -31,9 +31,8 @@ public:
     std::shared_ptr<const motion::BvhRetargeter> retargeter, Options options,
     std::vector<double> play_max_steps, std::vector<double> approach_max_steps);
 
-  void on_enter(const std::vector<double> & current) override;
-  void update(
-    double dt, const std::vector<double> & current, std::vector<double> & desired) override;
+  void on_enter(const RobotState & state) override;
+  void update(double dt, const RobotState & state, JointCommand & command) override;
   // Approach 時回傳 approach_max_steps，其餘回傳 play_max_steps
   const std::vector<double> & max_steps() const override {
     return phase_ == Phase::kApproach ? approach_max_steps_ : play_max_steps_;

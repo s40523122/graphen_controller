@@ -13,9 +13,8 @@ public:
   // targets 與 max_steps 長度必須相同且不為空，每個 max_step 必須 > 0
   TargetMotion(std::vector<double> targets, std::vector<double> max_steps);
 
-  void on_enter(const std::vector<double> & current) override;
-  void update(
-    double dt, const std::vector<double> & current, std::vector<double> & desired) override;
+  void on_enter(const RobotState & state) override;
+  void update(double dt, const RobotState & state, JointCommand & command) override;
   const std::vector<double> & max_steps() const override {return max_steps_;}
 
 private:

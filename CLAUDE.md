@@ -7,8 +7,9 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 - `graphen_interfaces`：action 定義（`SwitchMode`），控制層與行為層共用
 - `graphen_control_utils`：header-only 共用元件（`StateInterfacePublisher`）
 - `graphen_motion`：BVH 解析與 BVH → URDF 1-DOF joint 轉換（`BvhRetargeter`）、`bvh_retarget_cli`；不依賴 rclcpp
-- `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`；`LocomotionPlanner`、`Motion`（`TargetMotion` / `BvhMotion`）是內部元件（不是 plugin）
-- 模式由 YAML 的 `<mode>.type`（`target` / `bvh`）決定行為，controller 不寫死任何模式；BVH 動作檔放在 `graphen_bringup/motions/`
+- `graphen_locomotion`：外部 locomotion 演算法與機身狀態估測器的 plugin 介面（`LocomotionAlgorithm`、`BaseStateEstimator`、`RobotState`、`JointCommand`、`ParameterSource`），介面 header-only、**不依賴 rclcpp / ros2_control**；內建 plugin（`graphen_locomotion_plugins`）：範例 `graphen_locomotion/SineWaveAlgorithm`、只用 IMU 的估測器 `graphen_locomotion/ImuLeakyEstimator`
+- `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`；`LocomotionPlanner`、`Motion`（`TargetMotion` / `BvhMotion` / `PluginMotion`）是內部元件（不是 plugin）
+- 模式由 YAML 的 `<mode>.type`（`target` / `hold` / `bvh` / `plugin`）決定行為，controller 不寫死任何模式；BVH 動作檔放在 `graphen_bringup/motions/`。`plugin` 模式從 planner 取得量測的關節角度 / 速度、IMU、估測的機身狀態（`base`）與 `~/cmd_vel` 速度指令（`command`）
 - `graphen_bringup`：`config/controllers.yaml`（32 軸 → 6 個子群組）、`config/can_driver_config.json`（T170 實機 CAN 設定）、`motions/`、`launch/bringup.launch.py`
 - `graphen_bt_nodes`：BT 節點 plugin，全部在 `register_nodes.cpp` 註冊
 - `graphen_bt`：`bt_runner`、`trees/`、`config/bt_runner.yaml`、`launch/bt.launch.py`
@@ -24,7 +25,7 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 - 執行前先 `source install/setup.bash`（BT plugin 依賴 LD_LIBRARY_PATH 載入）
 - `ros2 launch graphen_bringup bringup.launch.py`、`ros2 launch graphen_bt bt.launch.py`
 - 本體以 launch 參數 `use_mock_hardware`（預設 true）切換 mock / CAN 實機；靈巧手以 `use_hands`（預設 false）啟用，mock / 實機跟隨 `use_mock_hardware`
-- IMU 以 launch 參數 `use_mock_imu`（預設 true）切換 mock / 實機；mock 的行為（`imu/raw_data`、`sensor_forwarder`）不可改動。實機設定放在 `config/controllers_imu16460.yaml`
+- IMU 以 launch 參數 `use_mock_imu`（預設 true）切換 mock / 實機。mock 提供與實機同名的 `imu_sensor/*`（10 通道 + temperature），以 `sensor_forwarder`（`/sensor_forwarder/commands`，10 個值）寫入模擬值；兩者介面名稱必須保持一致。實機設定放在 `config/controllers_imu16460.yaml`
 
 ## 慣例
 - 套件名稱：`graphen_<功能>`

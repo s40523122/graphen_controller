@@ -19,15 +19,16 @@ TargetMotion::TargetMotion(std::vector<double> targets, std::vector<double> max_
   desired_ = targets_;
 }
 
-void TargetMotion::on_enter(const std::vector<double> & current) {
+void TargetMotion::on_enter(const RobotState & state) {
+  const auto & current = state.commanded_positions;
   for (size_t i = 0; i < targets_.size(); ++i) {
     desired_[i] = std::isnan(targets_[i]) ? current[i] : targets_[i];
   }
 }
 
 void TargetMotion::update(
-  double /*dt*/, const std::vector<double> & /*current*/, std::vector<double> & desired) {
-  desired = desired_;
+  double /*dt*/, const RobotState & /*state*/, JointCommand & command) {
+  command.positions = desired_;
 }
 
 }  // namespace graphen::control

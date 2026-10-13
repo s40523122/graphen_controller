@@ -2,6 +2,7 @@
 #define GRAPHEN_CONTROLLERS__LOCOMOTION_PLANNER_HPP_
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -14,7 +15,8 @@ namespace graphen::control {
 
 // 以固定頻率播放 Motion 的 planner，在獨立的 non-RT thread 中執行。
 //
-// 每個週期向目前的 Motion 取得期望位置，每個介面最多移動 Motion::max_steps()[i]，
+// 每個週期先以呼叫端提供的 StateReader 取得量測狀態（關節角度 / 速度、IMU），交給目前的 Motion
+// 取得期望位置與速度前饋，每個介面最多移動 Motion::max_steps()[i]，
 // 連同 Motion::sample_period() 寫入呼叫端提供的 TargetBuffer。controller 的 update() 只要讀取最新值輸出即可，
 // 規劃計算（包含 BVH 的轉換）都不在 RT thread 中執行。
 //
@@ -24,10 +26,15 @@ class LocomotionPlanner {
 public:
   struct Output {
     std::vector<double> positions;
+    // Motion 的速度前饋（rad/s），NaN 表示沒有
+    std::vector<double> velocities;
     // 目前 Motion 的輸出點間隔（秒），供下游插補；0 表示連續
     double sample_period{0.0};
   };
   using TargetBuffer = realtime_tools::RealtimeBuffer<Output>;
+  // 在 planner thread 中每週期呼叫一次，填入量測值與 IMU（commanded_positions 由 planner 填入）。
+  // 傳入的 RobotState 已依介面數配置好大小
+  using StateReader = std::function<void(RobotState &)>;
 
   // num_interfaces 必須 > 0；rate_hz 必須 > 0
   LocomotionPlanner(double rate_hz, size_t num_interfaces);
@@ -41,8 +48,10 @@ public:
   void set_motion(std::shared_ptr<Motion> motion);
 
   // 以 initial_positions 為起點開始規劃，結果寫入 sink（呼叫端需保證 sink 在 stop() 前有效）。
-  // 還沒有設定 motion 時保持起點
-  void start(const std::vector<double> & initial_positions, TargetBuffer * sink);
+  // read_state 可以為空（量測值保持 NaN）。還沒有設定 motion 時保持起點
+  void start(
+    const std::vector<double> & initial_positions, TargetBuffer * sink,
+    StateReader read_state = nullptr);
 
   // 停止規劃 thread 並等待結束；未啟動時不做任何事
   void stop();
@@ -61,8 +70,10 @@ private:
   // 只在規劃 thread 中存取
   std::shared_ptr<Motion> motion_;
   Output output_;  // positions 即目前的輸出位置
-  std::vector<double> desired_;
+  RobotState state_;
+  JointCommand command_;
   TargetBuffer * sink_{nullptr};
+  StateReader read_state_;
 
   std::atomic<bool> running_{false};
   std::thread thread_;

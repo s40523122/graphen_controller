@@ -11,8 +11,10 @@
 
   <depend>ament_index_cpp</depend>
   <depend>controller_interface</depend>
+  <depend>geometry_msgs</depend>
   <depend>graphen_control_utils</depend>
   <depend>graphen_interfaces</depend>
+  <depend>graphen_locomotion</depend>
   <depend>graphen_motion</depend>
   <depend>hardware_interface</depend>
   <depend>lifecycle_msgs</depend>

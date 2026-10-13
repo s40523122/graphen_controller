@@ -65,8 +65,15 @@ ros2 launch graphen_bt bt.launch.py                 # 行為層（另開終端�
 # joint_state_broadcaster、sensor_forwarder、6 個子群組與 switch_group_controller 都應該是 active
 ros2 control list_controllers
 
-# 啟動後不進入任何模式，所有 joint 保持初始位置（default_mode: ""），imu/raw_data 為 1.23
+# 啟動後不進入任何模式，所有 joint 保持初始位置（default_mode: ""）。
+# states 含 32 軸的 position / velocity 與 mock IMU（imu_sensor/*，初始為靜止水平：orientation.w = 1、
+# linear_acceleration.z = 9.81）
 ros2 topic echo --once /switch_group_controller/states
+
+# 寫入 mock IMU 的模擬值，10 個值依序為 orientation.xyzw、angular_velocity.xyz、linear_acceleration.xyz
+# （用 -t 多送幾次：--once 可能在 subscriber 完成 discovery 前就送出而遺失）
+ros2 topic pub -t 3 -w 1 /sensor_forwarder/commands std_msgs/msg/Float64MultiArray \
+  "{data: [0, 0, 0, 1,  0, 0, 0.5,  0, 0, 9.81]}"
 
 # 用 action 切換到 reverse 模式：result 附上切換當下的 state 快照，之後兩個手腕（L/R_WRIST_P）往 -1.5 移動，
 # 其他 30 軸保持
@@ -84,6 +91,19 @@ ros2 topic echo --once /left_arm_group_controller/references
 # planner 依檔案頻率（24 fps）送出原始幀，幀間插補由子群組依 sample_period 進行（約晚一幀）。
 # 已在 walk 時再送 walk 不會從頭播放；要重播請先切到其他模式
 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: walk}"
+
+# 外部演算法 plugin 的範例（sine 模式，graphen_locomotion/SineWaveAlgorithm）：NECK_Y 以進入時的位置為中心
+# 擺動（±0.2 rad、0.25 Hz），controller 的 log 每秒印出演算法收到的量測角度 / 速度與 IMU
+ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: sine}"
+
+# 機身狀態估測（ImuLeakyEstimator）：寫入 x 方向 1 m/s² 的加速度，sine 的 log 中 base lin_vel x 會趨近
+# a × leak_time_constant = 2.0 m/s；改回 0 後以時間常數 2 s 衰減
+ros2 topic pub -t 3 -w 1 /sensor_forwarder/commands std_msgs/msg/Float64MultiArray \
+  "{data: [0, 0, 0, 1,  0, 0, 0,  1.0, 0, 9.81]}"
+
+# 速度指令：發布期間 log 中 command active 為 true；停止發布 0.5 s（command_timeout）後歸零
+ros2 topic pub -r 10 -w 1 /switch_group_controller/cmd_vel geometry_msgs/msg/Twist \
+  "{linear: {x: 0.3, y: 0.0}, angular: {z: 0.2}}"
 ```
 
 > walk 是開環播放，沒有平衡控制；實機上只能在吊掛等安全條件下使用。
@@ -157,7 +177,7 @@ CAN 通道與馬達對應在 [can_driver_config.json](src/graphen_bringup/config
 
 ### 實機 IMU（FSS-IMU16460-C）
 
-預設 `use_mock_imu:=true`，行為與上面相同（mock `imu/raw_data` + `sensor_forwarder`）。接上實機時（Orin）：
+預設 `use_mock_imu:=true`，行為與上面相同（mock `imu_sensor/*` + `sensor_forwarder`，介面名稱與實機相同）。接上實機時（Orin）：
 
 ```bash
 imu16460_cli monitor                                # 先確認資料：約 1000 Hz、CRC 錯誤率 < 0.1%
@@ -165,7 +185,7 @@ ros2 launch graphen_bringup bringup.launch.py use_mock_imu:=false imu_port:=/dev
 ros2 topic echo /imu_sensor_broadcaster/imu         # 角速度 rad/s、加速度 m/s²
 ```
 
-實機時 `sensor_forwarder` 不啟動，改為 `imu_sensor_broadcaster`，`switch_group_controller` 的 sensor 改讀 `imu_sensor/angular_velocity.z`。
+實機時 `sensor_forwarder` 不啟動，改為 `imu_sensor_broadcaster`；`switch_group_controller` 的設定不需要改動（mock 與實機的 interface 名稱相同）。
 協議、待實機驗證項目與 CLI 用法見 [docs/IMU16460.md](docs/IMU16460.md) 和 [imu16460_core/README.md](src/imu16460/imu16460_core/README.md)。
 
 > 會改變 IMU 設定的 CLI 指令（`set-*`、`save`、`reboot`）必須帶 `--yes`，未經確認不要對實機送出。

@@ -1,0 +1,18 @@
+<library path="graphen_locomotion_plugins">
+  <!-- 範例演算法：正弦擺動，示範 plugin 寫法與驗證資料通路 -->
+  <class name="graphen_locomotion/SineWaveAlgorithm"
+         type="graphen::locomotion::SineWaveAlgorithm"
+         base_class_type="graphen::locomotion::LocomotionAlgorithm">
+    <description>
+      Example algorithm that oscillates the given joints around their entry positions.
+    </description>
+  </class>
+  <!-- 機身狀態估測器：只用 IMU（線速度為 leaky 積分） -->
+  <class name="graphen_locomotion/ImuLeakyEstimator"
+         type="graphen::locomotion::ImuLeakyEstimator"
+         base_class_type="graphen::locomotion::BaseStateEstimator">
+    <description>
+      Base state estimator using only the IMU; linear velocity is a leaky integration of acceleration.
+    </description>
+  </class>
+</library>

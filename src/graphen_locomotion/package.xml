@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>graphen_locomotion</name>
+  <version>0.0.0</version>
+  <description>Plugin interface for external locomotion algorithms (no rclcpp / ros2_control dependency), with built-in plugins (example algorithm, IMU-only base state estimator).</description>
+  <maintainer email="riverji@graphen.ai">jin</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>eigen</depend>
+  <depend>pluginlib</depend>
+  <depend>urdfdom</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

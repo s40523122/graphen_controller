@@ -1,6 +1,8 @@
 #ifndef GRAPHEN_CONTROLLERS__SWITCH_GROUP_CONTROLLER_HPP_
 #define GRAPHEN_CONTROLLERS__SWITCH_GROUP_CONTROLLER_HPP_
 
+#include <array>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -10,9 +12,14 @@
 
 #include "controller_interface/controller_interface.hpp"
 #include "graphen_control_utils/state_interface_publisher.hpp"
+#include "graphen_control_utils/try_lock_buffer.hpp"
 #include "graphen_controllers/locomotion_planner.hpp"
 #include "graphen_controllers/motion.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "graphen_interfaces/action/switch_mode.hpp"
+#include "graphen_locomotion/base_state_estimator.hpp"
+#include "graphen_locomotion/locomotion_algorithm.hpp"
+#include "pluginlib/class_loader.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
@@ -22,9 +29,11 @@ namespace graphen::control {
 
 // 頂層切換 controller：依目前模式，寫入下游 SubGroupController 的 reference interface。
 //
-// 每個模式對應一個 Motion（固定目標或 BVH 動作），由 LocomotionPlanner 在 non-RT thread 中以
+// 每個模式對應一個 Motion（固定目標、BVH 動作或外部演算法 plugin），由 LocomotionPlanner 在 non-RT thread 中以
 // planner_rate 播放、每週期最多移動 max_steps，寫入 target_buffer_；update() 只讀取最新值輸出。
 // controller 本身只認得模式名稱，不包含任何特定模式的邏輯。
+// update() 另外把量測的關節角度 / 速度與 IMU 寫入 state_buffer_。planner 每週期讀取後，
+// 補上 ~/cmd_vel 的速度指令、執行機身狀態估測器（base_estimator），再交給 Motion。
 //
 // 參數：
 //   command_interfaces       下游 reference interface（例如 left_arm_group_controller/L_SHOULDER_P）
@@ -34,7 +43,13 @@ namespace graphen::control {
 //   sensor                   （選填）sensor state interface，會自動加入 state_interfaces
 //   state_publish_rate       ~/states 的發布頻率 (Hz)
 //   target_state_interfaces  與 command_interfaces 一一對應的 state interface，activate 時作為
-//                            planner 的起點；其 prefix（最後一個 '/' 之前）即為該介面的 joint 名稱
+//                            planner 的起點，也是交給 Motion 的量測角度；
+//                            其 prefix（最後一個 '/' 之前）即為該介面的 joint 名稱
+//   velocity_state_interfaces（選填）與 command_interfaces 一一對應的速度 state interface，
+//                            交給 Motion 的量測速度；空的時候為 NaN。會自動加入 state_interfaces
+//   imu_sensor_name          （選填）IMU sensor 名稱（例如 imu_sensor），讀取 <name>/orientation.x …
+//                            linear_acceleration.z 共 10 個 state interface 交給 Motion，
+//                            會自動加入 state_interfaces
 //   planner_rate             planner 的規劃頻率 (Hz)
 //   planner_max_steps        每個 command interface 在每個規劃週期最多移動的量（各模式的預設值）
 //   modes                    可用的模式名稱，同時作為下面各模式參數的前綴（只允許 [A-Za-z0-9_]）
@@ -43,7 +58,13 @@ namespace graphen::control {
 //   type: target
 //     <mode>.joints          （選填）要移動的 joint；省略時為全部，依 command_interfaces 順序
 //     <mode>.targets         對應 joints 的目標位置；沒有列出的 joint 保持進入模式時的位置
+//   base_estimator.plugin    （選填）graphen_locomotion::BaseStateEstimator 的 plugin 類別名稱；
+//                            其餘 base_estimator.* 參數由估測器自行讀取。空字串表示不估測（base.valid 為 false）
+//   command_timeout          ~/cmd_vel 的逾時（秒）；超過時速度指令視為 0（command.active 為 false）
 //   type: hold               保持進入模式時的位置（停止），沒有其他參數
+//   type: plugin
+//     <mode>.plugin          graphen_locomotion::LocomotionAlgorithm 的 plugin 類別名稱；
+//                            其餘 <mode>.* 參數由演算法自行讀取
 //   type: bvh
 //     <mode>.file            BVH 檔案路徑，支援 package://<pkg>/<path>
 //     <mode>.loop            播放到結尾後是否循環（預設 true）
@@ -58,6 +79,7 @@ namespace graphen::control {
 //
 // 介面：
 //   ~/mode        (std_msgs/String, 訂閱)                切換模式；未知模式會被忽略
+//   ~/cmd_vel     (geometry_msgs/Twist, 訂閱)            機身速度指令（linear.x、linear.y、angular.z）
 //   ~/switch_mode (graphen_interfaces/action/SwitchMode) 切換模式，result 附 state 快照
 //   ~/states      (control_msgs/DynamicJointState)        發布所有 state interface
 class SwitchGroupController : public controller_interface::ControllerInterface {
@@ -89,8 +111,21 @@ private:
   // 讀取 <mode>.* 參數並建立該模式的 Motion；設定錯誤時丟出例外
   std::shared_ptr<Motion> create_motion(const std::string & mode);
 
+  // 讀取 <mode>.plugin 並建立、configure 外部演算法；設定錯誤時丟出例外
+  std::shared_ptr<Motion> create_plugin_motion(
+    const std::string & mode, std::vector<double> max_steps);
+
   // 切換模式並交給 planner 播放（non-RT）；未知模式或與目前模式相同時不做任何事
   void apply_mode(const std::string & mode);
+
+  // 以 state_interfaces_ 的目前值更新量測狀態（不配置記憶體，RT 可呼叫）
+  void read_robot_state(RobotState & state) const;
+
+  // planner thread 每週期呼叫：取得量測狀態，補上速度指令，並執行機身狀態估測器
+  void fill_planner_state(RobotState & state);
+
+  // 讀取 base_estimator.plugin 並建立、configure 估測器；未設定時回傳 nullptr，設定錯誤時丟出例外
+  std::shared_ptr<locomotion::BaseStateEstimator> create_base_estimator();
 
   // action server callback（皆在 executor thread 執行）
   rclcpp_action::GoalResponse handle_switch_mode_goal(
@@ -100,6 +135,10 @@ private:
     std::shared_ptr<SwitchModeGoalHandle> goal_handle);
   void handle_switch_mode_accepted(std::shared_ptr<SwitchModeGoalHandle> goal_handle);
 
+  // 外部演算法的 plugin loader：必須比 mode_motions_ 與 planner_ 中的演算法實例活得久，所以宣告在最前面
+  std::unique_ptr<pluginlib::ClassLoader<locomotion::LocomotionAlgorithm>> algorithm_loader_;
+  std::unique_ptr<pluginlib::ClassLoader<locomotion::BaseStateEstimator>> estimator_loader_;
+
   std::vector<std::string> command_interface_names_;
   std::vector<std::string> sample_period_interface_names_;
   std::vector<std::string> state_interface_names_;
@@ -107,6 +146,7 @@ private:
   // 各 command interface 對應的 joint 名稱（取自 target_state_interfaces）
   std::vector<std::string> joint_names_;
   std::vector<double> default_max_steps_;  // planner_max_steps
+  double planner_rate_{0.0};
 
   // mode_names_[i] 對應 mode_motions_[i]，於 on_configure 建立，之後只有 planner thread 使用 Motion
   std::vector<std::string> mode_names_;
@@ -124,6 +164,31 @@ private:
 
   // target_state_interfaces 在 state_interfaces_ 中的 index，順序對應 command_interfaces
   std::vector<size_t> target_state_indices_;
+  // velocity_state_interfaces 在 state_interfaces_ 中的 index；沒有設定時為空
+  std::vector<size_t> velocity_state_indices_;
+  // IMU 10 個 state interface 在 state_interfaces_ 中的 index（orientation.xyzw、
+  // angular_velocity.xyz、linear_acceleration.xyz）；沒有設定時為空
+  std::vector<size_t> imu_state_indices_;
+
+  // update()（RT）以 try_lock 寫入量測狀態，planner thread 每週期讀取
+  TryLockBuffer<RobotState> state_buffer_;
+
+  // 機身狀態估測器；以下狀態在 activate 時設定，之後只在 planner thread 中存取
+  // （planner thread 在設定之後才啟動，不需要額外同步）
+  std::shared_ptr<locomotion::BaseStateEstimator> base_estimator_;
+  bool estimator_needs_reset_{true};
+  bool estimator_faulted_{false};
+  double last_state_time_{0.0};
+
+  // ~/cmd_vel 的最新指令：subscription callback 寫入、planner thread 讀取，兩者都不是 RT
+  struct VelocityCommand {
+    std::array<double, 3> velocity{0.0, 0.0, 0.0};  // vx, vy, wz
+    std::chrono::steady_clock::time_point stamp;
+    bool received{false};
+  };
+  std::mutex command_mutex_;
+  VelocityCommand velocity_command_;
+  double command_timeout_{0.5};
 
   // planner（non-RT thread）寫入，update() 從 RT 端讀取
   std::unique_ptr<LocomotionPlanner> planner_;
@@ -137,6 +202,7 @@ private:
   std::unique_ptr<StateInterfacePublisher> state_publisher_;
 
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscriber_{nullptr};
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscriber_{nullptr};
   rclcpp_action::Server<SwitchModeAction>::SharedPtr switch_mode_server_{nullptr};
 };
 
