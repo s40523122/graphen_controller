@@ -15,6 +15,8 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 - `graphen_bt`：`bt_runner`、`trees/`、`config/bt_runner.yaml`、`launch/bt.launch.py`
 - `src/imu16460/imu16460_core`：FSS-IMU16460-C 驅動，純 CMake、**程式碼不得 include ROS 標頭**；含 `imu16460_cli` 與 GoogleTest。協議見 [docs/IMU16460.md](docs/IMU16460.md)
 - `src/imu16460/imu16460_hardware`：IMU 的 ros2_control `SensorInterface` plugin（`imu16460_hardware/Imu16460SensorInterface`）與 xacro macro
+- `graphen_mujoco`：MuJoCo 模擬的 T170 本體 + IMU（`graphen_mujoco/MujocoSystem`），launch 參數 `use_mujoco`；`third_party/mujoco` 為 wheel 內附的 libmujoco，`tools/` 有 MJCF 匯出與主機端 viewer
+- `graphen_rl_policy`：FullBodyT70 policy 的 `LocomotionAlgorithm` plugin（`rl_walk` 模式），ORT 與 `t170_policy_config.h` 取自 CMake 變數 `T170_POLICY_DIR`
 - 外部套件（沿用原本命名，不套 `graphen_` 慣例）：
   - `ti5_170a_graphen`：robot_description。頂層 xacro 為 `urdf/ti5_170a_graphen.urdf.xacro`，本體 ros2_control 為 `urdf/ti5_170a_graphen.ros2_control.xacro`，joint 分組 SRDF 為 `config/ti5_170a_graphen.srdf`（目前只作參考）
   - `ti5_hardware`（`ti5_hardware/Ti5Hardware`，CAN）、`can_driver`：T170 關節實機

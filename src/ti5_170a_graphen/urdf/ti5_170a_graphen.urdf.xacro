@@ -11,6 +11,11 @@
   <!-- 送往馬達的指令最大變化速度（rad/s），開機走向 real_initial_positions 時也受限；應 >= planner 的速度 -->
   <xacro:arg name="max_command_velocity" default="0.5"/>
 
+  <!-- MuJoCo 模擬：true 時本體與 IMU 都由 graphen_mujoco/MujocoSystem 提供（優先於 use_mock_hardware、use_mock_imu） -->
+  <xacro:arg name="use_mujoco" default="false"/>
+  <xacro:arg name="mujoco_model" default=""/>
+  <xacro:arg name="mujoco_viewer_port" default="0"/>
+
   <!-- 靈巧手：預設不啟用；啟用時 mock / 實機跟隨 use_mock_hardware -->
   <xacro:arg name="use_hands" default="false"/>
   <xacro:arg name="left_hand_port" default="/dev/ttyUSB1"/>
@@ -47,7 +52,10 @@
     can_config_path="$(arg can_config_path)"
     real_initial_positions_file="$(arg real_initial_positions_file)"
     hw_read_timeout_ms="$(arg hw_read_timeout_ms)"
-    max_command_velocity="$(arg max_command_velocity)"/>
+    max_command_velocity="$(arg max_command_velocity)"
+    use_mujoco="$(arg use_mujoco)"
+    mujoco_model="$(arg mujoco_model)"
+    mujoco_viewer_port="$(arg mujoco_viewer_port)"/>
 
   <!-- 3. 靈巧手 ros2_control（只在 use_hands:=true 時存在） -->
   <xacro:if value="$(arg use_hands)">
@@ -62,6 +70,8 @@
   <!-- 模擬 IMU：介面名稱與實機的 imu16460 xacro 相同，controller 設定在 mock 與實機下不需要更動。
        獨立成一個 mock system，讓本體改用實機時 mock IMU 仍可單獨使用。
        初始值為靜止水平：單位四元數，z 軸加速度 9.81（靜止時加速度計量到的值） -->
+  <!-- MuJoCo 模擬時 IMU 由 MujocoSystem 提供，兩者都不建立 -->
+  <xacro:unless value="$(arg use_mujoco)">
   <xacro:if value="$(arg use_mock_imu)">
     <ros2_control name="MockImu" type="system">
       <hardware>
@@ -90,6 +100,7 @@
     <xacro:include filename="$(find imu16460_hardware)/urdf/imu16460.ros2_control.xacro"/>
     <xacro:imu16460_ros2_control name="imu16460" sensor_name="imu_sensor"
                                  port="$(arg imu_port)" baudrate="$(arg imu_baudrate)"/>
+  </xacro:unless>
   </xacro:unless>
 
 </robot>

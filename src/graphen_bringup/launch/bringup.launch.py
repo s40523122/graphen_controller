@@ -1,10 +1,11 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.actions import (
+    DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, SetLaunchConfiguration)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 def generate_launch_description():
@@ -20,6 +21,8 @@ def generate_launch_description():
         bringup_share, 'config', 'real_initial_positions.yaml')
     # 實機 IMU 時疊加的設定（imu_sensor_broadcaster、switch_group_controller 的 sensor）
     imu_yaml_file = os.path.join(bringup_share, 'config', 'controllers_imu16460.yaml')
+    # MuJoCo 模擬時疊加的設定（imu_sensor_broadcaster）
+    mujoco_yaml_file = os.path.join(bringup_share, 'config', 'controllers_mujoco.yaml')
 
     use_mock_hardware = LaunchConfiguration('use_mock_hardware')
     hw_read_timeout_ms = LaunchConfiguration('hw_read_timeout_ms')
@@ -31,6 +34,10 @@ def generate_launch_description():
     use_mock_imu = LaunchConfiguration('use_mock_imu')
     imu_port = LaunchConfiguration('imu_port')
     imu_baudrate = LaunchConfiguration('imu_baudrate')
+    use_mujoco = LaunchConfiguration('use_mujoco')
+    mujoco_fixed_base = LaunchConfiguration('mujoco_fixed_base')
+    mujoco_model = LaunchConfiguration('mujoco_model')
+    mujoco_viewer_port = LaunchConfiguration('mujoco_viewer_port')
 
     declare_args = [
         DeclareLaunchArgument(
@@ -67,7 +74,33 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'imu_baudrate', default_value='921600',
             description='Baudrate of the real IMU (use_mock_imu:=false)'),
+        DeclareLaunchArgument(
+            'use_mujoco', default_value='false',
+            description='true: T170 joints and IMU simulated in MuJoCo (graphen_mujoco), '
+                        'overrides use_mock_hardware / use_mock_imu'),
+        DeclareLaunchArgument(
+            'mujoco_fixed_base', default_value='true',
+            description='true: base fixed in the air (like hanging); false: free-standing '
+                        '(ignored when mujoco_model is set)'),
+        DeclareLaunchArgument(
+            'mujoco_model', default_value='',
+            description='MJCF path; empty selects graphen_mujoco/models/t170_{fixed,free}.xml'),
+        DeclareLaunchArgument(
+            'mujoco_viewer_port', default_value='9870',
+            description='UDP port of graphen_mujoco/tools/mujoco_viewer.py (0 disables)'),
     ]
+
+    # mujoco_model 沒有指定時依 mujoco_fixed_base 選擇模型。只在 use_mujoco 時查詢 graphen_mujoco，
+    # 沒有建置 graphen_mujoco 時其他模式仍可使用
+    def resolve_mujoco_model(context):
+        if not IfCondition(use_mujoco).evaluate(context) or mujoco_model.perform(context):
+            return []
+        name = 't170_fixed.xml' if IfCondition(mujoco_fixed_base).evaluate(context) \
+            else 't170_free.xml'
+        path = os.path.join(get_package_share_directory('graphen_mujoco'), 'models', name)
+        return [SetLaunchConfiguration('mujoco_model', path)]
+
+    set_mujoco_model = OpaqueFunction(function=resolve_mujoco_model)
 
     robot_description_raw = Command([
         'xacro ', xacro_file,
@@ -83,6 +116,9 @@ def generate_launch_description():
         ' use_mock_imu:=', use_mock_imu,
         ' imu_port:=', imu_port,
         ' imu_baudrate:=', imu_baudrate,
+        ' use_mujoco:=', use_mujoco,
+        ' mujoco_model:="', mujoco_model, '"',
+        ' mujoco_viewer_port:=', mujoco_viewer_port,
     ])
     robot_description = {'robot_description': robot_description_raw}
 
@@ -95,10 +131,13 @@ def generate_launch_description():
     )
 
     # 2. Controller Manager
-    #    實機 IMU 時多載入 imu_yaml_file；參數檔無法用 condition 切換，所以在 OpaqueFunction 中組合
+    #    實機 IMU 時多載入 imu_yaml_file，MuJoCo 模擬時多載入 mujoco_yaml_file；
+    #    參數檔無法用 condition 切換，所以在 OpaqueFunction 中組合
     def create_controller_manager(context):
         parameters = [robot_description, controllers_yaml_file]
-        if not IfCondition(use_mock_imu).evaluate(context):
+        if IfCondition(use_mujoco).evaluate(context):
+            parameters.append(mujoco_yaml_file)
+        elif not IfCondition(use_mock_imu).evaluate(context):
             parameters.append(imu_yaml_file)
         return [Node(
             package='controller_manager',
@@ -117,22 +156,24 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3-1. 模擬 IMU 資料寫入 (imu_sensor/*)，只在 mock IMU 時啟動
+    # 3-1. 模擬 IMU 資料寫入 (imu_sensor/*)，只在 mock IMU 時啟動（MuJoCo 模擬時不啟動）
+    mock_imu_active = PythonExpression(
+        ["'", use_mock_imu, "'.lower() == 'true' and '", use_mujoco, "'.lower() != 'true'"])
     spawn_sensor_forwarder = Node(
         package='controller_manager',
         executable='spawner',
         arguments=['sensor_forwarder'],
         output='screen',
-        condition=IfCondition(use_mock_imu)
+        condition=IfCondition(mock_imu_active)
     )
 
-    # 3-2. 實機 IMU 發布 sensor_msgs/Imu（/imu_sensor_broadcaster/imu），只在實機 IMU 時啟動
+    # 3-2. 實機或 MuJoCo 的 IMU 發布 sensor_msgs/Imu（/imu_sensor_broadcaster/imu）
     spawn_imu_sensor_broadcaster = Node(
         package='controller_manager',
         executable='spawner',
         arguments=['imu_sensor_broadcaster'],
         output='screen',
-        condition=UnlessCondition(use_mock_imu)
+        condition=UnlessCondition(mock_imu_active)
     )
 
     # 4. 下游子群組（32 軸，依部位分組），依序啟動
@@ -177,6 +218,7 @@ def generate_launch_description():
     ]
 
     return LaunchDescription(declare_args + [
+        set_mujoco_model,  # 必須在使用 robot_description 的 node 之前
         node_robot_state_publisher,
         node_controller_manager,
         spawn_joint_state_broadcaster,

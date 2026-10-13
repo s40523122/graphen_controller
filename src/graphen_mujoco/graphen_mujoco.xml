@@ -1,0 +1,9 @@
+<library path="graphen_mujoco_hardware">
+  <class name="graphen_mujoco/MujocoSystem"
+         type="graphen_mujoco::MujocoSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      T170 simulated in MuJoCo (PD position actuators, IMU), replacing the mock or CAN hardware.
+    </description>
+  </class>
+</library>

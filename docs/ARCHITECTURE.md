@@ -398,6 +398,46 @@ launch argument：
 - **資料延遲**：RT `update()` 寫入狀態、planner 下一個週期讀取，最多約一個 controller 週期加一個 planner 週期。演算法可以用 `RobotState::time` 判斷。
 - **速度前饋**：目前不往下游寫，因為子群組與硬體都只有 position 介面（見 §6）。
 
+### 2.10 MujocoSystem（graphen_mujoco）
+
+原始碼：[mujoco_system.cpp](../src/graphen_mujoco/src/mujoco_system.cpp)
+類型：`hardware_interface::SystemInterface` plugin（`graphen_mujoco/MujocoSystem`），`use_mujoco:=true` 時取代 mock / `Ti5Hardware`，同一個 system 也提供 `imu_sensor`（取代 MockImu / imu16460）。
+
+- **模型**：[export_mjcf.py](../src/graphen_mujoco/tools/export_mjcf.py) 直接呼叫 FullBodyT70 `play_mujoco.py` 的 `build_spec()`，所以碰撞、PD 增益、armature、200 Hz 都與訓練相同。匯出時做了這些修改：
+  - `NECK_Y1` 改名為 `NECK_Y`。
+  - imu site 移到 `BASE_S` 的 (0, 0, 0.1)，對應 `imu_link`。
+  - 加上 `framequat` 與 `accelerometer`。
+  - 關閉 `fusestatic`：`to_xml()` 會遺失 fixed link 合併進來的質量（約 1 kg）。
+  - 匯出結果與原場景走 20 秒，qpos 相差 < 1e-4。
+- **MuJoCo 函式庫**：`third_party/mujoco` 是 mujoco 3.11.0 wheel 內附的 `libmujoco.so` 與 headers，容器不需要安裝 mujoco，也不需要網路。
+- **介面**：
+  - 每個 joint 有 position command，以及 position / velocity / acceleration state。其他 state（`current`、`error_code`）照樣匯出，值固定為 NaN。
+  - IMU 的 11 個介面名稱與實機相同；orientation 為 imu site 在世界座標系的姿態。
+- **時序**：
+  - `write()` 把 command 寫入 ctrl，再依 controller 週期推進物理（100 Hz 時每次 2 步，每次最多 20 步）。
+  - `read()` 複製 qpos / qvel / qacc 與感測器值。
+  - 模擬時間跟著 controller_manager 的 wall clock。
+- **viewer**：`viewer_port` > 0 時，`read()` 以非阻塞 UDP 把 `[time, qpos…]` 送到 127.0.0.1:port（約 60 Hz），並在 port+1 接收 `reset`。容器沒有 GL，所以畫面由主機的 [mujoco_viewer.py](../src/graphen_mujoco/tools/mujoco_viewer.py) 用同一份 MJCF 跑 `mj_forward` 顯示。
+
+### 2.11 T170VelocityPolicy（graphen_rl_policy）
+
+原始碼：[t170_velocity_policy.cpp](../src/graphen_rl_policy/src/t170_velocity_policy.cpp)
+類型：`LocomotionAlgorithm` plugin（`graphen_rl_policy/T170VelocityPolicy`），`controllers.yaml` 的 `rl_walk` 模式使用它。
+
+- **輸入對應**（obs 107 維，組成與 FullBodyT70 的 `T170Policy` 相同）：
+  - gyro ← `base.angular_velocity`
+  - 重力投影 ← `base.projected_gravity`
+  - 指令 ← `command.velocity`
+  - 關節 ← `measured_positions` / `measured_velocities`（以 `name_map` 依名稱對應 policy 順序）
+  - 相位：指令 < 0.1 時為 0，時鐘每次推論前進 `policy_dt`
+- **頻率**：planner 100 Hz，policy 每累積 `policy_dt`（0.02 s）推論一次，其餘週期重送上一次的目標。`base.valid` 為 false 或量測值有 NaN 時改為保持。
+- **不限速**：`rl_walk.max_steps` 設為 10 rad/週期（必須 > 0），LocomotionPlanner 的 clamp 不會生效。`sample_period` 為 0，子群組不插補，目標直接寫到硬體。
+- **延遲**：狀態經 try-lock buffer 交給 planner，輸出在下一次 `update()` 寫出，有效延遲約 10–20 ms 且會抖動（訓練時為 0）。在 MuJoCo 中注入 0–60 ms 的觀測延遲都沒有跌倒，速度追蹤下降約 10–30%。
+- **上實機前要確認**（`TODO(verify-on-hw)`）：
+  - Ti5 位置模式的實際剛性 / 阻尼與訓練的 PD 差異。
+  - IMU16460 的姿態參考座標系與安裝姿態（`ImuLeakyEstimator` 假設 z 朝上）。
+  - `Ti5Hardware` 的 `max_command_velocity`（預設 0.5 rad/s）會限制 policy 輸出，要另外決定上限。
+
 ## 3. 行為層（BehaviorTree.CPP v3）
 
 ### 3.1 執行模型
@@ -646,4 +686,6 @@ IfThenElse "WalkEnabled"
 - **WSL 環境**：沒有 RT scheduling（會印 WARN），ros2 daemon 探索偏慢。
 - **IMU 待實機驗證**：坐標系方向、Euler 順序、S1 長度、共變異數（見 [IMU16460.md §3](IMU16460.md#3-待實機驗證)），程式中以 `TODO(verify-on-hw)` 標記。
 - **IMU 時間戳**：Humble 的 `imu_sensor_broadcaster` 以 controller_manager 的更新時間打時間戳，無法傳遞裝置 timer；需要精確時間戳時改用獨立 node 發布。
+- **RL policy 只在 MuJoCo 驗證**：`rl_walk` 尚未上實機，見 §2.11 的待確認項目。
+- **MuJoCo 模擬沒有靈巧手**：`use_mujoco:=true` 搭配 `use_hands:=true` 時，手部仍跟隨 `use_mock_hardware`。
 - **測試**：只有 `imu16460_core` 有自動化測試；`graphen_motion` 目前以 `bvh_retarget_cli` 檢查（GoogleTest，`colcon test --packages-select imu16460_core`）；其他套件尚無，測試方式待討論。

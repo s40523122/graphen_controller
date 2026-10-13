@@ -17,6 +17,7 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | 機器人 | Ti5 T170（`ti5_170a_graphen`，32 joint）；預設 `mock_components/GenericSystem`，`use_mock_hardware:=false` 切換為 CAN 實機（`ti5_hardware`） |
 | 靈巧手 | 預設不啟用，`use_hands:=true` 加入左右手（各 13 joint） |
 | IMU | 預設 mock，`use_mock_imu:=false` 切換為實機 FSS-IMU16460-C |
+| 模擬 | `use_mujoco:=true` 時本體與 IMU 改由 MuJoCo 3.11 模擬（`graphen_mujoco`，優先於上面兩項） |
 
 ## 套件一覽
 
@@ -36,6 +37,8 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [can_driver](src/can_driver/) | C++ lib（外部） | SocketCAN 與 Ti5 馬達指令 | — |
 | [dexterous_hand_description](src/dexterous_hands/dexterous_hand_description/) | 資源（外部） | 靈巧手 ros2_control xacro macro | dexterous_hand_hardware（執行期） |
 | [dexterous_hand_hardware](src/dexterous_hands/dexterous_hand_hardware/) | hardware plugin（外部） | 靈巧手 `SystemInterface`（RS485） | — |
+| [graphen_mujoco](src/graphen_mujoco/) | hardware plugin | MuJoCo 模擬的 T170 本體 + IMU（`graphen_mujoco/MujocoSystem`）、MJCF 匯出與主機端 viewer（`tools/`） | — |
+| [graphen_rl_policy](src/graphen_rl_policy/) | locomotion plugin | FullBodyT70 訓練的速度追蹤 policy（`graphen_rl_policy/T170VelocityPolicy`，ONNX Runtime） | graphen_locomotion |
 
 ## 快速開始
 
@@ -174,6 +177,33 @@ ros2 launch graphen_bringup bringup.launch.py use_mock_hardware:=false
 ```
 
 CAN 通道與馬達對應在 [can_driver_config.json](src/graphen_bringup/config/can_driver_config.json)，實機初始位置在 [real_initial_positions.yaml](src/graphen_bringup/config/real_initial_positions.yaml)：開機時有列出的 joint 會以 `max_command_velocity`（預設 0.5 rad/s）限速走到該值，沒列的保持目前位置；之後要等 BT 或 action 下命令才會動。加上 `use_hands:=true` 時靈巧手也會改用實機（`left_hand_port`、`right_hand_port`、`hand_baudrate`）。
+
+### MuJoCo 模擬與 RL policy
+
+本體和 IMU 改由 MuJoCo 模擬（PD 位置致動器，增益與 FullBodyT70 訓練相同；物理 200 Hz），controller 設定不變。
+`mujoco_fixed_base:=true`（預設）時基座固定在空中，相當於吊掛；`false` 時為自由站立。
+
+```bash
+# 容器內（t170_ros）
+ros2 launch graphen_bringup bringup.launch.py use_mujoco:=true mujoco_fixed_base:=false
+
+# 主機上另開視窗（只顯示，不需要 ROS；視窗內按 End 重置模擬）。模型要與 mujoco_fixed_base 一致
+bash src/graphen_mujoco/tools/mujoco_viewer.sh                                  # 自由站立
+bash src/graphen_mujoco/tools/mujoco_viewer.sh --model ../models/t170_fixed.xml # 吊掛
+
+# 先走到 policy 的預設姿態（A-pose），再交給 policy
+ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: home}"
+ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: rl_walk}"
+
+# 速度指令（vx、vy m/s，wz rad/s）；停止發布 0.5 s 後回到原地站立
+ros2 topic pub -r 20 /switch_group_controller/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5}}"
+```
+
+- 實測（自由站立）：`rl_walk` 能穩定站立；指令 vx=0.5 時實際約 0.23 m/s，vx=0.8 / wz=0.3 時 wz 約 0.26 rad/s。速度追蹤偏低是 policy 本身的表現（直接在 MuJoCo 跑 `play_mujoco.py` 也只有約 0.25 m/s），與 ROS 串接無關。
+- MJCF 由 FullBodyT70 的訓練場景匯出，重新訓練或修改場景後要重新產生（需要主機的 `~/learnWalk_env`）：
+  `~/learnWalk_env/bin/python src/graphen_mujoco/tools/export_mjcf.py`
+- 更換 policy：`rl_walk.model_path` 指向新的 `policy.onnx`；`t170_policy_config.h`（obs 組成、q_home、action scale）從 `T170_POLICY_DIR`（CMake 變數，預設 `/devtest/FullBodyT70/cpp_interface`）讀取，更新後重新建置 `graphen_rl_policy`。
+- **`rl_walk` 只在 MuJoCo 驗證過**，不要在實機上使用（見 [ARCHITECTURE §2.11](docs/ARCHITECTURE.md#211-t170velocitypolicygraphen_rl_policy)）。
 
 ### 實機 IMU（FSS-IMU16460-C）
 

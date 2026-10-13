@@ -221,7 +221,7 @@ switch_group_controller:
 
     # 模式以名稱識別（BT、action、~/mode topic 都用這些名稱），名稱同時是下面參數的前綴。
     # controller 不認得任何特定模式，行為完全由 type 與參數決定
-    modes: [forward, reverse, walk, stop, sine]
+    modes: [forward, reverse, walk, stop, sine, home, rl_walk]
     # 空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
     # 收到 BT / action / ~/mode 的命令後才開始移動
     default_mode: ""
@@ -272,6 +272,41 @@ switch_group_controller:
       amplitude: 0.2      # rad
       frequency: 0.25     # Hz
       log_period: 1.0     # s，0 表示不 log
+
+    # home：FullBodyT70 policy 的預設姿態（手臂自然下垂的 A-pose，其他 0），以預設速度走過去。
+    # 進入 rl_walk 前先切到這裡，policy 的第一個輸出才不會離目前姿態太遠
+    home:
+      type: target
+      joints: [L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R,
+               R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R,
+               WAIST_Y, WAIST_R, WAIST_P, NECK_Y, NECK_P, NECK_R,
+               L_HIP_P, L_HIP_R, L_HIP_Y, L_KNEE_P, L_ANKLE_P, L_ANKLE_R,
+               R_HIP_P, R_HIP_R, R_HIP_Y, R_KNEE_P, R_ANKLE_P, R_ANKLE_R]
+      targets: [0.0, -1.19, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 1.05, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # rl_walk：FullBodyT70 訓練的全身速度追蹤 policy（graphen_rl_policy/T170VelocityPolicy），
+    # 以 ~/cmd_vel 的 vx、vy、wz 為指令（逾時或沒有指令時原地站立）。
+    # policy 每 20 ms 輸出一次 32 軸絕對目標，閉迴路控制不能被限速：max_steps 設成 10 rad/週期，
+    # 實際上不限制（必須 > 0）。進入前先切到 home。
+    # 目前只在 MuJoCo（use_mujoco:=true mujoco_fixed_base:=false）驗證過，實機的馬達增益與 IMU 姿態
+    # 都還沒有確認，不要在實機上使用
+    rl_walk:
+      type: plugin
+      plugin: graphen_rl_policy/T170VelocityPolicy
+      model_path: /devtest/FullBodyT70/cpp_interface/policy.onnx
+      policy_dt: 0.02     # s，訓練的控制週期
+      name_map: ["NECK_Y1:NECK_Y"]   # policy 名稱:controller 名稱
+      log_period: 2.0     # s，0 表示不 log
+      max_steps: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # left arm
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # right arm
+                  10.0, 10.0, 10.0,                           # waist
+                  10.0, 10.0, 10.0,                           # head
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0,         # left leg
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0]         # right leg
 
     # BVH 轉換：BVH 節點名稱 = URDF link 名稱，姿態以 base_link 為基準（BVH 的浮動基座會被忽略）
     bvh:

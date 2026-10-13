@@ -7,17 +7,28 @@
          state interface：position（rad）、velocity（rad/s）、current（濾波電流）、error_code（馬達錯誤碼），
          後兩者為自訂介面，只出現在 /dynamic_joint_states，不在 /joint_states。
          max_command_velocity：送往馬達的指令最大變化速度（rad/s，0 為不限速），開機走向初始姿態時也受此限制。
-         實機參數由頂層 xacro 傳入，不在這裡給預設路徑，缺少時 Ti5Hardware 會在 on_init 失敗 -->
+         實機參數由頂層 xacro 傳入，不在這裡給預設路徑，缺少時 Ti5Hardware 會在 on_init 失敗。
+         use_mujoco 為 true 時改用 graphen_mujoco/MujocoSystem（MuJoCo 模擬，優先於 use_fake_hardware），
+         同一個 system 另外宣告 imu_sensor（介面與 imu16460 實機相同）；mujoco_model 為 MJCF 路徑，
+         mujoco_viewer_port 為 viewer 的 UDP port（0 為關閉）。position 初始值同樣取自 initial_positions_file -->
     <xacro:macro name="ti5_170a_graphen_ros2_control"
                  params="name initial_positions_file use_fake_hardware
                          can_config_path real_initial_positions_file hw_read_timeout_ms
-                         max_command_velocity">
+                         max_command_velocity
+                         use_mujoco:=false mujoco_model:='' mujoco_viewer_port:=0">
 
         <xacro:property name="initial_positions"
                 value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
 
         <ros2_control name="${name}" type="system">
             <hardware>
+                <xacro:if value="${use_mujoco}">
+                    <plugin>graphen_mujoco/MujocoSystem</plugin>
+                    <param name="model_path">${mujoco_model}</param>
+                    <param name="viewer_port">${mujoco_viewer_port}</param>
+                </xacro:if>
+
+                <xacro:unless value="${use_mujoco}">
                 <xacro:if value="${use_fake_hardware}">
                     <plugin>mock_components/GenericSystem</plugin>
                     <!-- 由 position 指令推算 velocity 狀態；current / error_code 在 mock 中沒有資料（NaN） -->
@@ -30,6 +41,7 @@
                     <param name="hw_read_timeout_ms">${hw_read_timeout_ms}</param>
                     <param name="initial_positions_file">${real_initial_positions_file}</param>
                     <param name="max_command_velocity">${max_command_velocity}</param>
+                </xacro:unless>
                 </xacro:unless>
             </hardware>
             <joint name="L_SHOULDER_P">
@@ -330,6 +342,23 @@
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
             </joint>
+
+            <!-- MuJoCo 模擬的 IMU（imu site 在 BASE_S 的 0 0 0.1，與 imu_link 相同） -->
+            <xacro:if value="${use_mujoco}">
+                <sensor name="imu_sensor">
+                    <state_interface name="orientation.x"/>
+                    <state_interface name="orientation.y"/>
+                    <state_interface name="orientation.z"/>
+                    <state_interface name="orientation.w"/>
+                    <state_interface name="angular_velocity.x"/>
+                    <state_interface name="angular_velocity.y"/>
+                    <state_interface name="angular_velocity.z"/>
+                    <state_interface name="linear_acceleration.x"/>
+                    <state_interface name="linear_acceleration.y"/>
+                    <state_interface name="linear_acceleration.z"/>
+                    <state_interface name="temperature"/>
+                </sensor>
+            </xacro:if>
 
         </ros2_control>
     </xacro:macro>
