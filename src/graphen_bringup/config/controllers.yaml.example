@@ -297,7 +297,7 @@ switch_group_controller:
     rl_walk:
       type: plugin
       plugin: graphen_rl_policy/T170VelocityPolicy
-      model_path: /devtest/FullBodyT70/cpp_interface/policy.onnx
+      model_path: package://graphen_rl_policy/policy/policy.onnx
       policy_dt: 0.02     # s，訓練的控制週期
       name_map: ["NECK_Y1:NECK_Y"]   # policy 名稱:controller 名稱
       log_period: 2.0     # s，0 表示不 log

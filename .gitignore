@@ -10,3 +10,6 @@ log/
 src/graphen_bringup/config/controllers.yaml
 src/graphen_bringup/config/real_initial_positions.yaml
 src/graphen_bt/config/bt_runner.yaml
+
+# ONNX Runtime（約 25 MB）不進版控：從 FullBodyT70/cpp_interface/third_party/onnxruntime 複製
+src/graphen_rl_policy/third_party/onnxruntime/

@@ -1,6 +1,6 @@
 #include <algorithm>
-#include <chrono>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "graphen_locomotion/locomotion_algorithm.hpp"
 #include "onnxruntime_cxx_api.h"
 #include "pluginlib/class_list_macros.hpp"
@@ -33,7 +34,7 @@ using locomotion::RobotState;
 // 機身狀態無效或量測值有 NaN 時不輸出（保持），恢復後繼續。
 //
 // 參數（<mode>.*）：
-//   model_path   policy.onnx 的路徑（必填）
+//   model_path   policy.onnx 的路徑（必填）；可寫 package://<套件>/<相對路徑>
 //   policy_dt    推論間隔（秒，預設為訓練的 kCtrlDt = 0.02）
 //   name_map     policy joint 名稱 → controller joint 名稱，"policy:controller" 形式
 //                （預設 ["NECK_Y1:NECK_Y"]），沒有列出的名稱視為相同
@@ -59,7 +60,7 @@ public:
     const auto name_map = context.params.get_string_array("name_map")
       .value_or(std::vector<std::string>{"NECK_Y1:NECK_Y"});
     map_joints(context.joint_names, name_map);
-    load_model(*model_path);
+    load_model(resolve_path(*model_path));
 
     if (log_) {
       log_(LogLevel::kInfo, "T170VelocityPolicy: loaded '" + *model_path + "', policy_dt " +
@@ -137,6 +138,25 @@ private:
           "') is not a commanded joint");
       }
       index_[i] = static_cast<size_t>(it - joint_names.begin());
+    }
+  }
+
+  // package://<pkg>/<rel> → <pkg 的 share 目錄>/<rel>；其他字串原樣回傳
+  static std::string resolve_path(const std::string & path) {
+    const std::string scheme = "package://";
+    if (path.compare(0, scheme.size(), scheme) != 0) {
+      return path;
+    }
+    const auto rest = path.substr(scheme.size());
+    const auto slash = rest.find('/');
+    if (slash == std::string::npos) {
+      throw std::invalid_argument("'" + path + "' must be package://<package>/<path>");
+    }
+    try {
+      return ament_index_cpp::get_package_share_directory(rest.substr(0, slash)) +
+             rest.substr(slash);
+    } catch (const std::exception & e) {
+      throw std::invalid_argument("cannot resolve '" + path + "': " + e.what());
     }
   }
 
