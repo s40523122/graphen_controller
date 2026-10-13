@@ -11,14 +11,22 @@
 namespace ti5_hardware
 {
 
+namespace
+{
+// 馬達的電流與錯誤碼沒有對應的標準介面，以自訂名稱導出（出現在 /dynamic_joint_states）；
+// 名稱需與 ti5_170a_graphen.ros2_control.xacro 的 <state_interface> 一致
+constexpr char kCurrentInterface[] = "current";
+constexpr char kErrorCodeInterface[] = "error_code";
+}  // namespace
+
 std::vector<hardware_interface::StateInterface> Ti5Hardware::export_state_interfaces() {
     std::vector<hardware_interface::StateInterface> interfaces;
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         const std::string & name = joint_names_[i];
         interfaces.emplace_back(name, hardware_interface::HW_IF_POSITION, &hw_states_[i]);
-        //interfaces.emplace_back(name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_[i]);
-        interfaces.emplace_back(name, hardware_interface::HW_IF_ACCELERATION, &hw_filter_currents_[i]);
-        interfaces.emplace_back(name, hardware_interface::HW_IF_VELOCITY, &hw_error_codes_[i]);
+        interfaces.emplace_back(name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_[i]);
+        interfaces.emplace_back(name, kCurrentInterface, &hw_filter_currents_[i]);
+        interfaces.emplace_back(name, kErrorCodeInterface, &hw_error_codes_[i]);
     }
     return interfaces;
 }
