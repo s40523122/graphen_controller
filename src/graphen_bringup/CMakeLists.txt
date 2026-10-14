@@ -8,4 +8,11 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+# IMU 方向性驗證工具：ros2 run graphen_bringup imu_orientation_check
+install(
+  PROGRAMS scripts/imu_orientation_check.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME imu_orientation_check
+)
+
 ament_package()

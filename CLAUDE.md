@@ -10,7 +10,7 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 - `graphen_locomotion`：外部 locomotion 演算法與機身狀態估測器的 plugin 介面（`LocomotionAlgorithm`、`BaseStateEstimator`、`RobotState`、`JointCommand`、`ParameterSource`），介面 header-only、**不依賴 rclcpp / ros2_control**；內建 plugin（`graphen_locomotion_plugins`）：範例 `graphen_locomotion/SineWaveAlgorithm`、只用 IMU 的估測器 `graphen_locomotion/ImuLeakyEstimator`
 - `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`；`LocomotionPlanner`、`Motion`（`TargetMotion` / `BvhMotion` / `PluginMotion`）是內部元件（不是 plugin）
 - 模式由 YAML 的 `<mode>.type`（`target` / `hold` / `bvh` / `plugin`）決定行為，controller 不寫死任何模式；BVH 動作檔放在 `graphen_bringup/motions/`。`plugin` 模式從 planner 取得量測的關節角度 / 速度、IMU、估測的機身狀態（`base`）與 `~/cmd_vel` 速度指令（`command`）
-- `graphen_bringup`：`config/controllers.yaml`（32 軸 → 6 個子群組）、`config/can_driver_config.json`（T170 實機 CAN 設定）、`motions/`、`launch/bringup.launch.py`
+- `graphen_bringup`：`config/controllers.yaml`（32 軸 → 6 個子群組）、`config/can_driver_config.json`（T170 實機 CAN 設定）、`motions/`、`launch/bringup.launch.py`、`scripts/imu_orientation_check.py`（IMU 方向性引導式驗證，`ros2 run graphen_bringup imu_orientation_check`，只讀取）
 - `graphen_bt_nodes`：BT 節點 plugin，全部在 `register_nodes.cpp` 註冊
 - `graphen_bt`：`bt_runner`、`trees/`、`config/bt_runner.yaml`、`launch/bt.launch.py`
 - `src/imu16460/imu16460_core`：FSS-IMU16460-C 驅動，純 CMake、**程式碼不得 include ROS 標頭**；含 `imu16460_cli` 與 GoogleTest。協議見 [docs/IMU16460.md](docs/IMU16460.md)

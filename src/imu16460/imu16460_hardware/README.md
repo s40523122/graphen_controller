@@ -50,3 +50,5 @@ ros2 topic echo /imu_sensor_broadcaster/imu
 ## 待實機驗證
 
 見 [docs/IMU16460.md §3](../../../docs/IMU16460.md#3-待實機驗證)：坐標系方向（`axis_transform` 預設值）、Euler 順序與正方向、時間戳（broadcaster 用 controller_manager 時間）。程式中以 `// TODO(verify-on-hw):` 標記。
+
+坐標系方向、陀螺正方向與 Euler 定義可以用 `ros2 run graphen_bringup imu_orientation_check` 在機器人上驗證，見 [IMU16460.md §3.1](../../../docs/IMU16460.md#31-方向性驗證工具imu_orientation_check)。
