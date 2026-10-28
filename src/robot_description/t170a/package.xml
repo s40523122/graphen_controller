@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>t170a_description</name>
+  <version>0.0.0</version>
+  <description>
+    T170 A0 model used by the robolab (Isaac Lab) training: URDF, MJCF and meshes.
+    Temporary model for validating the control stack in MuJoCo.
+  </description>
+  <maintainer email="riverji@graphen.ai">jin</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
