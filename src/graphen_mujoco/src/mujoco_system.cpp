@@ -49,12 +49,32 @@ std::string get_param(
   return it == params.end() ? fallback : it->second;
 }
 
-int sensor_adr(const mjModel * model, const char * name, int dim) {
-  const int id = mj_name2id(model, mjOBJ_SENSOR, name);
-  if (id < 0 || model->sensor_dim[id] != dim) {
-    return -1;
+// 依類型找感測器的資料位址：只有一個時直接使用，有多個時取名稱為 preferred 的；找不到回傳 -1
+int sensor_adr(const mjModel * model, mjtSensor type, const char * preferred, int dim) {
+  int found = -1;
+  int count = 0;
+  for (int i = 0; i < model->nsensor; ++i) {
+    if (model->sensor_type[i] != type || model->sensor_dim[i] != dim) {
+      continue;
+    }
+    const char * name = mj_id2name(model, mjOBJ_SENSOR, i);
+    if (name != nullptr && std::strcmp(name, preferred) == 0) {
+      return model->sensor_adr[i];
+    }
+    found = i;
+    ++count;
   }
-  return model->sensor_adr[id];
+  return count == 1 ? model->sensor_adr[found] : -1;
+}
+
+bool parse_bool(const std::string & value) {
+  if (value == "true" || value == "True" || value == "1") {
+    return true;
+  }
+  if (value == "false" || value == "False" || value == "0") {
+    return false;
+  }
+  throw std::invalid_argument(value);
 }
 
 }  // namespace
@@ -84,6 +104,7 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
   }
   try {
     initial_base_height_ = std::stod(get_param(params, "initial_base_height", "0.894"));
+    fixed_base_ = parse_bool(get_param(params, "fixed_base", "false"));
     viewer_port_ = std::stoi(get_param(params, "viewer_port", "0"));
     const double viewer_rate = std::stod(get_param(params, "viewer_rate", "60.0"));
     if (!(viewer_rate > 0.0)) {
@@ -92,9 +113,16 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
     viewer_period_ = 1.0 / viewer_rate;
   } catch (const std::exception &) {
     RCLCPP_ERROR(logger_,
-      "Invalid 'initial_base_height', 'viewer_port' or 'viewer_rate' parameter.");
+      "Invalid 'initial_base_height', 'fixed_base', 'viewer_port' or 'viewer_rate' parameter.");
     return CallbackReturn::ERROR;
   }
+  const std::string missing_joints = get_param(params, "missing_joints", "error");
+  if (missing_joints != "error" && missing_joints != "virtual") {
+    RCLCPP_ERROR(logger_, "'missing_joints' must be 'error' or 'virtual', got '%s'.",
+      missing_joints.c_str());
+    return CallbackReturn::ERROR;
+  }
+  allow_virtual_joints_ = missing_joints == "virtual";
   if (viewer_port_ < 0 || viewer_port_ > 65534) {
     RCLCPP_ERROR(logger_, "'viewer_port' must be in [0, 65534], got %d.", viewer_port_);
     return CallbackReturn::ERROR;
@@ -107,32 +135,21 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
   // joint：依名稱對應模型的 joint 與同名致動器
   joints_.resize(info_.joints.size());
   size_t num_unsupported = 0;
+  std::string virtual_names;
   for (size_t i = 0; i < info_.joints.size(); ++i) {
     const auto & joint_info = info_.joints[i];
     auto & joint = joints_[i];
     if (joint_info.command_interfaces.size() != 1 ||
-      joint_info.command_interfaces[0].name != hardware_interface::HW_IF_POSITION)
+      (joint_info.command_interfaces[0].name != hardware_interface::HW_IF_POSITION &&
+      joint_info.command_interfaces[0].name != hardware_interface::HW_IF_EFFORT))
     {
-      RCLCPP_ERROR(logger_, "Joint '%s' must have exactly one 'position' command interface.",
+      RCLCPP_ERROR(logger_,
+        "Joint '%s' must have exactly one 'position' or 'effort' command interface.",
         joint_info.name.c_str());
       return CallbackReturn::ERROR;
     }
-    const int joint_id = mj_name2id(model_, mjOBJ_JOINT, joint_info.name.c_str());
-    if (joint_id < 0 || (model_->jnt_type[joint_id] != mjJNT_HINGE &&
-      model_->jnt_type[joint_id] != mjJNT_SLIDE))
-    {
-      RCLCPP_ERROR(logger_, "Joint '%s' is not a hinge or slide joint in the MuJoCo model.",
-        joint_info.name.c_str());
-      return CallbackReturn::ERROR;
-    }
-    const int actuator_id = mj_name2id(model_, mjOBJ_ACTUATOR, joint_info.name.c_str());
-    if (actuator_id < 0 || model_->actuator_trntype[actuator_id] != mjTRN_JOINT ||
-      model_->actuator_trnid[2 * actuator_id] != joint_id)
-    {
-      RCLCPP_ERROR(logger_, "No actuator named '%s' driving joint '%s' in the MuJoCo model.",
-        joint_info.name.c_str(), joint_info.name.c_str());
-      return CallbackReturn::ERROR;
-    }
+    joint.effort_mode =
+      joint_info.command_interfaces[0].name == hardware_interface::HW_IF_EFFORT;
     for (const auto & iface : joint_info.state_interfaces) {
       if (iface.name != hardware_interface::HW_IF_POSITION &&
         iface.name != hardware_interface::HW_IF_VELOCITY &&
@@ -140,11 +157,6 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
       {
         ++num_unsupported;
       }
-    }
-    joint.qpos_adr = model_->jnt_qposadr[joint_id];
-    joint.dof_adr = model_->jnt_dofadr[joint_id];
-    joint.actuator = actuator_id;
-    for (const auto & iface : joint_info.state_interfaces) {
       if (iface.name == hardware_interface::HW_IF_POSITION && !iface.initial_value.empty()) {
         try {
           joint.initial_position = std::stod(iface.initial_value);
@@ -155,6 +167,70 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
         }
       }
     }
+
+    const int joint_id = mj_name2id(model_, mjOBJ_JOINT, joint_info.name.c_str());
+    if (joint_id < 0 && allow_virtual_joints_) {
+      joint.virtual_joint = true;
+      virtual_names += (virtual_names.empty() ? "" : ", ") + joint_info.name;
+      continue;
+    }
+    if (joint_id < 0 || (model_->jnt_type[joint_id] != mjJNT_HINGE &&
+      model_->jnt_type[joint_id] != mjJNT_SLIDE))
+    {
+      RCLCPP_ERROR(logger_, "Joint '%s' is not a hinge or slide joint in the MuJoCo model%s.",
+        joint_info.name.c_str(),
+        joint_id < 0 ? " (set missing_joints to 'virtual' to ignore missing joints)" : "");
+      return CallbackReturn::ERROR;
+    }
+    const int actuator_id = mj_name2id(model_, mjOBJ_ACTUATOR, joint_info.name.c_str());
+    if (actuator_id < 0 || model_->actuator_trntype[actuator_id] != mjTRN_JOINT ||
+      model_->actuator_trnid[2 * actuator_id] != joint_id)
+    {
+      RCLCPP_ERROR(logger_, "No actuator named '%s' driving joint '%s' in the MuJoCo model.",
+        joint_info.name.c_str(), joint_info.name.c_str());
+      return CallbackReturn::ERROR;
+    }
+    joint.qpos_adr = model_->jnt_qposadr[joint_id];
+    joint.dof_adr = model_->jnt_dofadr[joint_id];
+    joint.actuator = actuator_id;
+
+    // 致動器類型必須與 command interface 相符
+    const bool fixed_gain = model_->actuator_gaintype[actuator_id] == mjGAIN_FIXED;
+    const bool servo = fixed_gain && model_->actuator_biastype[actuator_id] == mjBIAS_AFFINE;
+    const bool motor = fixed_gain && model_->actuator_biastype[actuator_id] == mjBIAS_NONE;
+    mjtNum * gain = model_->actuator_gainprm + actuator_id * mjNGAIN;
+    mjtNum * bias = model_->actuator_biasprm + actuator_id * mjNBIAS;
+    const mjtNum gear = model_->actuator_gear[actuator_id * 6];
+    if (!joint.effort_mode && !servo) {
+      RCLCPP_ERROR(logger_,
+        "Actuator '%s' is not a position servo (fixed gain, affine bias); motor actuators need "
+        "the 'effort' command interface (mujoco_control_mode:=effort).", joint_info.name.c_str());
+      return CallbackReturn::ERROR;
+    }
+    if (joint.effort_mode) {
+      if (servo) {
+        // 位置伺服改成力矩馬達：ctrl 直接是力矩（forcerange 仍然有效）
+        gain[0] = 1.0;
+        bias[0] = bias[1] = bias[2] = 0.0;
+        model_->actuator_biastype[actuator_id] = mjBIAS_NONE;
+      } else if (!motor) {
+        RCLCPP_ERROR(logger_, "Actuator '%s' must be a motor or a position servo for effort mode.",
+          joint_info.name.c_str());
+        return CallbackReturn::ERROR;
+      }
+      // 力矩 = gear × gain × ctrl，必須為 1 才能直接把 command 當成力矩
+      if (std::abs(gain[0] * gear - 1.0) > 1e-9) {
+        RCLCPP_ERROR(logger_, "Actuator '%s' must have gear × gain = 1 for effort mode, got %f.",
+          joint_info.name.c_str(), gain[0] * gear);
+        return CallbackReturn::ERROR;
+      }
+      has_effort_joints_ = true;
+    }
+  }
+  if (!virtual_names.empty()) {
+    RCLCPP_WARN(logger_,
+      "Joints not in the MuJoCo model are virtual (state fixed at the initial value, commands "
+      "ignored): %s", virtual_names.c_str());
   }
 
   unsupported_states_.assign(num_unsupported, std::numeric_limits<double>::quiet_NaN());
@@ -163,6 +239,7 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
   for (int j = 0; j < model_->njnt; ++j) {
     if (model_->jnt_type[j] == mjJNT_FREE) {
       free_qpos_adr_ = model_->jnt_qposadr[j];
+      free_dof_adr_ = model_->jnt_dofadr[j];
       break;
     }
   }
@@ -183,13 +260,13 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
         return CallbackReturn::ERROR;
       }
     }
-    quat_adr_ = sensor_adr(model_, kQuatSensor, 4);
-    gyro_adr_ = sensor_adr(model_, kGyroSensor, 3);
-    acc_adr_ = sensor_adr(model_, kAccSensor, 3);
+    quat_adr_ = sensor_adr(model_, mjSENS_FRAMEQUAT, kQuatSensor, 4);
+    gyro_adr_ = sensor_adr(model_, mjSENS_GYRO, kGyroSensor, 3);
+    acc_adr_ = sensor_adr(model_, mjSENS_ACCELEROMETER, kAccSensor, 3);
     if (quat_adr_ < 0 || gyro_adr_ < 0 || acc_adr_ < 0) {
       RCLCPP_ERROR(logger_,
-        "Sensor '%s' needs MuJoCo sensors '%s' (framequat), '%s' (gyro) and '%s' "
-        "(accelerometer); re-export the model with tools/export_mjcf.py.",
+        "Sensor '%s' needs exactly one framequat, gyro and accelerometer sensor in the MuJoCo "
+        "model (or ones named '%s', '%s', '%s' when there are several).",
         sensor.name.c_str(), kQuatSensor, kGyroSensor, kAccSensor);
       return CallbackReturn::ERROR;
     }
@@ -199,12 +276,17 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
   if (viewer_port_ > 0 && !open_viewer_socket()) {
     return CallbackReturn::ERROR;
   }
-  viewer_buffer_.resize(1 + static_cast<size_t>(model_->nq));
+  // [time, qpos(nq), actuator_force(nu)]；viewer 依同一份 MJCF 拆解
+  viewer_buffer_.resize(1 + static_cast<size_t>(model_->nq) + static_cast<size_t>(model_->nu));
 
   reset_simulation();
+  if (fixed_base_ && free_qpos_adr_ < 0) {
+    RCLCPP_INFO(logger_, "'fixed_base' has no effect: the model has no free joint.");
+  }
   RCLCPP_INFO(logger_,
-    "Loaded '%s': %zu joints, %s base, IMU %s, timestep %.4f s, viewer port %d.",
-    model_path.c_str(), joints_.size(), free_qpos_adr_ >= 0 ? "floating" : "fixed",
+    "Loaded '%s': %zu joints (%s), %s base, IMU %s, timestep %.4f s, viewer port %d.",
+    model_path.c_str(), joints_.size(), has_effort_joints_ ? "effort" : "position",
+    free_qpos_adr_ < 0 ? "fixed" : (fixed_base_ ? "pinned floating" : "floating"),
     imu_name_.empty() ? "disabled" : imu_name_.c_str(), model_->opt.timestep, viewer_port_);
   return CallbackReturn::SUCCESS;
 }
@@ -256,10 +338,22 @@ void MujocoSystem::reset_simulation() {
     root[6] = 0.0;
   }
   for (auto & joint : joints_) {
+    if (joint.virtual_joint) {
+      joint.command = joint.effort_mode ? std::numeric_limits<double>::quiet_NaN() :
+        joint.initial_position;
+      continue;
+    }
     data_->qpos[joint.qpos_adr] = joint.initial_position;
-    data_->ctrl[joint.actuator] = joint.initial_position;
-    joint.command = joint.initial_position;
+    if (joint.effort_mode) {
+      // 物理暫停到收到新的力矩指令為止
+      data_->ctrl[joint.actuator] = 0.0;
+      joint.command = std::numeric_limits<double>::quiet_NaN();
+    } else {
+      data_->ctrl[joint.actuator] = joint.initial_position;
+      joint.command = joint.initial_position;
+    }
   }
+  commands_ready_ = !has_effort_joints_;
   mj_forward(model_, data_);
   pending_time_ = 0.0;
   last_viewer_send_ = -1.0;
@@ -267,11 +361,29 @@ void MujocoSystem::reset_simulation() {
 }
 
 CallbackReturn MujocoSystem::on_activate(const rclcpp_lifecycle::State & /*previous_state*/) {
-  // 從目前位置開始，避免啟動瞬間跳動
+  // 從目前位置開始，避免啟動瞬間跳動；effort 模式等 controller 寫入力矩（之前物理暫停）
   for (auto & joint : joints_) {
-    joint.command = joint.position;
+    joint.command = joint.effort_mode ? std::numeric_limits<double>::quiet_NaN() : joint.position;
   }
   return CallbackReturn::SUCCESS;
+}
+
+bool MujocoSystem::effort_commands_ready() const {
+  return std::all_of(joints_.begin(), joints_.end(), [](const Joint & joint) {
+             return !joint.effort_mode || joint.virtual_joint || std::isfinite(joint.command);
+           });
+}
+
+void MujocoSystem::pin_base() {
+  double * root = data_->qpos + free_qpos_adr_;
+  root[0] = 0.0;
+  root[1] = 0.0;
+  root[2] = initial_base_height_;
+  root[3] = 1.0;
+  root[4] = 0.0;
+  root[5] = 0.0;
+  root[6] = 0.0;
+  std::fill(data_->qvel + free_dof_adr_, data_->qvel + free_dof_adr_ + 6, 0.0);
 }
 
 std::vector<hardware_interface::StateInterface> MujocoSystem::export_state_interfaces() {
@@ -309,13 +421,21 @@ std::vector<hardware_interface::CommandInterface> MujocoSystem::export_command_i
   std::vector<hardware_interface::CommandInterface> interfaces;
   for (size_t i = 0; i < info_.joints.size(); ++i) {
     interfaces.emplace_back(
-      info_.joints[i].name, hardware_interface::HW_IF_POSITION, &joints_[i].command);
+      info_.joints[i].name,
+      joints_[i].effort_mode ? hardware_interface::HW_IF_EFFORT : hardware_interface::HW_IF_POSITION,
+      &joints_[i].command);
   }
   return interfaces;
 }
 
 void MujocoSystem::copy_states() {
   for (auto & joint : joints_) {
+    if (joint.virtual_joint) {
+      joint.position = joint.initial_position;
+      joint.velocity = 0.0;
+      joint.acceleration = 0.0;
+      continue;
+    }
     joint.position = data_->qpos[joint.qpos_adr];
     joint.velocity = data_->qvel[joint.dof_adr];
     joint.acceleration = data_->qacc[joint.dof_adr];
@@ -346,20 +466,38 @@ return_type MujocoSystem::read(const rclcpp::Time & /*time*/, const rclcpp::Dura
 }
 
 return_type MujocoSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Duration & period) {
+  // effort 模式：所有 joint 都收到第一個有效的力矩之前物理暫停，controller 啟動前不會倒下
+  if (!commands_ready_) {
+    if (!effort_commands_ready()) {
+      return return_type::OK;
+    }
+    commands_ready_ = true;
+    pending_time_ = 0.0;
+    RCLCPP_INFO(logger_, "All effort commands received, simulation running.");
+  }
+
   for (const auto & joint : joints_) {
     // 上層尚未寫入（NaN）時保持上一個 ctrl
-    if (std::isfinite(joint.command)) {
+    if (!joint.virtual_joint && std::isfinite(joint.command)) {
       data_->ctrl[joint.actuator] = joint.command;
     }
   }
 
   pending_time_ += period.seconds();
   const double timestep = model_->opt.timestep;
+  const bool pinned = fixed_base_ && free_qpos_adr_ >= 0;
   int steps = 0;
   while (pending_time_ >= timestep && steps < kMaxStepsPerCycle) {
     mj_step(model_, data_);
+    if (pinned) {
+      pin_base();
+    }
     pending_time_ -= timestep;
     ++steps;
+  }
+  if (pinned && steps > 0) {
+    // 讓感測器（IMU）反映重設後的基座
+    mj_forward(model_, data_);
   }
   if (pending_time_ >= timestep) {
     RCLCPP_WARN_THROTTLE(logger_, throttle_clock_, kWarnThrottleMs,
@@ -377,7 +515,9 @@ return_type MujocoSystem::write(const rclcpp::Time & /*time*/, const rclcpp::Dur
 
 void MujocoSystem::send_viewer_frame() {
   viewer_buffer_[0] = data_->time;
-  std::copy(data_->qpos, data_->qpos + model_->nq, viewer_buffer_.begin() + 1);
+  const auto force_begin =
+    std::copy(data_->qpos, data_->qpos + model_->nq, viewer_buffer_.begin() + 1);
+  std::copy(data_->actuator_force, data_->actuator_force + model_->nu, force_begin);
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
