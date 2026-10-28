@@ -14,14 +14,59 @@ find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 
-# MuJoCo C 函式庫（取自 mujoco 3.11.0 Python wheel 內附的 libmujoco.so 與 headers，aarch64）
-set(MUJOCO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mujoco)
-add_library(mujoco::mujoco SHARED IMPORTED)
-set_target_properties(mujoco::mujoco PROPERTIES
-  IMPORTED_LOCATION ${MUJOCO_DIR}/lib/libmujoco.so.3.11.0
-  IMPORTED_SONAME libmujoco.so.3.11.0
-  INTERFACE_INCLUDE_DIRECTORIES ${MUJOCO_DIR}/include
+# MuJoCo C 函式庫：環境依賴，各機器依自己的架構安裝（x86_64 / aarch64 的 release tarball）。
+# 版本鎖定為 3.11.0：MJCF 由訓練場景以同一版匯出，其他版本的物理結果可能不同
+set(MUJOCO_VERSION 3.11.0)
+set(MUJOCO_VERSION_HEADER 3011000)  # mujoco.h 的 mjVERSION_HEADER
+if(DEFINED ENV{MUJOCO_DIR})
+  set(_mujoco_default_dir $ENV{MUJOCO_DIR})
+else()
+  set(_mujoco_default_dir "")
+endif()
+set(MUJOCO_DIR "${_mujoco_default_dir}" CACHE PATH
+  "MuJoCo ${MUJOCO_VERSION} install directory (include/mujoco/mujoco.h, lib/libmujoco.so)")
+# MUJOCO_DIR 沒有指定時依序找這些位置
+set(_mujoco_search_dirs
+  ${MUJOCO_DIR}
+  $ENV{HOME}/.local/mujoco-${MUJOCO_VERSION}
+  /opt/mujoco-${MUJOCO_VERSION}
 )
+
+# 從原始碼建置安裝的 MuJoCo 附有 CMake 設定檔；release tarball 沒有，改用 find_path / find_library
+find_package(mujoco ${MUJOCO_VERSION} EXACT CONFIG QUIET HINTS ${_mujoco_search_dirs})
+if(NOT TARGET mujoco::mujoco)
+  find_path(MUJOCO_INCLUDE_DIR mujoco/mujoco.h
+    HINTS ${_mujoco_search_dirs} PATH_SUFFIXES include NO_DEFAULT_PATH)
+  find_library(MUJOCO_LIBRARY NAMES mujoco
+    HINTS ${_mujoco_search_dirs} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+  if(NOT MUJOCO_INCLUDE_DIR OR NOT MUJOCO_LIBRARY)
+    string(REPLACE ";" "\n  " _mujoco_searched "${_mujoco_search_dirs}")
+    message(FATAL_ERROR
+      "MuJoCo ${MUJOCO_VERSION} not found. Searched:\n  ${_mujoco_searched}\n"
+      "Download mujoco-${MUJOCO_VERSION}-linux-${CMAKE_SYSTEM_PROCESSOR}.tar.gz from "
+      "https://github.com/google-deepmind/mujoco/releases and extract it to "
+      "~/.local/mujoco-${MUJOCO_VERSION} (or set MUJOCO_DIR).")
+  endif()
+  add_library(mujoco::mujoco SHARED IMPORTED)
+  set_target_properties(mujoco::mujoco PROPERTIES
+    IMPORTED_LOCATION ${MUJOCO_LIBRARY}
+    INTERFACE_INCLUDE_DIRECTORIES ${MUJOCO_INCLUDE_DIR}
+  )
+endif()
+
+# 版本檢查以 header 為準（find_package 的版本檢查只涵蓋有設定檔的安裝）
+get_target_property(_mujoco_include_dirs mujoco::mujoco INTERFACE_INCLUDE_DIRECTORIES)
+find_file(_mujoco_header mujoco/mujoco.h PATHS ${_mujoco_include_dirs} NO_DEFAULT_PATH)
+file(STRINGS ${_mujoco_header} _mujoco_version_line REGEX "^#define mjVERSION_HEADER ")
+string(REGEX REPLACE "^#define mjVERSION_HEADER ([0-9]+).*" "\\1"
+  _mujoco_found_version "${_mujoco_version_line}")
+if(NOT _mujoco_found_version STREQUAL MUJOCO_VERSION_HEADER)
+  message(FATAL_ERROR "MuJoCo at ${_mujoco_header} has mjVERSION_HEADER "
+    "${_mujoco_found_version}, expected ${MUJOCO_VERSION_HEADER} (${MUJOCO_VERSION})")
+endif()
+get_target_property(_mujoco_location mujoco::mujoco LOCATION)
+file(REAL_PATH ${_mujoco_location} MUJOCO_REAL_LIBRARY)
+message(STATUS "Using MuJoCo ${MUJOCO_VERSION}: ${MUJOCO_REAL_LIBRARY}")
 
 add_library(graphen_mujoco_hardware SHARED
   src/mujoco_system.cpp
@@ -47,10 +92,8 @@ install(TARGETS graphen_mujoco_hardware
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-install(FILES
-  ${MUJOCO_DIR}/lib/libmujoco.so.3.11.0
-  DESTINATION lib
-)
+# 以 SONAME 安裝到 plugin 旁邊，執行時由 RPATH 找到，不需要 LD_LIBRARY_PATH
+install(FILES ${MUJOCO_REAL_LIBRARY} DESTINATION lib RENAME libmujoco.so.${MUJOCO_VERSION})
 install(DIRECTORY include/
   DESTINATION include/${PROJECT_NAME}
 )

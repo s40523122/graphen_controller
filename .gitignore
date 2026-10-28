@@ -14,3 +14,6 @@ src/graphen_bt/config/bt_runner.yaml
 
 # ONNX Runtime（約 25 MB）不進版控：依架構準備（Orin 取自 FullBodyT70/cpp_interface，x86_64 用 GitHub release）
 src/graphen_rl_policy/third_party/onnxruntime/
+
+# MuJoCo 為環境依賴（各機器依架構安裝到 ~/.local 或 /opt 的 mujoco-3.11.0，或設定 MUJOCO_DIR），不放進 repo
+src/graphen_mujoco/third_party/
