@@ -10,7 +10,7 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 - `graphen_locomotion`：外部 locomotion 演算法與機身狀態估測器的 plugin 介面（`LocomotionAlgorithm`、`BaseStateEstimator`、`RobotState`、`JointCommand`、`ParameterSource`），介面 header-only、**不依賴 rclcpp / ros2_control**；內建 plugin（`graphen_locomotion_plugins`）：範例 `graphen_locomotion/SineWaveAlgorithm`、只用 IMU 的估測器 `graphen_locomotion/ImuLeakyEstimator`
 - `graphen_controllers`：兩個 controller plugin，plugin 描述檔為 `graphen_controllers.xml`；`LocomotionPlanner`、`Motion`（`TargetMotion` / `BvhMotion` / `PluginMotion`）是內部元件（不是 plugin）
 - 模式由 YAML 的 `<mode>.type`（`target` / `hold` / `bvh` / `plugin`）決定行為，controller 不寫死任何模式；BVH 動作檔放在 `graphen_bringup/motions/`。`plugin` 模式從 planner 取得量測的關節角度 / 速度、IMU、估測的機身狀態（`base`）與 `~/cmd_vel` 速度指令（`command`）
-- `graphen_bringup`：`config/controllers.yaml`（本機檔，與硬體無關的模式與 switch 接線）、`config/hardware/<hardware>.yaml`（各硬體的子群組 type、update_rate；`mujoco_pd_<robot>.yaml` 為依模型的 PD 增益）、`config/imu/*.yaml`、`config/can_driver_config.json`（T170 實機 CAN 設定）、`motions/`、`launch/bringup.launch.py`、`scripts/imu_orientation_check.py`（IMU 方向性引導式驗證，`ros2 run graphen_bringup imu_orientation_check`，只讀取）
+- `graphen_bringup`：`config/controllers.yaml`（本機檔，與硬體無關的模式與 switch 接線）、`config/hardware/<hardware>.yaml`（各硬體的子群組 type、update_rate；`pd_common.yaml` 為 mujoco_pd / real_pd 共用的 PD 接線，`mujoco_pd_<robot>.yaml` 為依模型的 PD 增益，`real_pd.yaml` 為實機 PD 增益）、`config/imu/*.yaml`、`config/can_driver_config.json`（T170 實機 CAN 設定）、`motions/`、`launch/bringup.launch.py`、`scripts/imu_orientation_check.py`（IMU 方向性引導式驗證，`ros2 run graphen_bringup imu_orientation_check`，只讀取）
 - `graphen_bt_nodes`：BT 節點 plugin，全部在 `register_nodes.cpp` 註冊
 - `graphen_bt`：`bt_runner`、`trees/`、`config/bt_runner.yaml`、`launch/bt.launch.py`
 - `src/imu16460/imu16460_core`：FSS-IMU16460-C 驅動，純 CMake、**程式碼不得 include ROS 標頭**；含 `imu16460_cli` 與 GoogleTest。協議見 [docs/IMU16460.md](docs/IMU16460.md)
@@ -21,15 +21,15 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
   - 機器人模型都放在 `src/robot_description/`：
     - `t170a_description`（目錄 `t170a/`）：robolab 訓練用的 T170 A0 模型（URDF、MJCF、mesh；`source/` 為 CAD 匯出原檔），目前用於 MuJoCo 驗證控制架構，質量分布與其他模型不同、不代表實機
   - `ti5_170a_graphen`（`src/robot_description/ti5_170a_graphen`）：robot_description。頂層 xacro 為 `urdf/ti5_170a_graphen.urdf.xacro`，本體 ros2_control 為 `urdf/ti5_170a_graphen.ros2_control.xacro`，joint 分組 SRDF 為 `config/ti5_170a_graphen.srdf`（目前只作參考）
-  - `ti5_hardware`（`ti5_hardware/Ti5Hardware`，CAN）、`can_driver`：T170 關節實機
+  - `ti5_hardware`（`ti5_hardware/Ti5Hardware`，CAN；URDF 的 command interface 為 position 時用位置模式，effort 時用電流模式）、`can_driver`：T170 關節實機
   - `dexterous_hands/`：`dexterous_hand_description`（ros2_control xacro macro）、`dexterous_hand_hardware`（RS485）；MoveIt 設定已移除
 
 ## 建置與執行
 - `colcon build --symlink-install`；只改一個套件時加 `--packages-select <pkg>`
 - 執行前先 `source install/setup.bash`（BT plugin 依賴 LD_LIBRARY_PATH 載入）
 - `ros2 launch graphen_bringup bringup.launch.py`、`ros2 launch graphen_bt bt.launch.py`；MuJoCo 自由站立測 RL policy 用 `ros2 launch graphen_bringup sim_rl.launch.py`（policy 從模擬開始就接手；情境 launch 以 bringup 的 `scenario_params` 疊加覆寫，不改本機 controllers.yaml）
-- 本體以 launch 參數 `hardware`（`mock` 預設 / `mujoco` / `mujoco_pd` / `real`）選擇；launch 依序載入 `controllers.yaml` → `hardware/<hardware>.yaml` →（`mujoco_pd`）`hardware/mujoco_pd_<mujoco_robot>.yaml` →（`mock` / `real`）`imu/*.yaml`，並在 log 印出清單。靈巧手以 `use_hands`（預設 false）啟用，`hardware:=real` 時用實機，其他為 mock
-- IMU（`hardware:=mock` / `real` 時）以 launch 參數 `use_mock_imu`（預設 true）切換 mock / 實機；MuJoCo 時由 MujocoSystem 提供。mock 提供與實機同名的 `imu_sensor/*`（10 通道 + temperature），以 `sensor_forwarder`（`/sensor_forwarder/commands`，10 個值）寫入模擬值；兩者介面名稱必須保持一致。實機設定放在 `config/imu/imu16460.yaml`
+- 本體以 launch 參數 `hardware`（`mock` 預設 / `mujoco` / `mujoco_pd` / `real` / `real_pd`）選擇；`real_pd` 為 Ti5 CAN 電流模式 + `PdController`（見 [docs/TI5_CAN_TORQUE.md](docs/TI5_CAN_TORQUE.md)）。launch 依序載入 `controllers.yaml` →（`mujoco_pd` / `real_pd`）`hardware/pd_common.yaml` → `hardware/<hardware>.yaml` →（`mujoco_pd`）`hardware/mujoco_pd_<mujoco_robot>.yaml` →（`mock` / `real` / `real_pd`）`imu/*.yaml`，並在 log 印出清單。靈巧手以 `use_hands`（預設 false）啟用，`hardware:=real` / `real_pd` 時用實機，其他為 mock
+- IMU（`hardware:=mock` / `real` / `real_pd` 時）以 launch 參數 `use_mock_imu`（預設 true）切換 mock / 實機；MuJoCo 時由 MujocoSystem 提供。mock 提供與實機同名的 `imu_sensor/*`（10 通道 + temperature），以 `sensor_forwarder`（`/sensor_forwarder/commands`，10 個值）寫入模擬值；兩者介面名稱必須保持一致。實機設定放在 `config/imu/imu16460.yaml`
 
 ## 慣例
 - 套件名稱：`graphen_<功能>`
@@ -46,7 +46,7 @@ ROS 2 Humble colcon 工作區，包含兩層：ros2_control 控制層（`SwitchG
 - 待實機驗證的項目以 `// TODO(verify-on-hw):` 標記，不要自行假設為正確；待訓練端確認的 policy 設定（關節順序、obs 組法等）以 `TODO(verify-with-training)` 標記
 
 ## T170 / 靈巧手實機安全
-- **未經使用者同意，不得以 `hardware:=real` 啟動**（會對馬達送出指令）。WSL 開發機沒有 CAN / RS485：實機路徑只驗證 xacro 展開與建置
+- **未經使用者同意，不得以 `hardware:=real` 或 `real_pd` 啟動**（會對馬達送出指令）。WSL 開發機沒有 CAN / RS485：實機路徑只驗證 xacro 展開與建置
 
 ## IMU 實機安全
 - **未經使用者同意，不得對實機送出會改變持久設定的指令**（存 FLASH、改鮑率、改坐標系、重啟）。開發與測試只做讀取；hardware plugin 不送任何命令

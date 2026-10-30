@@ -4,6 +4,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/logging.hpp"
@@ -27,6 +28,8 @@ void JointSafetyControl::setLimitsFromJoints(const std::vector<hardware_interfac
 
     std::vector<LimitPair> position_limits;
     position_limits.reserve(joints_in_order.size());
+    std::vector<double> effort_limits;
+    effort_limits.reserve(joints_in_order.size());
 
     // 解析失敗時回傳 std::nullopt（並印 WARN），讓下一個來源補上
     const auto parse = [&logger](const std::string & joint_name, const char * key, const std::string & text)
@@ -99,9 +102,20 @@ void JointSafetyControl::setLimitsFromJoints(const std::vector<hardware_interfac
         }
 
         position_limits.emplace_back(*min_pos, *max_pos);
+
+        const urdf::JointConstSharedPtr uj = urdf_model.getJoint(joint.name);
+        effort_limits.push_back(uj && uj->limits ? uj->limits->effort : 0.0);
     }
 
     setLimits(position_limits);
+    effort_limits_ = std::move(effort_limits);
+}
+
+double JointSafetyControl::effortLimit(size_t index) const {
+    if (index >= effort_limits_.size()) {
+        throw std::out_of_range("JointSafetyControl::effortLimit index out of range");
+    }
+    return effort_limits_[index];
 }
 
 void JointSafetyControl::getLimit(size_t index, double & min_rad_out, double & max_rad_out) const {

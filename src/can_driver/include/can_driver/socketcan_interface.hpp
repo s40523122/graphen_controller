@@ -1,10 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 
 // Linux CAN header
 #include <linux/can.h>
+#include <sys/time.h>
 
 namespace can_driver
 {
@@ -71,6 +73,14 @@ class SocketCanInterface
         bool receiveFrame(struct can_frame & frame, int timeout_ms);
 
         /**
+        * @brief 阻塞接收一個 frame，timeout 為微秒精度（200 Hz 迴圈內需要小於 1 ms 的等待）
+        * @param frame CAN frame
+        * @param timeout 超時時間，<= 0 代表只檢查目前是否有資料（不等待）
+        * @return true：成功，false：超時或失敗
+        */
+        bool receiveFrame(struct can_frame & frame, std::chrono::microseconds timeout);
+
+        /**
         * @brief 取得通道名稱
         * @return 通道名稱
         */
@@ -87,6 +97,11 @@ class SocketCanInterface
         * @note 有開時是有效 fd，用來送/收 CAN；關掉時被 close 並設成 -1。
         */
         int sock_fd_;
+
+        /**
+        * @brief select 等待後讀取一個 frame；timeout 為 nullptr 代表無限等待
+        */
+        bool waitAndRead(struct can_frame & frame, struct timeval * timeout);
 };
 
 }  // namespace can_driver

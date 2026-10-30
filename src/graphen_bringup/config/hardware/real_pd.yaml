@@ -1,0 +1,43 @@
+# hardware:=real_pd：ti5_hardware/Ti5Hardware 以 CAN 電流模式（0x1C）輸出力矩 + PdController（主機端 200 Hz PD，
+# 與訓練的 IsaacLab DelayedPDActuator 相同：顯式 PD、力矩零階保持 5 ms）。
+# PD 子群組與 switch 接線共用 pd_common.yaml（launch 先載入）。IMU 依 use_mock_imu 另外載入 imu/*.yaml。
+# 預設增益與力矩上限為訓練值（graphen_rl_policy/ref/env.yaml 的 actuators，與 mujoco_pd_t170a.yaml 相同）；
+# Ti5Hardware 另以 URDF <limit effort> 再裁一次。力矩 → 電流用馬達內的 KT 與減速比換算
+# TODO(verify-on-hw): 增益與力矩換算尚未在實機驗證，首次測試請吊掛並降低增益
+
+left_arm_group_controller:
+  ros__parameters:
+    default_kp: [60.0, 60.0, 40.0, 40.0, 20.0, 10.0, 10.0]
+    default_kd: [2.0, 2.0, 1.5, 1.5, 1.0, 0.5, 0.5]
+    effort_limits: [63.0, 63.0, 42.0, 42.0, 23.0, 8.3, 8.3]
+
+right_arm_group_controller:
+  ros__parameters:
+    default_kp: [60.0, 60.0, 40.0, 40.0, 20.0, 10.0, 10.0]
+    default_kd: [2.0, 2.0, 1.5, 1.5, 1.0, 0.5, 0.5]
+    effort_limits: [63.0, 63.0, 42.0, 42.0, 23.0, 8.3, 8.3]
+
+waist_group_controller:
+  ros__parameters:
+    default_kp: [300.0, 300.0, 300.0]
+    default_kd: [6.0, 6.0, 6.0]
+    effort_limits: [63.0, 63.0, 63.0]
+
+# 訓練模型沒有頸部（t170a 為虛擬關節），增益取自 mujoco_pd_t170a.yaml，力矩上限與 URDF 相同
+head_group_controller:
+  ros__parameters:
+    default_kp: [20.0, 20.0, 20.0]
+    default_kd: [1.0, 1.0, 1.0]
+    effort_limits: [8.3, 2.3, 2.3]
+
+left_leg_group_controller:
+  ros__parameters:
+    default_kp: [200.0, 150.0, 150.0, 200.0, 60.0, 30.0]
+    default_kd: [5.0, 4.0, 4.0, 5.0, 2.0, 1.5]
+    effort_limits: [267.0, 63.0, 121.0, 267.0, 63.0, 23.0]
+
+right_leg_group_controller:
+  ros__parameters:
+    default_kp: [200.0, 150.0, 150.0, 200.0, 60.0, 30.0]
+    default_kd: [5.0, 4.0, 4.0, 5.0, 2.0, 1.5]
+    effort_limits: [267.0, 63.0, 121.0, 267.0, 63.0, 23.0]

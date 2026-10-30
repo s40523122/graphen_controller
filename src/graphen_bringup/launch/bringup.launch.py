@@ -26,6 +26,7 @@ def generate_launch_description():
     hardware = LaunchConfiguration('hardware')
     hw_read_timeout_ms = LaunchConfiguration('hw_read_timeout_ms')
     max_command_velocity = LaunchConfiguration('max_command_velocity')
+    max_missed_cycles = LaunchConfiguration('max_missed_cycles')
     use_hands = LaunchConfiguration('use_hands')
     left_hand_port = LaunchConfiguration('left_hand_port')
     right_hand_port = LaunchConfiguration('right_hand_port')
@@ -44,21 +45,27 @@ def generate_launch_description():
     declare_args = [
         DeclareLaunchArgument(
             'hardware', default_value='mock',
-            choices=['mock', 'mujoco', 'mujoco_pd', 'real'],
+            choices=['mock', 'mujoco', 'mujoco_pd', 'real', 'real_pd'],
             description='mock: mock_components/GenericSystem + PositionController; '
                         'mujoco: MuJoCo position actuators + PositionController; '
                         'mujoco_pd: MuJoCo torque actuators + PdController; '
-                        'real: T170 joints via ti5_hardware (CAN) + PositionController'),
+                        'real: T170 joints via ti5_hardware (CAN position mode) + PositionController; '
+                        'real_pd: T170 joints via ti5_hardware (CAN current mode) + PdController'),
         DeclareLaunchArgument(
-            'hw_read_timeout_ms', default_value='20',
-            description='CAN read timeout of ti5_hardware (hardware:=real)'),
+            'hw_read_timeout_ms', default_value='',
+            description='CAN read timeout of ti5_hardware (hardware:=real / real_pd); '
+                        'empty selects 20 for real and 2 for real_pd (must fit in the 5 ms cycle)'),
+        DeclareLaunchArgument(
+            'max_missed_cycles', default_value='2',
+            description='hardware:=real_pd only. Consecutive cycles with missing CAN feedback '
+                        'tolerated before all motors fall back to position hold'),
         DeclareLaunchArgument(
             'max_command_velocity', default_value='0.5',
             description='Max command velocity [rad/s] of ti5_hardware, also limits the move '
                         'to real_initial_positions at startup (0 disables)'),
         DeclareLaunchArgument(
             'use_hands', default_value='false',
-            description='Enable dexterous hands ros2_control (real only with hardware:=real)'),
+            description='Enable dexterous hands ros2_control (real only with hardware:=real / real_pd)'),
         DeclareLaunchArgument(
             'left_hand_port', default_value='/dev/ttyUSB1',
             description='Serial port of the real left hand'),
@@ -70,7 +77,7 @@ def generate_launch_description():
             description='Baudrate of the real hands'),
         DeclareLaunchArgument(
             'use_mock_imu', default_value='true',
-            description='hardware:=mock / real only. true: mock imu_sensor/* written via '
+            description='hardware:=mock / real / real_pd only. true: mock imu_sensor/* written via '
                         'sensor_forwarder; false: real FSS-IMU16460-C via imu16460_hardware'),
         DeclareLaunchArgument(
             'imu_port', default_value='/dev/ttyTHS1',
@@ -128,6 +135,16 @@ def generate_launch_description():
 
     set_mujoco_model = OpaqueFunction(function=resolve_mujoco_model)
 
+    # ti5_hardware 的 CAN 讀取逾時：位置模式（100 Hz）沿用 20 ms；電流模式在 200 Hz 迴圈內讀取，
+    # 必須遠小於 5 ms 的週期。使用者有指定時不覆寫
+    def resolve_hw_read_timeout(context):
+        if hw_read_timeout_ms.perform(context):
+            return []
+        timeout = '2' if hardware.perform(context) == 'real_pd' else '20'
+        return [SetLaunchConfiguration('hw_read_timeout_ms', timeout)]
+
+    set_hw_read_timeout = OpaqueFunction(function=resolve_hw_read_timeout)
+
     robot_description_raw = Command([
         'xacro ', xacro_file,
         ' hardware:=', hardware,
@@ -135,6 +152,7 @@ def generate_launch_description():
         ' real_initial_positions_file:=', real_initial_positions_file,
         ' hw_read_timeout_ms:=', hw_read_timeout_ms,
         ' max_command_velocity:=', max_command_velocity,
+        ' max_missed_cycles:=', max_missed_cycles,
         ' use_hands:=', use_hands,
         ' left_hand_port:=', left_hand_port,
         ' right_hand_port:=', right_hand_port,
@@ -158,12 +176,17 @@ def generate_launch_description():
     )
 
     # 2. Controller Manager
-    #    共用設定 → hardware/<hardware>.yaml →（mujoco_pd）hardware/mujoco_pd_<mujoco_robot>.yaml
-    #    →（mock / real）imu/<mock|imu16460>.yaml →（情境 launch）scenario_params，後載入的覆蓋先載入的。
+    #    共用設定 →（mujoco_pd / real_pd）hardware/pd_common.yaml → hardware/<hardware>.yaml
+    #    →（mujoco_pd）hardware/mujoco_pd_<mujoco_robot>.yaml →（mock / real / real_pd）imu/<mock|imu16460>.yaml
+    #    →（情境 launch）scenario_params，後載入的覆蓋先載入的。
     #    參數檔無法用 condition 切換，所以在 OpaqueFunction 中組合
     def create_controller_manager(context):
         hw = hardware.perform(context)
-        files = [controllers_yaml_file, os.path.join(config_dir, 'hardware', f'{hw}.yaml')]
+        files = [controllers_yaml_file]
+        if hw in ('mujoco_pd', 'real_pd'):
+            # PD 子群組與 switch 的速度前饋 / kp / kd 接線，模擬與實機共用
+            files.append(os.path.join(config_dir, 'hardware', 'pd_common.yaml'))
+        files.append(os.path.join(config_dir, 'hardware', f'{hw}.yaml'))
         if hw == 'mujoco_pd':
             # 預設增益依模型：顯式 PD 的增益要配合模型的慣量，否則會振盪
             files.append(os.path.join(
@@ -257,6 +280,7 @@ def generate_launch_description():
 
     return LaunchDescription(declare_args + [
         set_mujoco_model,  # 必須在使用 robot_description 的 node 之前
+        set_hw_read_timeout,
         node_robot_state_publisher,
         node_controller_manager,
         spawn_joint_state_broadcaster,

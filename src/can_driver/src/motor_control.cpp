@@ -1,5 +1,6 @@
 #include "can_driver/motor_control.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -60,11 +61,18 @@ bool MotorControl::readPositionRad(double & out_rad, int timeout_ms) {
     if (!readPositionCnt(cnt, timeout_ms)) {
         return false;
     }
-
-    double rev_cnts = outputCntsPerRevolution();
-    // cnt -> revolutions -> radians (2*pi per revolution)
-    out_rad = static_cast<double>(cnt) / rev_cnts * 2.0 * M_PI;
+    out_rad = countsToRad(cnt);
     return true;
+}
+
+double MotorControl::countsToRad(int32_t cnt) const {
+    // cnt -> revolutions -> radians (2*pi per revolution)
+    return static_cast<double>(cnt) / outputCntsPerRevolution() * 2.0 * M_PI;
+}
+
+double MotorControl::centiHzToRadPerSec(double speed_centi_hz) const {
+    // 協議的速度一律是電機端 0.01 Hz（0.01 rps），不分單編 / 雙編，輸出端要再除以減速比
+    return speed_centi_hz * 0.01 * 2.0 * M_PI / reduction_ratio_;
 }
 
 bool MotorControl::moveToPositionCnt(int32_t target_cnt) {
@@ -106,16 +114,14 @@ bool MotorControl::readSpeedRad(double & out_rad_per_sec, int timeout_ms) {
         return false;
     }
 
-    // 依照 TI5 協議，假設回傳的 32-bit 整數單位為「encoder counts / second」
+    // 協議 7.1：0x06 回傳電機端速度，單位 0.01 Hz
     int32_t value = static_cast<int32_t>(
         (static_cast<uint32_t>(data[1])      ) |
         (static_cast<uint32_t>(data[2]) << 8 ) |
         (static_cast<uint32_t>(data[3]) << 16) |
         (static_cast<uint32_t>(data[4]) << 24));
 
-    const double rev_cnts = outputCntsPerRevolution();
-    // counts/s -> revolutions/s -> rad/s
-    out_rad_per_sec = static_cast<double>(value) / rev_cnts * 2.0 * M_PI;
+    out_rad_per_sec = centiHzToRadPerSec(static_cast<double>(value));
     return true;
 }
 
@@ -163,6 +169,106 @@ bool MotorControl::readErrorCode(uint32_t & out_error, int timeout_ms) {
 
 bool MotorControl::clearError() {
     return sendOneByte(OneByteCommand::ClearError);
+}
+
+bool MotorControl::readSixByteParam(SixByteCommand cmd, std::array<uint8_t, 4> & out_raw, int timeout_ms) {
+    const uint8_t code = static_cast<uint8_t>(cmd);
+    const uint8_t buf[6] = {code, kSixByteRead, 0, 0, 0, 0};
+    if (!socketCan_.sendFrame(can_id_, buf, 6)) {
+        return false;
+    }
+
+    struct can_frame frame;
+    const bool ok = receiveMatching(frame, timeout_ms, [code](const struct can_frame & f) {
+        return f.can_dlc == 6 && f.data[0] == code && f.data[1] == kSixByteRead;
+    });
+    if (!ok) {
+        return false;
+    }
+    std::memcpy(out_raw.data(), &frame.data[2], out_raw.size());
+    return true;
+}
+
+bool MotorControl::readReductionRatio(int32_t & out_ratio, int timeout_ms) {
+    std::array<uint8_t, 4> raw{};
+    if (!readSixByteParam(SixByteCommand::ReductionRatio, raw, timeout_ms)) {
+        return false;
+    }
+    out_ratio = static_cast<int32_t>(
+        (static_cast<uint32_t>(raw[0])      ) |
+        (static_cast<uint32_t>(raw[1]) << 8 ) |
+        (static_cast<uint32_t>(raw[2]) << 16) |
+        (static_cast<uint32_t>(raw[3]) << 24));
+    return true;
+}
+
+bool MotorControl::readTorqueConstant(float & out_kt, int timeout_ms) {
+    std::array<uint8_t, 4> raw{};
+    if (!readSixByteParam(SixByteCommand::TorqueConstant, raw, timeout_ms)) {
+        return false;
+    }
+    // TODO(verify-on-hw): 協議寫 32 位浮點數、低位在前，假設為 IEEE 754 little-endian
+    static_assert(sizeof(float) == 4, "float must be 32-bit");
+    std::memcpy(&out_kt, raw.data(), sizeof(out_kt));
+    return true;
+}
+
+bool MotorControl::setTargetCurrentMa(int32_t current_ma) {
+    return sendFiveByte(FiveByteCommand::SetTargetCurrent, current_ma);
+}
+
+bool MotorControl::requestFeedback() {
+    return sendOneByte(OneByteCommand::GetFeedback);
+}
+
+bool MotorControl::requestErrorCode() {
+    return sendOneByte(OneByteCommand::GetErrorStatus);
+}
+
+bool MotorControl::parseFeedback(const struct can_frame & frame, MotorFeedback & out) {
+    // 8 位元組回覆沒有指令碼，只能以長度辨識（其他回覆都是 5 或 6 位元組）
+    if (frame.can_dlc != 8) {
+        return false;
+    }
+    const uint8_t * d = frame.data;
+    out.current_ma = static_cast<int16_t>(
+        static_cast<uint16_t>(d[0]) | (static_cast<uint16_t>(d[1]) << 8));
+    out.speed_centi_hz = static_cast<int16_t>(
+        static_cast<uint16_t>(d[2]) | (static_cast<uint16_t>(d[3]) << 8));
+    out.position_cnt = static_cast<int32_t>(
+        (static_cast<uint32_t>(d[4])      ) |
+        (static_cast<uint32_t>(d[5]) << 8 ) |
+        (static_cast<uint32_t>(d[6]) << 16) |
+        (static_cast<uint32_t>(d[7]) << 24));
+    return true;
+}
+
+bool MotorControl::parseErrorCode(const struct can_frame & frame, uint32_t & out_error) {
+    if (frame.can_dlc != 5 || frame.data[0] != static_cast<uint8_t>(OneByteCommand::GetErrorStatus)) {
+        return false;
+    }
+    const uint8_t * d = frame.data;
+    out_error =
+        (static_cast<uint32_t>(d[1])      ) |
+        (static_cast<uint32_t>(d[2]) << 8 ) |
+        (static_cast<uint32_t>(d[3]) << 16) |
+        (static_cast<uint32_t>(d[4]) << 24);
+    return true;
+}
+
+template<typename Accept>
+bool MotorControl::receiveMatching(struct can_frame & frame, int timeout_ms, Accept accept) {
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (true) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(deadline - Clock::now());
+        if (remaining.count() <= 0 || !socketCan_.receiveFrame(frame, remaining)) {
+            return false;
+        }
+        if (frame.can_id == can_id_ && accept(frame)) {
+            return true;
+        }
+    }
 }
 
 double MotorControl::outputCntsPerRevolution() const {

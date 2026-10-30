@@ -14,7 +14,7 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | ROS 2 | Humble |
 | ros2_control / controller_interface | 2.53 |
 | behaviortree_cpp_v3 | 3.8.7 |
-| 機器人 | Ti5 T170（`ti5_170a_graphen`，32 joint）；預設 `mock_components/GenericSystem`，`hardware:=real` 切換為 CAN 實機（`ti5_hardware`） |
+| 機器人 | Ti5 T170（`ti5_170a_graphen`，32 joint）；預設 `mock_components/GenericSystem`，`hardware:=real`（位置模式）/ `real_pd`（電流模式 + 主機端 PD）切換為 CAN 實機（`ti5_hardware`） |
 | 靈巧手 | 預設不啟用，`use_hands:=true` 加入左右手（各 13 joint） |
 | IMU | 預設 mock，`use_mock_imu:=false` 切換為實機 FSS-IMU16460-C |
 | 模擬 | `hardware:=mujoco` / `mujoco_pd` 時本體與 IMU 改由 MuJoCo 模擬（`graphen_mujoco`）；需要另外安裝 MuJoCo 3.11.0，見[MuJoCo 模擬與 RL policy](#mujoco-模擬與-rl-policy) |
@@ -69,15 +69,17 @@ bringup 以 `hardware:=` 選擇硬體（預設 `mock`）。controller 設定分�
 | 檔案（`graphen_bringup/config/`） | 內容 |
 |---|---|
 | `controllers.yaml`（本機檔，範本 `.example`） | 與硬體無關：模式、switch 接線、BVH；本機自訂（例如子群組的 `output_enabled`） |
-| `hardware/<hardware>.yaml` | `update_rate`、6 個子群組的 type（`PositionController` / `PdController`）與介面接線 |
+| `hardware/pd_common.yaml` | （`mujoco_pd` / `real_pd`）`update_rate` 200、`PdController` 子群組與 switch 的速度前饋 / kp / kd 接線 |
+| `hardware/<hardware>.yaml` | `update_rate`、6 個子群組的 type（`PositionController` / `PdController`）與介面接線；`real_pd` 為 PD 預設增益與力矩上限 |
 | `hardware/mujoco_pd_<mujoco_robot>.yaml` | （`mujoco_pd`）依模型的 PD 預設增益與力矩上限 |
-| `imu/mock.yaml` 或 `imu/imu16460.yaml` | （`mock` / `real`）依 `use_mock_imu` 選擇 |
+| `imu/mock.yaml` 或 `imu/imu16460.yaml` | （`mock` / `real` / `real_pd`）依 `use_mock_imu` 選擇 |
 
 | `hardware` | 本體 | IMU |
 |---|---|---|
 | `mock`（預設） | `mock_components/GenericSystem` | 依 `use_mock_imu` |
 | `mujoco` / `mujoco_pd` | MuJoCo（見下方 MuJoCo 段落） | MuJoCo 內建 |
-| `real` | `ti5_hardware`（CAN 實機，會對馬達送出指令） | 依 `use_mock_imu` |
+| `real` | `ti5_hardware`（CAN 實機位置模式，會對馬達送出指令） | 依 `use_mock_imu` |
+| `real_pd` | `ti5_hardware`（CAN 實機電流模式 + `PdController`，**尚未在實機驗證**，見 [TI5_CAN_TORQUE.md](docs/TI5_CAN_TORQUE.md)） | 依 `use_mock_imu` |
 
 launch 會在 log 印出這次載入的參數檔清單（`controller parameter files: ...`）。
 
@@ -199,6 +201,8 @@ ros2 launch graphen_bringup bringup.launch.py hardware:=real
 
 CAN 通道與馬達對應在 [can_driver_config.json](src/graphen_bringup/config/can_driver_config.json)，實機初始位置在 [real_initial_positions.yaml](src/graphen_bringup/config/real_initial_positions.yaml)：開機時有列出的 joint 會以 `max_command_velocity`（預設 0.5 rad/s）限速走到該值，沒列的保持目前位置；之後要等 BT 或 action 下命令才會動。加上 `use_hands:=true` 時靈巧手也會改用實機（`left_hand_port`、`right_hand_port`、`hand_baudrate`）。
 
+`hardware:=real_pd` 改以電流模式輸出力矩，PD 由 `PdController` 在主機端以 200 Hz 計算（與訓練相同）。開機時先以位置模式保持目前姿態，等 controller 寫入力矩後才切換；回饋中斷或指令異常時退回位置保持。**尚未在實機驗證**，流程、單位換算與待驗證項目見 [TI5_CAN_TORQUE.md](docs/TI5_CAN_TORQUE.md)。
+
 ### MuJoCo 模擬與 RL policy
 
 本體和 IMU 改由 MuJoCo 模擬（物理 200 Hz），controller 設定不變。
@@ -261,7 +265,7 @@ ros2 topic pub -r 20 /switch_group_controller/cmd_vel geometry_msgs/msg/Twist "{
   - **同一套訓練設定重新訓練**：放入新的 onnx，更新 `model_path`、`model_sha256`（`sha256sum <onnx>`）與改變的常數，不需要修改程式。
   - **obs / action 組法不同**：要新增 policy plugin（見 [ARCHITECTURE §5](docs/ARCHITECTURE.md#5-擴充指引)）。
 - **ONNX Runtime**：`graphen_rl_policy` 需要 `third_party/onnxruntime`（1.31.0，不進版控）。Orin 使用 aarch64 版（取自 FullBodyT70/cpp_interface），x86_64 開發機使用 GitHub release 的 `onnxruntime-linux-x64-1.31.0.tgz`。
-- **RL policy 只在 MuJoCo 驗證過**，不要在實機上使用（見 [ARCHITECTURE §2.11](docs/ARCHITECTURE.md#211-rl-policy-plugingraphen_rl_policy)）。`mujoco_pd` 只用於模擬，Ti5 實機沒有 effort 介面。
+- **RL policy 只在 MuJoCo 驗證過**，不要在實機上使用（見 [ARCHITECTURE §2.11](docs/ARCHITECTURE.md#211-rl-policy-plugingraphen_rl_policy)）。實機的對應是 `hardware:=real_pd`（尚未驗證）。
 
 ### 實機 IMU（FSS-IMU16460-C）
 

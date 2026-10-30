@@ -42,6 +42,7 @@ class JointSafetyControl {
         * - ros2_control command_interface(position) 的 min/max
         * - ros2_control joint.parameters["min"/"max"]
         * - URDF <joint><limit lower/upper>
+        * 力矩上限只取 URDF <limit effort>（effort 模式才需要，由呼叫端檢查是否 > 0）
         *
         * @param urdf_xml URDF 內容（robot_description，即 HardwareInfo::original_xml）
         * @throws std::runtime_error URDF 解析失敗，或 joint 沒有任何限位來源
@@ -68,6 +69,12 @@ class JointSafetyControl {
         double clamp(size_t index, double command_rad) const;
 
         /**
+        * @brief 第 index 個關節的力矩上限（Nm，URDF <limit effort>；未設定時為 0）
+        * @throws std::out_of_range 當 index >= size()
+        */
+        double effortLimit(size_t index) const;
+
+        /**
         * @brief 已設定的關節數量
         */
         size_t size() const noexcept { return limits_.size(); }
@@ -82,6 +89,11 @@ class JointSafetyControl {
         * @brief 關節位置上下限（弧度），與 joint 順序一致
         */
         std::vector<LimitPair> limits_;
+
+        /**
+        * @brief 關節力矩上限（Nm），與 joint 順序一致
+        */
+        std::vector<double> effort_limits_;
 };
 
 }  // namespace ti5_hardware

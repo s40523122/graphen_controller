@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
     <!-- T170 本體 ros2_control。
-         hardware：mock（mock_components/GenericSystem）、real（ti5_hardware/Ti5Hardware，CAN 實機）、
+         hardware：mock（mock_components/GenericSystem）、real / real_pd（ti5_hardware/Ti5Hardware，CAN 實機）、
          mujoco / mujoco_pd（graphen_mujoco/MujocoSystem，見下）；其他值會讓展開失敗。
          initial_positions_file：mock 的 position 初始值；real_initial_positions_file：Ti5Hardware 使用的初始位置。
          Ti5Hardware 的關節限位取自 robot_description 的 <limit>，超限命令會 clamp 到限位。
@@ -11,26 +11,29 @@
          實機參數由頂層 xacro 傳入，不在這裡給預設路徑，缺少時 Ti5Hardware 會在 on_init 失敗。
          MuJoCo 時同一個 system 另外宣告 imu_sensor（介面與 imu16460 實機相同）；mujoco_model 為 MJCF 路徑，
          mujoco_viewer_port 為 viewer 的 UDP port（0 為關閉）。position 初始值同樣取自 initial_positions_file。
-         hardware:=mujoco_pd 時各 joint 的 command interface 為 effort，子群組使用 graphen_control/PdController
-         （見 graphen_bringup/config/hardware/mujoco_pd.yaml）；其他都是 position -->
+         hardware:=mujoco_pd / real_pd 時各 joint 的 command interface 為 effort，子群組使用 graphen_control/PdController
+         （見 graphen_bringup/config/hardware/pd_common.yaml）；其他都是 position。
+         real_pd 時 Ti5Hardware 以電流模式輸出力矩，另外匯出 effort state（由回饋電流估計），
+         max_missed_cycles：容許連續回饋缺漏的週期數，超過就退回位置保持 -->
     <xacro:macro name="ti5_170a_graphen_ros2_control"
                  params="name initial_positions_file hardware
                          can_config_path real_initial_positions_file hw_read_timeout_ms
-                         max_command_velocity
+                         max_command_velocity max_missed_cycles
                          mujoco_model:='' mujoco_viewer_port:=0
                          mujoco_fixed_base:=false mujoco_missing_joints:=error">
 
         <!-- 不合法的 hardware 直接讓展開失敗，避免默默選到其他硬體 -->
-        <xacro:if value="${hardware not in ['mock', 'mujoco', 'mujoco_pd', 'real']}">
-            ${xacro.fatal("hardware must be one of mock, mujoco, mujoco_pd, real; got '" + hardware + "'")}
+        <xacro:if value="${hardware not in ['mock', 'mujoco', 'mujoco_pd', 'real', 'real_pd']}">
+            ${xacro.fatal("hardware must be one of mock, mujoco, mujoco_pd, real, real_pd; got '" + hardware + "'")}
         </xacro:if>
         <xacro:property name="use_mujoco" value="${hardware in ['mujoco', 'mujoco_pd']}"/>
+        <xacro:property name="use_ti5" value="${hardware in ['real', 'real_pd']}"/>
 
         <xacro:property name="initial_positions"
                 value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
-        <!-- mock 與 Ti5 實機只有 position 指令 -->
+        <!-- PD 模式（mujoco_pd / real_pd）寫力矩，其他寫位置 -->
         <xacro:property name="joint_command_interface"
-                value="${'effort' if hardware == 'mujoco_pd' else 'position'}"/>
+                value="${'effort' if hardware in ['mujoco_pd', 'real_pd'] else 'position'}"/>
 
         <ros2_control name="${name}" type="system">
             <hardware>
@@ -51,12 +54,15 @@
                     <param name="calculate_dynamics">true</param>
                 </xacro:if>
 
-                <xacro:if value="${hardware == 'real'}">
+                <xacro:if value="${use_ti5}">
                     <plugin>ti5_hardware/Ti5Hardware</plugin>
                     <param name="can_config_path">${can_config_path}</param>
                     <param name="hw_read_timeout_ms">${hw_read_timeout_ms}</param>
                     <param name="initial_positions_file">${real_initial_positions_file}</param>
                     <param name="max_command_velocity">${max_command_velocity}</param>
+                    <xacro:if value="${hardware == 'real_pd'}">
+                        <param name="max_missed_cycles">${max_missed_cycles}</param>
+                    </xacro:if>
                 </xacro:if>
                 </xacro:unless>
             </hardware>
@@ -68,6 +74,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_SHOULDER_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -77,6 +86,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_SHOULDER_Y">
                 <command_interface name="${joint_command_interface}"/>
@@ -86,6 +98,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_ELBOW_Y">
                 <command_interface name="${joint_command_interface}"/>
@@ -95,6 +110,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_WRIST_P">
                 <command_interface name="${joint_command_interface}"/>
@@ -104,6 +122,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_WRIST_Y">
                 <command_interface name="${joint_command_interface}"/>
@@ -113,6 +134,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_WRIST_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -122,6 +146,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_SHOULDER_P">
                 <command_interface name="${joint_command_interface}"/>
@@ -131,6 +158,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_SHOULDER_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -140,6 +170,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_SHOULDER_Y">
                 <command_interface name="${joint_command_interface}"/>
@@ -149,6 +182,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_ELBOW_Y">
                 <command_interface name="${joint_command_interface}"/>
@@ -158,6 +194,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_WRIST_P">
                 <command_interface name="${joint_command_interface}"/>
@@ -167,6 +206,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_WRIST_Y">
                 <command_interface name="${joint_command_interface}"/>
@@ -176,6 +218,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_WRIST_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -185,6 +230,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
 
             <!-- Waist -->
@@ -196,6 +244,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="WAIST_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -205,6 +256,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="WAIST_P">
                 <command_interface name="${joint_command_interface}"/>
@@ -214,6 +268,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
 
             <!-- Head -->
@@ -225,6 +282,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="NECK_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -234,6 +294,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="NECK_P">
                 <command_interface name="${joint_command_interface}"/>
@@ -243,6 +306,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
 
             <!-- Left Leg -->
@@ -254,6 +320,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_HIP_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -263,6 +332,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_HIP_Y">
                 <command_interface name="${joint_command_interface}"/>
@@ -272,6 +344,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
 
             <joint name="L_KNEE_P">
@@ -282,6 +357,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_ANKLE_P">
                 <command_interface name="${joint_command_interface}"/>
@@ -291,6 +369,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="L_ANKLE_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -300,6 +381,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
 
             <!-- Right Leg -->
@@ -311,6 +395,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_HIP_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -320,6 +407,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_HIP_Y">
                 <command_interface name="${joint_command_interface}"/>
@@ -329,6 +419,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
 
             <joint name="R_KNEE_P">
@@ -339,6 +432,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_ANKLE_P">
                 <command_interface name="${joint_command_interface}"/>
@@ -348,6 +444,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
             <joint name="R_ANKLE_R">
                 <command_interface name="${joint_command_interface}"/>
@@ -357,6 +456,9 @@
                 <state_interface name="velocity"/>
                 <state_interface name="current"/>
                 <state_interface name="error_code"/>
+                <xacro:if value="${hardware == 'real_pd'}">
+                    <state_interface name="effort"/>
+                </xacro:if>
             </joint>
 
             <!-- MuJoCo 模擬的 IMU（imu site 在 BASE_S 的 0 0 0.1，與 imu_link 相同） -->

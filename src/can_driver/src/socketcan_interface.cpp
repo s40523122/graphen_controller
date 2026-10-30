@@ -1,10 +1,12 @@
 #include "can_driver/socketcan_interface.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 
 #include <net/if.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -99,6 +101,24 @@ bool SocketCanInterface::sendFrame(const struct can_frame & frame) {
 }
 
 bool SocketCanInterface::receiveFrame(struct can_frame & frame, int timeout_ms) {
+    if (timeout_ms < 0) {
+        return waitAndRead(frame, nullptr);
+    }
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    return waitAndRead(frame, &tv);
+}
+
+bool SocketCanInterface::receiveFrame(struct can_frame & frame, std::chrono::microseconds timeout) {
+    const long long us = std::max<long long>(timeout.count(), 0);
+    struct timeval tv;
+    tv.tv_sec = static_cast<time_t>(us / 1000000);
+    tv.tv_usec = static_cast<suseconds_t>(us % 1000000);
+    return waitAndRead(frame, &tv);
+}
+
+bool SocketCanInterface::waitAndRead(struct can_frame & frame, struct timeval * timeout) {
     if (!isOpen()) {
         return false;
     }
@@ -107,16 +127,7 @@ bool SocketCanInterface::receiveFrame(struct can_frame & frame, int timeout_ms) 
     FD_ZERO(&readfds);
     FD_SET(sock_fd_, &readfds);
 
-    struct timeval tv;
-    struct timeval * tv_ptr = nullptr;
-
-    if (timeout_ms >= 0) {
-        tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        tv_ptr = &tv;
-    }
-
-    int ret = ::select(sock_fd_ + 1, &readfds, nullptr, nullptr, tv_ptr);
+    int ret = ::select(sock_fd_ + 1, &readfds, nullptr, nullptr, timeout);
     if (ret < 0) {
         std::perror("SocketCanInterface: select");
         return false;

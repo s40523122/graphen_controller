@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -25,7 +26,8 @@ enum class OneByteCommand : uint8_t {
     GetErrorStatus = 0x0A,
     ClearError = 0x0B,
     SaveToFlash = 0x0E,
-    RestoreFactory = 0x0F
+    RestoreFactory = 0x0F,
+    GetFeedback = 0x41  // 回覆 8 位元組：電流 int16 (mA)、速度 int16 (0.01 Hz，電機端)、位置 int32 (cnt)
 // 如需完整對應，可依文件 7.1 繼續擴充
 };
 
@@ -45,8 +47,26 @@ enum class FiveByteCommand : uint8_t {
     SetMinPosition = 0x27,
     SetCanId = 0x2E,
     SetProfileAccel = 0x3B,
-    SetProfileJerk = 0x3C
+    SetProfileJerk = 0x3C,
+    SetCurrentWithFeedback = 0x42  // 回覆格式同 OneByteCommand::GetFeedback
     // 其餘指令可依需求擴充
+};
+
+/// 對應文件 7.3 的六字節指令（指令碼 + 讀寫旗標 + 4-byte 參數，小端）
+enum class SixByteCommand : uint8_t {
+    ReductionRatio = 0x41,  // int32
+    TorqueConstant = 0x44   // float，電機端 Nm/A
+};
+
+/// 六字節指令的讀寫旗標（第 2 位元組）
+constexpr uint8_t kSixByteWrite = 0x20;
+constexpr uint8_t kSixByteRead = 0x40;
+
+/// 0x41 回覆的原始值（單位為協議單位，換算見 MotorControl）
+struct MotorFeedback {
+    int16_t current_ma{0};
+    int16_t speed_centi_hz{0};
+    int32_t position_cnt{0};
 };
 
 /// TI5 C1 關節模組的高階封裝，對應 PDF 中的 CAN 指令
@@ -170,6 +190,75 @@ class MotorControl
         */
         bool clearError();
 
+        /**
+        * @brief 設定減速比，用於把電機端速度換算成輸出端（0x06 / 0x41 的速度都是電機端）
+        * @param ratio 減速比，須 > 0
+        */
+        void setReductionRatio(double ratio) noexcept { reduction_ratio_ = ratio; }
+
+        /**
+        * @brief 目前使用的減速比
+        */
+        double reductionRatio() const noexcept { return reduction_ratio_; }
+
+        /**
+        * @brief 讀取六字節參數（讀旗標 0x40），回覆的 4-byte 參數原樣輸出
+        * @param cmd 指令
+        * @param out_raw 回覆的參數（小端原始位元組）
+        * @param timeout_ms 超時時間，單位：毫秒
+        * @return true：讀取成功，false：讀取失敗
+        */
+        bool readSixByteParam(SixByteCommand cmd, std::array<uint8_t, 4> & out_raw, int timeout_ms);
+
+        /**
+        * @brief 讀取馬達內設定的減速比（六字節 0x41）
+        */
+        bool readReductionRatio(int32_t & out_ratio, int timeout_ms);
+
+        /**
+        * @brief 讀取馬達內設定的扭矩常數 KT（六字節 0x44，電機端 Nm/A）
+        */
+        bool readTorqueConstant(float & out_kt, int timeout_ms);
+
+        /**
+        * @brief 設定目標電流（五字節 0x1C，mA）；馬達會切換到電流模式，無回覆
+        * @param current_ma 目標電流 (mA)
+        * @return true：發送成功，false：發送失敗
+        */
+        bool setTargetCurrentMa(int32_t current_ma);
+
+        /**
+        * @brief 送出 0x41（取得電流速度位置），不等待回覆；回覆用 parseFeedback 解析
+        */
+        bool requestFeedback();
+
+        /**
+        * @brief 送出 0x0A（取得錯誤碼），不等待回覆；回覆用 parseErrorCode 解析
+        */
+        bool requestErrorCode();
+
+        /**
+        * @brief 解析 0x41 / 0x42 的 8 位元組回覆
+        * @return true：frame 是 8 位元組回覆，false：不是
+        */
+        static bool parseFeedback(const struct can_frame & frame, MotorFeedback & out);
+
+        /**
+        * @brief 解析 0x0A 的 5 位元組回覆
+        * @return true：frame 是錯誤碼回覆，false：不是
+        */
+        static bool parseErrorCode(const struct can_frame & frame, uint32_t & out_error);
+
+        /**
+        * @brief 位置計數 → 輸出端角度（rad）
+        */
+        double countsToRad(int32_t cnt) const;
+
+        /**
+        * @brief 電機端速度（0.01 Hz）→ 輸出端角速度（rad/s）
+        */
+        double centiHzToRadPerSec(double speed_centi_hz) const;
+
     private:
         /**
         * @brief SocketCAN 介面
@@ -187,6 +276,11 @@ class MotorControl
         double counts_per_revolution_;
 
         /**
+        * @brief 減速比（電機端 / 輸出端）；未設定時為 1，速度會是電機端的值
+        */
+        double reduction_ratio_{1.0};
+
+        /**
         * @brief 輸出軸一圈計數 (cpr)
         */
         double outputCntsPerRevolution() const;
@@ -200,6 +294,13 @@ class MotorControl
         * @return true：發送成功，false：發送失敗
         */
         bool sendAndWaitReplyRaw(uint8_t cmd, std::array<uint8_t, 8> & out_data, uint8_t & out_dlc, int timeout_ms);
+
+        /**
+        * @brief 在 timeout 內接收，直到收到本馬達 ID 且 accept 回傳 true 的 frame；其他 frame 丟棄
+        * @return true：收到符合的 frame，false：超時或接收失敗
+        */
+        template<typename Accept>
+        bool receiveMatching(struct can_frame & frame, int timeout_ms, Accept accept);
 };
 
 }  // namespace can_driver

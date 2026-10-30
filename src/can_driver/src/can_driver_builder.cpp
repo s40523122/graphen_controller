@@ -247,5 +247,72 @@ bool CanDriverBuilder::readSpeed(double & out_rad_per_sec, int timeout_ms) {
     return readSpeed(0, out_rad_per_sec, timeout_ms);
 }
 
+void CanDriverBuilder::drainReceived() {
+    if (!socketCan_) {
+        return;
+    }
+    struct can_frame frame;
+    while (socketCan_->receiveFrame(frame, std::chrono::microseconds(0))) {
+    }
+}
+
+bool CanDriverBuilder::requestFeedbackAll(bool poll_error) {
+    pending_error_index_.reset();
+    bool ok = true;
+    for (const auto & m : motors_) {
+        ok = (m && m->requestFeedback()) && ok;
+    }
+    if (poll_error && !motors_.empty()) {
+        const size_t idx = error_poll_index_ % motors_.size();
+        error_poll_index_ = (idx + 1) % motors_.size();
+        if (motors_[idx] && motors_[idx]->requestErrorCode()) {
+            pending_error_index_ = idx;
+        } else {
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+bool CanDriverBuilder::collectFeedbackAll(std::chrono::steady_clock::time_point deadline,
+                                          ChannelFeedback & out) {
+    out.motors.assign(motors_.size(), std::nullopt);
+    out.error.reset();
+    if (!socketCan_) {
+        return false;
+    }
+
+    size_t remaining = motors_.size() + (pending_error_index_ ? 1 : 0);
+    struct can_frame frame;
+    while (remaining > 0) {
+        const auto wait = std::chrono::duration_cast<std::chrono::microseconds>(
+            deadline - std::chrono::steady_clock::now());
+        if (wait.count() <= 0 || !socketCan_->receiveFrame(frame, wait)) {
+            break;
+        }
+        // 馬達 ID 為 can_id_ + 索引；不屬於本通道的 frame 直接丟棄
+        if (frame.can_id < can_id_ || frame.can_id >= can_id_ + motors_.size()) {
+            continue;
+        }
+        const size_t idx = frame.can_id - can_id_;
+
+        MotorFeedback fb;
+        uint32_t error = 0;
+        if (MotorControl::parseFeedback(frame, fb)) {
+            if (!out.motors[idx]) {
+                out.motors[idx] = fb;
+                --remaining;
+            }
+        } else if (pending_error_index_ && *pending_error_index_ == idx &&
+                   MotorControl::parseErrorCode(frame, error)) {
+            out.error = std::make_pair(idx, error);
+            pending_error_index_.reset();
+            --remaining;
+        }
+    }
+    pending_error_index_.reset();
+    return remaining == 0;
+}
+
 }  // namespace can_driver
 

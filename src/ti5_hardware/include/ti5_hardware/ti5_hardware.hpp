@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -90,6 +91,39 @@ class Ti5Hardware : public hardware_interface::SystemInterface
 
     private:
         /**
+        * @brief 指令模式，由 URDF 的 command interface 決定（所有 joint 必須一致）
+        *
+        * kPosition：0x1E 位置模式（hardware:=real）
+        * kEffort：0x1C 電流模式，力矩依 KT 與減速比換算（hardware:=real_pd，PD 在 controller）
+        */
+        enum class ControlMode { kPosition, kEffort };
+
+        /**
+        * @brief 一條 CAN 通道與其馬達對應的 joint（effort 模式批次收發用）
+        */
+        struct ChannelGroup {
+            std::shared_ptr<can_driver::CanDriverBuilder> builder;
+            /// 馬達索引 → joint 索引；沒有對應 joint 的馬達為 kNoJoint
+            std::vector<size_t> joint_of_motor;
+        };
+        static constexpr size_t kNoJoint = std::numeric_limits<size_t>::max();
+
+        hardware_interface::return_type readPositionMode();
+        hardware_interface::return_type writePositionMode(const rclcpp::Duration & period);
+        hardware_interface::return_type readEffortMode();
+        hardware_interface::return_type writeEffortMode();
+
+        /**
+        * @brief 所有馬達切回 0x1E 位置模式，保持在最後量測的位置（effort 模式的故障退回）
+        *
+        * 退回後不再輸出力矩，直到 lifecycle reset（deactivate → activate）。
+        * 不用去使能，避免機器人直接軟倒。
+        */
+        void enterPositionHold(const char * reason);
+
+        ControlMode control_mode_{ControlMode::kPosition};
+
+        /**
         * @brief can config 路徑
         */
         std::string can_config_path_;
@@ -173,6 +207,52 @@ class Ti5Hardware : public hardware_interface::SystemInterface
         * @brief 每個 joint 的錯誤碼
         */
         std::vector<double> hw_error_codes_;
+
+        /**
+        * @brief effort 模式：每個 joint 的力矩命令（Nm，輸出端）；controller 寫入前為 NaN
+        */
+        std::vector<double> hw_effort_commands_;
+
+        /**
+        * @brief effort 模式：由回饋電流估計的輸出端力矩（Nm）= 電流 × KT × 減速比
+        */
+        std::vector<double> hw_efforts_;
+
+        /**
+        * @brief 每個 joint 的馬達扭矩常數（電機端 Nm/A，configure 時從馬達讀取；只有 effort 模式使用）
+        */
+        std::vector<double> torque_constants_;
+
+        /**
+        * @brief 每個 joint 的減速比（configure 時從馬達讀取）
+        */
+        std::vector<double> reduction_ratios_;
+
+        /**
+        * @brief effort 模式的 CAN 通道分組與預先配置的回饋緩衝（read() 不配置記憶體）
+        */
+        std::vector<ChannelGroup> channel_groups_;
+        std::vector<can_driver::ChannelFeedback> channel_feedback_;
+
+        /**
+        * @brief effort 模式：所有 joint 都收到有限的力矩命令後才切到電流模式，之前維持位置保持
+        */
+        bool torque_active_{false};
+
+        /**
+        * @brief effort 模式：已退回位置保持（見 enterPositionHold）
+        */
+        bool position_hold_fallback_{false};
+
+        /**
+        * @brief effort 模式：容許連續回饋缺漏的週期數，超過就退回位置保持
+        */
+        int max_missed_cycles_{0};
+
+        /**
+        * @brief effort 模式：目前連續回饋缺漏的週期數
+        */
+        int missed_cycles_{0};
 
         /**
         * @brief can manager 指標

@@ -99,9 +99,9 @@ graph LR
   mimu -->|"imu_sensor/*"| sw
 ```
 
-- 本體 `UpperBody` 有 32 個 joint（雙臂、腰、頭、雙腿），每個 joint 為 position 指令；狀態為 position、velocity，以及自訂的 `current`（濾波電流）、`error_code`（馬達錯誤碼）。自訂介面不在 `/joint_states`（只有 position / velocity / effort），要從 `/dynamic_joint_states` 或 `~/states` 觀察；mock 中兩者沒有資料（NaN）。32 個 joint 都由 `switch_group_controller` 經 6 個子群組 controller（左臂 7、右臂 7、腰 3、頭 3、左腿 6、右腿 6）驅動，子群組的 type 由 `hardware/<hardware>.yaml` 決定：`hardware:=mujoco_pd` 為 `PdController`（§2.3），其他為 `PositionController`。
-- 本體的 hardware component 由 launch 參數 `hardware` 決定：`mock` 為 `mock_components/GenericSystem`，`mujoco` / `mujoco_pd` 為 `graphen_mujoco/MujocoSystem`（§2.10），`real` 為 `ti5_hardware/Ti5Hardware`（CAN）。實機，參數來自 [can_driver_config.json](../src/graphen_bringup/config/can_driver_config.json) 與 [real_initial_positions.yaml](../src/graphen_bringup/config/real_initial_positions.yaml)。
-- `use_hands:=true` 時另外加入左右手兩個 system（各 13 個 joint，`hardware:=real` 時用實機，其他為 mock），目前沒有 controller 驅動。
+- 本體 `UpperBody` 有 32 個 joint（雙臂、腰、頭、雙腿），每個 joint 為 position 指令；狀態為 position、velocity，以及自訂的 `current`（濾波電流）、`error_code`（馬達錯誤碼）。自訂介面不在 `/joint_states`（只有 position / velocity / effort），要從 `/dynamic_joint_states` 或 `~/states` 觀察；mock 中兩者沒有資料（NaN）。32 個 joint 都由 `switch_group_controller` 經 6 個子群組 controller（左臂 7、右臂 7、腰 3、頭 3、左腿 6、右腿 6）驅動，子群組的 type 由 `hardware/<hardware>.yaml` 決定：`hardware:=mujoco_pd` / `real_pd` 為 `PdController`（§2.3，接線共用 `hardware/pd_common.yaml`），其他為 `PositionController`。`real_pd` 時 joint 的 command 為 effort，另有由回饋電流估計的 `effort` state。
+- 本體的 hardware component 由 launch 參數 `hardware` 決定：`mock` 為 `mock_components/GenericSystem`，`mujoco` / `mujoco_pd` 為 `graphen_mujoco/MujocoSystem`（§2.10），`real` / `real_pd` 為 `ti5_hardware/Ti5Hardware`（CAN；`real` 為位置模式，`real_pd` 為電流模式，模式由 URDF 的 command interface 決定，見 [TI5_CAN_TORQUE.md](TI5_CAN_TORQUE.md)）。實機，參數來自 [can_driver_config.json](../src/graphen_bringup/config/can_driver_config.json) 與 [real_initial_positions.yaml](../src/graphen_bringup/config/real_initial_positions.yaml)。
+- `use_hands:=true` 時另外加入左右手兩個 system（各 13 個 joint，`hardware:=real` / `real_pd` 時用實機，其他為 mock），目前沒有 controller 驅動。
 - joint 分組（left_arm、right_arm、left_hand、right_hand、waist、head）定義在 [ti5_170a_graphen.srdf](../src/robot_description/ti5_170a_graphen/config/ti5_170a_graphen.srdf)，只作為子群組劃分的參考，程式不讀取。
 
 上圖是預設的 mock IMU（`use_mock_imu:=true`）。實機 IMU（`use_mock_imu:=false`）時：
@@ -249,7 +249,7 @@ graph LR
 |---|---|---|
 | `~/references` | control_msgs/DynamicJointState | 發布 |
 
-**PdController**：在 controller 端做關節 PD，寫到硬體的 effort command。目前只用於 MuJoCo（`hardware:=mujoco_pd`），讓 RL policy 以訓練時的增益執行（§2.11）。
+**PdController**：在 controller 端做關節 PD，寫到硬體的 effort command。用於 `hardware:=mujoco_pd`（MuJoCo）與 `real_pd`（Ti5 電流模式，尚未在實機驗證），讓 RL policy 以訓練時的增益執行（§2.11）。
 
 - `τ = kp·(q* − q) + kd·(q̇* − q̇)`，再限制在 `±effort_limits`。`q*` 以 `LinearInterpolator` 插補（與 PositionController 相同），`q`、`q̇` 讀 `<joint>/position`、`<joint>/velocity` state。
 - 導出的 reference：`<joint>`（位置）、`<joint>/velocity`（NaN 時為 0）、`<joint>/kp`、`<joint>/kd`（NaN 或負值時用 `default_kp` / `default_kd`），以及 `sample_period`。上游沒有指定增益的模式（target、bvh、hold）使用預設增益。
@@ -324,27 +324,28 @@ launch argument：
 
 | 參數 | 預設值 | 說明 |
 |---|---|---|
-| `hardware` | `mock` | `mock`（GenericSystem + PositionController）、`mujoco`（MuJoCo 位置伺服 + PositionController）、`mujoco_pd`（MuJoCo 力矩 + PdController）、`real`（`ti5_hardware`，CAN + PositionController） |
+| `hardware` | `mock` | `mock`（GenericSystem + PositionController）、`mujoco`（MuJoCo 位置伺服 + PositionController）、`mujoco_pd`（MuJoCo 力矩 + PdController）、`real`（`ti5_hardware`，CAN 位置模式 + PositionController）、`real_pd`（`ti5_hardware`，CAN 電流模式 + PdController） |
 | `mujoco_robot` | `fb70` | （MuJoCo）`fb70`：`graphen_mujoco/models`；`t170a`：`t170a_description`，只能搭配 `mujoco_pd`，其他組合在 launch 時報錯 |
 | `mujoco_fixed_base` | `true` | （MuJoCo）吊掛：fb70 用 `t170_fixed.xml`，有 free joint 的模型每步重設基座 |
 | `scenario_params` | `""` | 最後疊加的參數檔，給情境 launch 使用（例如 `sim_rl.launch.py`），不改本機 `controllers.yaml` |
 | `mujoco_model` / `mujoco_viewer_port` | `""` / `9870` | （MuJoCo）指定 MJCF 路徑（空的時候依 `mujoco_robot`）/ viewer 的 UDP port |
 | `hw_read_timeout_ms` | `20` | `ti5_hardware` 的 CAN 讀取 timeout |
 | `max_command_velocity` | `0.5` | `ti5_hardware` 送往馬達的指令最大變化速度（rad/s，0 為不限速）；開機走向 `real_initial_positions` 時也受限，應 >= planner 速度 |
-| `use_hands` | `false` | 啟用靈巧手 ros2_control（`hardware:=real` 時用實機，其他為 mock） |
+| `use_hands` | `false` | 啟用靈巧手 ros2_control（`hardware:=real` / `real_pd` 時用實機，其他為 mock） |
 | `left_hand_port` / `right_hand_port` | `/dev/ttyUSB1` / `/dev/ttyUSB0` | 實機靈巧手的 serial port |
 | `hand_baudrate` | `115200` | 實機靈巧手的鮑率 |
-| `use_mock_imu` | `true` | （`mock` / `real`）`true`：mock `imu_sensor/*` + `sensor_forwarder`（[imu/mock.yaml](../src/graphen_bringup/config/imu/mock.yaml)）；`false`：實機 IMU（[imu/imu16460.yaml](../src/graphen_bringup/config/imu/imu16460.yaml)）。MuJoCo 時由 MujocoSystem 提供 |
+| `use_mock_imu` | `true` | （`mock` / `real` / `real_pd`）`true`：mock `imu_sensor/*` + `sensor_forwarder`（[imu/mock.yaml](../src/graphen_bringup/config/imu/mock.yaml)）；`false`：實機 IMU（[imu/imu16460.yaml](../src/graphen_bringup/config/imu/imu16460.yaml)）。MuJoCo 時由 MujocoSystem 提供 |
 | `imu_port` | `/dev/ttyTHS1` | 實機 IMU 的 serial port |
 | `imu_baudrate` | `921600` | 實機 IMU 的鮑率 |
 
 `hardware`、`use_mock_imu` 同時傳給 xacro（選擇 hardware component 與 sensor 區塊）和 controller_manager 的參數檔組合；`use_hands` 只傳給 xacro。ROS 參數檔無法以 condition 切換，所以 controller_manager 在 `OpaqueFunction` 中建立，依序載入：
 
 1. `controllers.yaml`（本機檔）：與硬體無關的模式、switch 接線、子群組的 `output_enabled` 等
-2. `hardware/<hardware>.yaml`：`update_rate`、6 個子群組的 type 與介面接線（`mujoco_pd` 另含 switch 的 `velocity/kp/kd_command_interfaces`）
-3. `hardware/mujoco_pd_<mujoco_robot>.yaml`（只在 `mujoco_pd`）：依模型的 PD 預設增益與力矩上限
-4. `imu/mock.yaml` 或 `imu/imu16460.yaml`（只在 `mock` / `real`）
-5. `scenario_params`（情境 launch 指定時）
+2. `hardware/pd_common.yaml`（只在 `mujoco_pd` / `real_pd`）：`update_rate` 200、6 個 `PdController` 子群組的 `joints`，以及 switch 的 `velocity/kp/kd_command_interfaces`
+3. `hardware/<hardware>.yaml`：`update_rate`、6 個子群組的 type 與介面接線（PD 模式下只放硬體專屬項目：`mujoco_pd` 為 MuJoCo IMU，`real_pd` 為 PD 預設增益與力矩上限）
+4. `hardware/mujoco_pd_<mujoco_robot>.yaml`（只在 `mujoco_pd`）：依模型的 PD 預設增益與力矩上限
+5. `imu/mock.yaml` 或 `imu/imu16460.yaml`（只在 `mock` / `real` / `real_pd`）
+6. `scenario_params`（情境 launch 指定時）
 
 後載入的覆蓋先載入的，所以 profile 一定會蓋掉本機檔中殘留的硬體設定。launch 會以 `LogInfo` 印出這次的參數檔清單。xacro 收到不合法的 `hardware` 時展開失敗。
 
@@ -680,7 +681,7 @@ IfThenElse "WalkEnabled"
 | D17 | BVH 轉換放在獨立的 `graphen_motion`（不依賴 rclcpp），提供 `bvh_retarget_cli` | 轉換與 ros2_control 無關，可以離線檢查新的 BVH、決定 max_steps，也能在其他程式重用 |
 | D21 | RL policy 採「onnx 綁定 plugin」：每個 policy 家族一個 `PolicyRunner` 子類，訓練常數放 YAML，以 `model_sha256` 綁定 onnx；不要求 onnx 帶 metadata | obs 組法與 action 換算是 policy 的一部分，onnx 本身只是數字到數字的函數。各訓練框架匯出的格式不同，不強制 metadata 才能接入任何來源的 policy；組法寫在 plugin、常數寫在 YAML，同家族重新訓練不用重新建置。sha 檢查避免「維度相同但設定不同」的 onnx 被靜靜載入 |
 | D23 | MuJoCo 改為環境依賴（版本鎖定 3.11.0，`MUJOCO_DIR` 或 `~/.local` / `/opt` 的 `mujoco-3.11.0`），不再把 libmujoco 放進 repo | MujocoSystem 只用 C API，原始碼跨平台，只有二進位和架構有關；內附單一架構的 `.so` 會讓其他架構的機器（x86_64 開發機）無法連結。代價是每台機器（含 Orin 容器）要多一個安裝步驟 |
-| D24 | 硬體以單一 `hardware:=`（mock / mujoco / mujoco_pd / real）選擇，模擬模型另以 `mujoco_robot` 選擇；controller 設定分成共用的 `controllers.yaml` 與 `hardware/`、`imu/` 下的 profile 檔 | 原本由 `use_mock_hardware`、`use_mujoco`、`mujoco_control_mode` 等布林參數組合，優先順序與合法組合要靠記憶，子群組的 type 與增益經多層 overlay 覆蓋，看不出最後生效的設定（t170a 振盪就是 fb70 的增益沒被覆蓋到）。改成 profile 後，每種硬體的 controller 設定集中在一個檔案，增益依模型分檔；實機必須明確寫 `hardware:=real`。不保留舊參數（目前只有一位使用者） |
+| D24 | 硬體以單一 `hardware:=`（mock / mujoco / mujoco_pd / real / real_pd）選擇，模擬模型另以 `mujoco_robot` 選擇；controller 設定分成共用的 `controllers.yaml` 與 `hardware/`、`imu/` 下的 profile 檔 | 原本由 `use_mock_hardware`、`use_mujoco`、`mujoco_control_mode` 等布林參數組合，優先順序與合法組合要靠記憶，子群組的 type 與增益經多層 overlay 覆蓋，看不出最後生效的設定（t170a 振盪就是 fb70 的增益沒被覆蓋到）。改成 profile 後，每種硬體的 controller 設定集中在一個檔案，增益依模型分檔；實機必須明確寫 `hardware:=real`。不保留舊參數（目前只有一位使用者） |
 | D22 | 子群組分成 `PositionController`（原 `SubGroupController`）與 `PdController`，kp / kd 經 `JointCommand` 由模式指定 | RL policy 的訓練假設是「關節 PD 以特定增益追目標」，增益因 policy 而異；Ti5 協議沒有 kp/kd，只能在 controller 端做 PD 輸出力矩。兩者導出相同名稱的位置 reference，上游接線不變。目前只在 MuJoCo 使用，實機待驗證電流模式與迴圈頻率 |
 
 ---
@@ -699,7 +700,7 @@ IfThenElse "WalkEnabled"
 1. 在 URDF 的 `<ros2_control>` 中新增 joint 和 interface。
 2. 在每個 `hardware/*.yaml` 加上新 controller 的 type 與接線：
    - `mock`、`mujoco`、`real`：`type: graphen_control/PositionController`，`input_interfaces` 用 joint 名稱，`output_interfaces` 為 `<joint>/position`（兩者 1:1）。
-   - `mujoco_pd`：`type: graphen_control/PdController`、`joints`，並在 switch 的 `velocity/kp/kd_command_interfaces` 加上 `<新 controller>/<joint>/velocity|kp|kd`；每個 `mujoco_pd_<robot>.yaml` 加上 `default_kp`、`default_kd`、`effort_limits`。
+   - `mujoco_pd` / `real_pd`：在 `pd_common.yaml` 加上 `type: graphen_control/PdController`、`joints`，並在 switch 的 `velocity/kp/kd_command_interfaces` 加上 `<新 controller>/<joint>/velocity|kp|kd`；每個 `mujoco_pd_<robot>.yaml` 與 `real_pd.yaml` 加上 `default_kp`、`default_kd`、`effort_limits`。
    - 與硬體無關的參數（`reference_publish_rate`、`output_enabled`）寫在 `controllers.yaml`（與範本）。
 3. 在 `switch_group_controller` 的 `command_interfaces` 加上 `<新 controller>/<joint>`，`sample_period_interfaces` 加上 `<新 controller>/sample_period`，`target_state_interfaces`、`state_interfaces` 加上 `<joint>/position`，`planner_max_steps` 與各模式的 `max_steps` / `approach_max_steps` 各加一個值。target 模式只列出要動的 joint，不需要修改。
 4. 在 launch 的 `sub_group_controllers` 清單加上新 controller，它會自動串進啟動鏈。
@@ -753,7 +754,7 @@ IfThenElse "WalkEnabled"
   - `write()` 先把 `hw_commands_` clamp 到關節限位，再以 `max_command_velocity` 限速逼近。限位依序取自 ros2_control `<command_interface name="position">` 的 `min`/`max`、joint 的 `<param name="min/max">`、robot_description 的 `<limit>`（目前只用最後一項）；開始 / 結束 clamp 時各印一次 log。
   - 命令為 NaN / inf 時無法 clamp，`read()` / `write()` 改為回傳 ERROR，直到重新 activate。
   - 原本 activate 時的 encoder 讀取被註解掉，需實機確認此時讀取是否可靠（`TODO(verify-on-hw)`）。
-- **T170 實機尚未在本架構下驗證**：`hardware:=real`、`use_hands:=true` + 實機只做過 xacro 展開檢查；限位 clamp 的行為只做過建置檢查；IMU 在 T170 上的安裝位置待確認（`TODO(verify-on-hw)`）。
+- **T170 實機尚未在本架構下驗證**：`hardware:=real`、`real_pd`、`use_hands:=true` + 實機只做過 xacro 展開與建置檢查（`real_pd` 的待驗證項目見 [TI5_CAN_TORQUE.md](TI5_CAN_TORQUE.md)）；限位 clamp 的行為只做過建置檢查；IMU 在 T170 上的安裝位置待確認（`TODO(verify-on-hw)`）。
 - **RateControl 的並行存取**：worker thread 和主樹會並行存取 child 和 blackboard（沿用原型設計）。因此 `sys_count` 可能略微超過 target（實測約 3006）。若要嚴格同步，需要重新設計。
 - **CheckSysCount 的 target（3000）寫死在 tree XML**：可以考慮改成 blackboard 變數。
 - **Groot 只支援 v1**：要改用 Groot2 必須升級到 BT.CPP v4。

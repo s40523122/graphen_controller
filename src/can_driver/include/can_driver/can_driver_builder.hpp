@@ -1,7 +1,9 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -10,6 +12,14 @@
 
 namespace can_driver
 {
+
+/// 一次批次收發的結果（requestFeedbackAll → collectFeedbackAll）
+struct ChannelFeedback {
+    /// 與馬達索引同序；沒收到回覆的為 std::nullopt
+    std::vector<std::optional<MotorFeedback>> motors;
+    /// 本輪輪詢到的錯誤碼（馬達索引, 錯誤碼）；本輪沒輪詢或沒收到時為 std::nullopt
+    std::optional<std::pair<size_t, uint32_t>> error;
+};
 
 class CanDriverBuilder {
     public:
@@ -159,6 +169,29 @@ class CanDriverBuilder {
         */
         bool readSpeed(double & out_rad_per_sec, int timeout_ms);
 
+        /**
+        * @brief 丟棄 socket 中尚未讀取的 frame（上一輪逾時後才到的回覆），避免與本輪混淆
+        */
+        void drainReceived();
+
+        /**
+        * @brief 對本通道所有馬達送出 0x41（取得電流速度位置），不等待回覆
+        *
+        * 輪詢錯誤碼時另外對一顆馬達送出 0x0A，每次呼叫輪到下一顆（round-robin），
+        * 讓錯誤碼不必每週期查詢所有馬達。
+        * @param poll_error 是否輪詢錯誤碼
+        * @return true：全部送出成功，false 任一送出失敗
+        */
+        bool requestFeedbackAll(bool poll_error);
+
+        /**
+        * @brief 收集 requestFeedbackAll 的回覆，直到全部收到或到達 deadline
+        * @param deadline 截止時間（多個通道共用同一個 deadline，讓各通道的等待重疊）
+        * @param out 結果；out.motors 會被重設為 dof() 個元素
+        * @return true：全部回覆都收到，false：有回覆缺漏
+        */
+        bool collectFeedbackAll(std::chrono::steady_clock::time_point deadline, ChannelFeedback & out);
+
     private:
         /**
         * @brief config 檔案路徑
@@ -218,6 +251,16 @@ class CanDriverBuilder {
         * @brief 此通道上的馬達控制物件（dof_ 顆），ID 為 can_id_+0, can_id_+1, ...
         */
         std::vector<std::shared_ptr<MotorControl>> motors_;
+
+        /**
+        * @brief 下一次輪詢錯誤碼的馬達索引
+        */
+        size_t error_poll_index_{0};
+
+        /**
+        * @brief 本輪正在等待回覆的錯誤碼馬達索引
+        */
+        std::optional<size_t> pending_error_index_;
     };
 }  // namespace can_driver
 
