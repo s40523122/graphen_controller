@@ -70,9 +70,9 @@ graph LR
 | 項目 | 慣例 | 範例 |
 |---|---|---|
 | 套件 | `graphen_<功能>` | `graphen_controllers` |
-| C++ namespace | 控制層 `graphen::control`、行為層 `graphen::bt` | `graphen::control::SubGroupController` |
+| C++ namespace | 控制層 `graphen::control`、行為層 `graphen::bt` | `graphen::control::PositionController` |
 | controller plugin 名稱 | `graphen_control/<Class>` | `graphen_control/SwitchGroupController` |
-| header 路徑 | `include/<pkg>/<file>.hpp` | `graphen_controllers/sub_group_controller.hpp` |
+| header 路徑 | `include/<pkg>/<file>.hpp` | `graphen_controllers/switch_group_controller.hpp` |
 | include guard | `<PKG>__<FILE>_HPP_` | `GRAPHEN_CONTROLLERS__SUB_GROUP_CONTROLLER_HPP_` |
 
 例外：IMU 驅動是可重用的裝置驅動，不綁定 graphen，使用自己的名稱（套件 `imu16460_core` / `imu16460_hardware`，namespace `imu16460` / `imu16460_hardware`，plugin `imu16460_hardware/Imu16460SensorInterface`），見 D11。
@@ -91,7 +91,7 @@ graph LR
   algo[/外部演算法 plugin<br/>LocomotionAlgorithm/] -.->|on_configure 載入| planner
   bvh[/BVH 檔 + robot_description/] -.->|on_configure 解析| planner
   sw -->|"~/states"| bt
-  sw -->|"&lt;group&gt;_group_controller/&lt;joint&gt;（32 個）<br/>+ &lt;group&gt;_group_controller/sample_period"| subs[6 個 SubGroupController<br/>left/right_arm、waist、head、left/right_leg]
+  sw -->|"&lt;group&gt;_group_controller/&lt;joint&gt;（32 個）<br/>+ &lt;group&gt;_group_controller/sample_period"| subs[6 個子群組 controller<br/>PositionController（或 PdController）<br/>left/right_arm、waist、head、left/right_leg]
   subs -->|"&lt;joint&gt;/position（32 個）"| hw[(T170 本體 UpperBody<br/>mock 或 Ti5Hardware)]
   hw -->|state interfaces| sw
   hw --> jsb[joint_state_broadcaster]
@@ -99,10 +99,10 @@ graph LR
   mimu -->|"imu_sensor/*"| sw
 ```
 
-- 本體 `UpperBody` 有 32 個 joint（雙臂、腰、頭、雙腿），每個 joint 為 position 指令；狀態為 position、velocity，以及自訂的 `current`（濾波電流）、`error_code`（馬達錯誤碼）。自訂介面不在 `/joint_states`（只有 position / velocity / effort），要從 `/dynamic_joint_states` 或 `~/states` 觀察；mock 中兩者沒有資料（NaN）。32 個 joint 都由 `switch_group_controller` 經 6 個 `SubGroupController`（左臂 7、右臂 7、腰 3、頭 3、左腿 6、右腿 6）驅動。
-- `use_mock_hardware:=false` 時本體改為 `ti5_hardware/Ti5Hardware`（CAN），參數來自 [can_driver_config.json](../src/graphen_bringup/config/can_driver_config.json) 與 [real_initial_positions.yaml](../src/graphen_bringup/config/real_initial_positions.yaml)。
-- `use_hands:=true` 時另外加入左右手兩個 system（各 13 個 joint，mock / 實機跟隨 `use_mock_hardware`），目前沒有 controller 驅動。
-- joint 分組（left_arm、right_arm、left_hand、right_hand、waist、head）定義在 [ti5_170a_graphen.srdf](../src/ti5_170a_graphen/config/ti5_170a_graphen.srdf)，只作為子群組劃分的參考，程式不讀取。
+- 本體 `UpperBody` 有 32 個 joint（雙臂、腰、頭、雙腿），每個 joint 為 position 指令；狀態為 position、velocity，以及自訂的 `current`（濾波電流）、`error_code`（馬達錯誤碼）。自訂介面不在 `/joint_states`（只有 position / velocity / effort），要從 `/dynamic_joint_states` 或 `~/states` 觀察；mock 中兩者沒有資料（NaN）。32 個 joint 都由 `switch_group_controller` 經 6 個子群組 controller（左臂 7、右臂 7、腰 3、頭 3、左腿 6、右腿 6）驅動，子群組的 type 由 `hardware/<hardware>.yaml` 決定：`hardware:=mujoco_pd` 為 `PdController`（§2.3），其他為 `PositionController`。
+- 本體的 hardware component 由 launch 參數 `hardware` 決定：`mock` 為 `mock_components/GenericSystem`，`mujoco` / `mujoco_pd` 為 `graphen_mujoco/MujocoSystem`（§2.10），`real` 為 `ti5_hardware/Ti5Hardware`（CAN）。實機，參數來自 [can_driver_config.json](../src/graphen_bringup/config/can_driver_config.json) 與 [real_initial_positions.yaml](../src/graphen_bringup/config/real_initial_positions.yaml)。
+- `use_hands:=true` 時另外加入左右手兩個 system（各 13 個 joint，`hardware:=real` 時用實機，其他為 mock），目前沒有 controller 驅動。
+- joint 分組（left_arm、right_arm、left_hand、right_hand、waist、head）定義在 [ti5_170a_graphen.srdf](../src/robot_description/ti5_170a_graphen/config/ti5_170a_graphen.srdf)，只作為子群組劃分的參考，程式不讀取。
 
 上圖是預設的 mock IMU（`use_mock_imu:=true`）。實機 IMU（`use_mock_imu:=false`）時：
 
@@ -117,7 +117,7 @@ graph LR
 - 不建立 `MockImu`，`sensor_forwarder` 不啟動；改為獨立的 sensor 硬體元件 `imu16460`，與本體由同一個 controller_manager 管理。
 - mock 與實機 IMU 的 interface 名稱相同（`imu_sensor/orientation.x` … `linear_acceleration.z`、`temperature`），`switch_group_controller` 的設定不需要隨 `use_mock_imu` 改變。
 
-- `SwitchGroupController` 不直接操作硬體，而是寫入下層 `SubGroupController` 導出的 **reference interface**（ros2_control chaining）。除了位置，還會寫入目前 Motion 的輸出點間隔 `sample_period`，下層依此在 RT 迴圈中插補（BVH 依檔案頻率送出原始幀，插補在子群組進行）。
+- `SwitchGroupController` 不直接操作硬體，而是寫入下層子群組 controller 導出的 **reference interface**（ros2_control chaining）。除了位置，還會寫入目前 Motion 的輸出點間隔 `sample_period`，下層依此在 RT 迴圈中插補（BVH 依檔案頻率送出原始幀，插補在子群組進行）。下層為 `PdController` 時，另外寫入速度前饋與 kp / kd。
 - `sensor_forwarder` 用來模擬 IMU 資料：`MockImu` 開啟了 `mock_sensor_commands`，所以可以透過 `/sensor_forwarder/commands`（10 個值，依序為 orientation.xyzw、angular_velocity.xyz、linear_acceleration.xyz）寫入 `imu_sensor/*`。初始值為靜止水平（`orientation.w` = 1、`linear_acceleration.z` = 9.81）。`MockImu` 獨立於本體，本體改用實機時 mock IMU 仍可單獨使用。
 
 ### 2.2 SwitchGroupController
@@ -178,7 +178,9 @@ graph LR
 | 參數 | 型別 | 預設值 | 說明 |
 |---|---|---|---|
 | `command_interfaces` | string[] | `[]`（必填） | 下層 reference interface，順序對應 `target_state_interfaces`、各 max_steps |
-| `sample_period_interfaces` | string[] | `[]` | 下層的 `<sub>/sample_period`，每週期寫入目前 Motion 的輸出點間隔；只是接線設定，與 BVH 無關。不可重複，不可與 `command_interfaces` 重複 |
+| `sample_period_interfaces` | string[] | `[]` | 下層的 `<sub>/sample_period`，每週期寫入目前 Motion 的輸出點間隔；只是接線設定，與 BVH 無關 |
+| `velocity_command_interfaces` | string[] | `[]` | 空的或與 `command_interfaces` 一一對應的下層速度前饋 reference（例如 `left_leg_group_controller/L_HIP_P/velocity`），下層為 `PdController` 時設定；寫入 `JointCommand::velocities`（NaN 表示沒有） |
+| `kp_command_interfaces` / `kd_command_interfaces` | string[] | `[]` | 同上，下層的 `<joint>/kp`、`<joint>/kd`；寫入 `JointCommand::kp` / `kd`（NaN 表示使用下層的預設增益）。所有 claim 的介面不可重複 |
 | `state_interfaces` | string[] | `[]` | 要讀取並發布的 state interface |
 | `sensor` | string | `""` | （選填）sensor state interface |
 | `state_publish_rate` | double | 50.0 | `~/states` 的發布頻率（Hz） |
@@ -213,10 +215,14 @@ graph LR
 | `~/switch_mode` | graphen_interfaces/action/SwitchMode | action server |
 | `~/states` | control_msgs/DynamicJointState | 發布 |
 
-### 2.3 SubGroupController
+### 2.3 子群組 controller：PositionController / PdController
 
-原始碼：[sub_group_controller.hpp](../src/graphen_controllers/include/graphen_controllers/sub_group_controller.hpp) / [.cpp](../src/graphen_controllers/src/sub_group_controller.cpp)
-類型：`controller_interface::ChainableControllerInterface`
+原始碼：[sub_group_controller/](../src/graphen_controllers/include/graphen_controllers/sub_group_controller/)（[position_controller.cpp](../src/graphen_controllers/src/sub_group_controller/position_controller.cpp)、[pd_controller.cpp](../src/graphen_controllers/src/sub_group_controller/pd_controller.cpp)）
+類型：`controller_interface::ChainableControllerInterface`，plugin 名稱 `graphen_control/PositionController`、`graphen_control/PdController`
+
+兩者導出的位置 reference 名稱相同（`<controller 名稱>/<joint>`），`SwitchGroupController` 的 `command_interfaces` 不需要隨下層改變。共用的插補在 [linear_interpolator.hpp](../src/graphen_controllers/include/graphen_controllers/sub_group_controller/linear_interpolator.hpp)（`LinearInterpolator`）。
+
+**PositionController**（原 `SubGroupController`，行為不變）：把位置 reference 插補後寫到硬體的 position command。
 
 - 依 `input_interfaces` 導出 reference interface，全名為 `<controller 名稱>/<input>`，例如 `left_arm_group_controller/L_SHOULDER_P`（input 使用 joint 名稱）。實際的儲存空間是基類的 `reference_interfaces_`。
 - **只支援 chained 模式**：沒有 topic 訂閱，`update_reference_from_subscribers()` 是空實作。
@@ -243,6 +249,23 @@ graph LR
 |---|---|---|
 | `~/references` | control_msgs/DynamicJointState | 發布 |
 
+**PdController**：在 controller 端做關節 PD，寫到硬體的 effort command。目前只用於 MuJoCo（`hardware:=mujoco_pd`），讓 RL policy 以訓練時的增益執行（§2.11）。
+
+- `τ = kp·(q* − q) + kd·(q̇* − q̇)`，再限制在 `±effort_limits`。`q*` 以 `LinearInterpolator` 插補（與 PositionController 相同），`q`、`q̇` 讀 `<joint>/position`、`<joint>/velocity` state。
+- 導出的 reference：`<joint>`（位置）、`<joint>/velocity`（NaN 時為 0）、`<joint>/kp`、`<joint>/kd`（NaN 或負值時用 `default_kp` / `default_kd`），以及 `sample_period`。上游沒有指定增益的模式（target、bvh、hold）使用預設增益。
+- `on_activate` 以目前量測角度初始化位置 reference，以預設增益保持原地；量測為 NaN 時拒絕 activate。
+- 量測值為 NaN 的關節輸出 0 力矩（沒有可信的誤差就不出力）。
+- **增益要配合模型**：顯式 PD（每個 controller 週期計算一次，力矩在週期內固定）在 `kd·dt / 慣量` 約大於 2 時會振盪。MuJoCo 的位置伺服是隱式計算，所以同一組增益在 position 模式下穩定，不代表在 PdController 下也穩定。實測：fb70 的增益（HIP_P 987/63、ANKLE_P kd 15）套在較輕的 t170a 上，保持姿態時關節速度達 8–13 rad/s；換成 t170a 的訓練增益後就穩定了。所以預設增益依模型放在 `hardware/mujoco_pd_<mujoco_robot>.yaml`。
+- 沒有 `output_enabled`：effort 模式下「保留最後的 command」等於持續輸出固定力矩，沒有意義。
+- **TODO(verify-on-hw)**：Ti5 實機沒有 effort 介面。要用於實機前須先驗證馬達電流模式、力矩常數，以及 32 軸在 CAN 上能達到的迴圈頻率（訓練時 PD 為 200 Hz）。
+
+| 參數 | 型別 | 預設值 | 說明 |
+|---|---|---|---|
+| `joints` | string[] | `[]`（必填） | 關節名稱；不可使用保留名稱 `sample_period` |
+| `default_kp` / `default_kd` | double[] | （必填） | 與 `joints` 對應的預設增益，≥ 0 |
+| `effort_limits` | double[] | （必填） | 與 `joints` 對應的力矩上限，> 0 |
+| `reference_publish_rate` | double | 50.0 | `~/references` 的發布頻率（Hz） |
+
 ### 2.4 LocomotionPlanner 與 Motion
 
 原始碼：[locomotion_planner.hpp](../src/graphen_controllers/include/graphen_controllers/locomotion_planner.hpp)、[motion.hpp](../src/graphen_controllers/include/graphen_controllers/motion.hpp)、[target_motion.hpp](../src/graphen_controllers/include/graphen_controllers/target_motion.hpp)、[bvh_motion.hpp](../src/graphen_controllers/include/graphen_controllers/bvh_motion.hpp)、[plugin_motion.hpp](../src/graphen_controllers/include/graphen_controllers/plugin_motion.hpp)
@@ -254,7 +277,7 @@ graph LR
   1. 以呼叫端在 `start()` 提供的 `StateReader` 取得量測狀態，自己填入 `commanded_positions`（目前輸出），組成 `RobotState`。
   2. 把 `JointCommand` 填滿 NaN，交給目前的 Motion（`update(dt, state, command)`，`dt` 為實際經過時間）。
   3. `current[i] += clamp(command.positions[i] - current[i], ±motion.max_steps()[i])`，NaN、inf 都視為保持。
-  4. 連同速度前饋與 `motion.sample_period()`，以 `Output{positions, velocities, sample_period}` `writeFromNonRT` 到呼叫端提供的 `TargetBuffer`。
+  4. 連同速度前饋與 `motion.sample_period()`，以 `Output{positions, velocities, kp, kd, sample_period}` `writeFromNonRT` 到呼叫端提供的 `TargetBuffer`。
 - `RobotState` / `JointCommand` 在 `start()` 預先配置，週期中不配置記憶體。
 - `set_motion()` 可以在任何 thread 呼叫（mutex 保護），切換由 planner thread 在下一個週期執行（呼叫新 Motion 的 `on_enter(state)`），因此 Motion 只在單一 thread 中執行。未啟動時設定的 Motion 會保留到 `start()` 之後使用。
 - `start()` 會先把起點寫入 buffer，controller 在第一個規劃週期前就有值可以輸出。
@@ -266,7 +289,7 @@ graph LR
 
 **BvhMotion**（`type: bvh`）：
 - **Approach**：以 `approach_max_steps` 走向第 0 幀（`on_enter` 時以目前位置為初始值解出），所有介面都在一步之內時開始播放。
-- **Play**：時間累加 `dt × time_scale`；跨進新的一幀時才以 `BvhRetargeter` 解出該幀（以上一幀為初始值），**依檔案頻率輸出原始幀**（幀與幀之間保持），`sample_period()` 回傳 `frame_time / time_scale`，插補由 `SubGroupController` 進行。BVH 的轉換都在 planner thread 中進行，平均每幀約 0.1 ms。
+- **Play**：時間累加 `dt × time_scale`；跨進新的一幀時才以 `BvhRetargeter` 解出該幀（以上一幀為初始值），**依檔案頻率輸出原始幀**（幀與幀之間保持），`sample_period()` 回傳 `frame_time / time_scale`，插補由子群組 controller（§2.3）進行。BVH 的轉換都在 planner thread 中進行，平均每幀約 0.1 ms。
 - `max_steps`（播放時）是對「一幀的跳動」的限制，要讓一個週期就能走完一幀，同時擋下異常的大跳動。
 - 播完最後一幀時：`loop: true` 回到 Approach（以 `approach_max_steps` 接回第 0 幀），否則保持最後一幀。Approach / Hold 時 `sample_period()` 為 0。
 - 沒有 BVH 資料的介面保持進入時的位置。
@@ -301,17 +324,31 @@ launch argument：
 
 | 參數 | 預設值 | 說明 |
 |---|---|---|
-| `use_mock_hardware` | `true` | `true`：本體使用 `mock_components/GenericSystem`；`false`：T170 實機（`ti5_hardware`，CAN） |
+| `hardware` | `mock` | `mock`（GenericSystem + PositionController）、`mujoco`（MuJoCo 位置伺服 + PositionController）、`mujoco_pd`（MuJoCo 力矩 + PdController）、`real`（`ti5_hardware`，CAN + PositionController） |
+| `mujoco_robot` | `fb70` | （MuJoCo）`fb70`：`graphen_mujoco/models`；`t170a`：`t170a_description`，只能搭配 `mujoco_pd`，其他組合在 launch 時報錯 |
+| `mujoco_fixed_base` | `true` | （MuJoCo）吊掛：fb70 用 `t170_fixed.xml`，有 free joint 的模型每步重設基座 |
+| `scenario_params` | `""` | 最後疊加的參數檔，給情境 launch 使用（例如 `sim_rl.launch.py`），不改本機 `controllers.yaml` |
+| `mujoco_model` / `mujoco_viewer_port` | `""` / `9870` | （MuJoCo）指定 MJCF 路徑（空的時候依 `mujoco_robot`）/ viewer 的 UDP port |
 | `hw_read_timeout_ms` | `20` | `ti5_hardware` 的 CAN 讀取 timeout |
 | `max_command_velocity` | `0.5` | `ti5_hardware` 送往馬達的指令最大變化速度（rad/s，0 為不限速）；開機走向 `real_initial_positions` 時也受限，應 >= planner 速度 |
-| `use_hands` | `false` | 啟用靈巧手 ros2_control（mock / 實機跟隨 `use_mock_hardware`） |
+| `use_hands` | `false` | 啟用靈巧手 ros2_control（`hardware:=real` 時用實機，其他為 mock） |
 | `left_hand_port` / `right_hand_port` | `/dev/ttyUSB1` / `/dev/ttyUSB0` | 實機靈巧手的 serial port |
 | `hand_baudrate` | `115200` | 實機靈巧手的鮑率 |
-| `use_mock_imu` | `true` | `true`：mock `imu_sensor/*` + `sensor_forwarder`；`false`：實機 IMU，額外載入 [controllers_imu16460.yaml](../src/graphen_bringup/config/controllers_imu16460.yaml) |
+| `use_mock_imu` | `true` | （`mock` / `real`）`true`：mock `imu_sensor/*` + `sensor_forwarder`（[imu/mock.yaml](../src/graphen_bringup/config/imu/mock.yaml)）；`false`：實機 IMU（[imu/imu16460.yaml](../src/graphen_bringup/config/imu/imu16460.yaml)）。MuJoCo 時由 MujocoSystem 提供 |
 | `imu_port` | `/dev/ttyTHS1` | 實機 IMU 的 serial port |
 | `imu_baudrate` | `921600` | 實機 IMU 的鮑率 |
 
-`use_mock_hardware`、`use_hands` 只傳給 xacro。`use_mock_imu` 同時傳給 xacro（切換 URDF 中的 sensor 區塊）和 controller_manager 的參數檔組合（ROS 參數檔無法以 condition 切換，所以 controller_manager 在 `OpaqueFunction` 中建立）。
+`hardware`、`use_mock_imu` 同時傳給 xacro（選擇 hardware component 與 sensor 區塊）和 controller_manager 的參數檔組合；`use_hands` 只傳給 xacro。ROS 參數檔無法以 condition 切換，所以 controller_manager 在 `OpaqueFunction` 中建立，依序載入：
+
+1. `controllers.yaml`（本機檔）：與硬體無關的模式、switch 接線、子群組的 `output_enabled` 等
+2. `hardware/<hardware>.yaml`：`update_rate`、6 個子群組的 type 與介面接線（`mujoco_pd` 另含 switch 的 `velocity/kp/kd_command_interfaces`）
+3. `hardware/mujoco_pd_<mujoco_robot>.yaml`（只在 `mujoco_pd`）：依模型的 PD 預設增益與力矩上限
+4. `imu/mock.yaml` 或 `imu/imu16460.yaml`（只在 `mock` / `real`）
+5. `scenario_params`（情境 launch 指定時）
+
+後載入的覆蓋先載入的，所以 profile 一定會蓋掉本機檔中殘留的硬體設定。launch 會以 `LogInfo` 印出這次的參數檔清單。xacro 收到不合法的 `hardware` 時展開失敗。
+
+情境 launch：`sim_rl.launch.py` 以 `hardware:=mujoco_pd mujoco_robot:=t170a`（可改）自由站立啟動 bringup，並以 `scenario_params` 把 `default_mode` 設為 `mode`（預設 `rl_flat`）、該模式的 `entry_speed` 設為 0。自由站立時 PD 保持姿態沒有平衡能力，必須讓 policy 從模擬開始就接手。之後有其他固定情境時，同樣以新的 launch 檔加上 `scenario_params` 實作。
 
 ### 2.7 Imu16460SensorInterface（imu16460_hardware）
 
@@ -368,7 +405,7 @@ launch argument：
   - `imu`：原始 IMU 讀值（**IMU 座標系**）：`orientation`（xyzw）、`angular_velocity`、`linear_acceleration`、`valid`
   - `base`：估測器輸出的機身狀態（**機身座標系**）：`linear_velocity`、`angular_velocity`、`projected_gravity`（`R_wbᵀ·[0,0,-1]`）、`valid`
   - `command`：`~/cmd_vel` 的速度指令 `velocity`（vx, vy, wz）與 `active`；逾時或尚未收到時為 0、`active = false`
-- **`JointCommand`**（每週期的輸出）：`positions`（NaN 表示保持）、`velocities`（速度前饋，NaN 表示沒有）。進入 `update()` 前已填滿 NaN。
+- **`JointCommand`**（每週期的輸出）：`positions`（NaN 表示保持）、`velocities`（速度前饋，NaN 表示沒有）、`kp` / `kd`（PD 增益，NaN 或負值表示使用下游的預設值）。進入 `update()` 前已填滿 NaN。速度與增益只在下游為 `PdController` 時生效。
 - **`LocomotionAlgorithm`**：
   - `configure(Context)`：controller configure 時呼叫一次，設定錯誤時丟例外，controller 會 configure 失敗
   - `on_enter(state)`：每次切換到這個模式時呼叫
@@ -396,12 +433,12 @@ launch argument：
   - 線速度：`a_w = R_wi·f_imu − [0,0,g]`（加速度計量到的是比力），`v_w ← v_w·e^(−dt/τ) + a_w·dt`，輸出 `R_wbᵀ·v_w`
   - **限制**：線速度只反映短時間的變化（定加速度 a 時趨近 a·τ，停止加速後以 τ 衰減回 0），bias 與姿態誤差會被積分進去，不是長時間準確的速度；忽略 IMU 的槓桿臂效應。IMU16460 的姿態參考座標系與安裝姿態待實機驗證
 - **資料延遲**：RT `update()` 寫入狀態、planner 下一個週期讀取，最多約一個 controller 週期加一個 planner 週期。演算法可以用 `RobotState::time` 判斷。
-- **速度前饋**：目前不往下游寫，因為子群組與硬體都只有 position 介面（見 §6）。
+- **速度前饋與增益**：`SwitchGroupController` 設定了 `velocity_command_interfaces` / `kp_command_interfaces` / `kd_command_interfaces` 時寫往下游的 `PdController`；位置模式（`PositionController`）不使用。
 
 ### 2.10 MujocoSystem（graphen_mujoco）
 
 原始碼：[mujoco_system.cpp](../src/graphen_mujoco/src/mujoco_system.cpp)
-類型：`hardware_interface::SystemInterface` plugin（`graphen_mujoco/MujocoSystem`），`use_mujoco:=true` 時取代 mock / `Ti5Hardware`，同一個 system 也提供 `imu_sensor`（取代 MockImu / imu16460）。
+類型：`hardware_interface::SystemInterface` plugin（`graphen_mujoco/MujocoSystem`），`hardware:=mujoco` / `mujoco_pd` 時取代 mock / `Ti5Hardware`，同一個 system 也提供 `imu_sensor`（取代 MockImu / imu16460）。
 
 - **模型**：[export_mjcf.py](../src/graphen_mujoco/tools/export_mjcf.py) 直接呼叫 FullBodyT70 `play_mujoco.py` 的 `build_spec()`，所以碰撞、PD 增益、armature、200 Hz 都與訓練相同。匯出時做了這些修改：
   - `NECK_Y1` 改名為 `NECK_Y`。
@@ -409,32 +446,61 @@ launch argument：
   - 加上 `framequat` 與 `accelerometer`。
   - 關閉 `fusestatic`：`to_xml()` 會遺失 fixed link 合併進來的質量（約 1 kg）。
   - 匯出結果與原場景走 20 秒，qpos 相差 < 1e-4。
-- **MuJoCo 函式庫**：`third_party/mujoco` 是 mujoco 3.11.0 wheel 內附的 `libmujoco.so` 與 headers，容器不需要安裝 mujoco，也不需要網路。
+- **MuJoCo 函式庫**：環境依賴，各機器依自己的架構安裝 MuJoCo **3.11.0** 的 release tarball（`mujoco-3.11.0-linux-{x86_64,aarch64}.tar.gz`）。
+  - 搜尋順序：CMake / 環境變數 `MUJOCO_DIR` → `~/.local/mujoco-3.11.0` → `/opt/mujoco-3.11.0`。
+  - 版本鎖定：讀 `mujoco.h` 的 `mjVERSION_HEADER`，不是 3011000 時 configure 失敗。MJCF 是以 3.11 匯出的，其他版本的物理結果可能不同。
+  - 建置時把實際的 `libmujoco.so.3.11.0` 安裝到 plugin 旁邊（plugin 的 RPATH 為 `$ORIGIN`），執行時不需要 `LD_LIBRARY_PATH`。
+  - Python 工具（`export_mjcf.py`、`mujoco_viewer.py`）使用主機 venv 的 pip `mujoco`，與此無關。
 - **介面**：
-  - 每個 joint 有 position command，以及 position / velocity / acceleration state。其他 state（`current`、`error_code`）照樣匯出，值固定為 NaN。
-  - IMU 的 11 個介面名稱與實機相同；orientation 為 imu site 在世界座標系的姿態。
+  - 每個 joint 有一個 position 或 effort command（由 URDF 決定：`hardware:=mujoco_pd` 為 effort，`mujoco` 為 position），以及 position / velocity / acceleration state。其他 state（`current`、`error_code`）照樣匯出，值固定為 NaN。
+  - **致動器**必須與 command 相符：
+    - position 需要位置伺服（fixed gain、affine bias，例如 `export_mjcf.py` 匯出的 fb70 模型）。
+    - effort 接受力矩馬達（`motor`，例如 t170a），也接受位置伺服（載入時改成馬達：`gainprm[0] = 1`、`biasprm = 0`，保留 forcerange）。
+    - 力矩馬達搭配 position command 時，載入就失敗，避免位置指令被當成力矩。
+  - **effort 模式啟動**：所有 effort joint 都收到第一個有效的 command 之前（以及 viewer reset 之後），**物理暫停**，controller 啟動前機器人停在初始姿態，不會倒下。
+  - **IMU** 的 11 個介面名稱與實機相同。模型中的感測器依**類型**尋找（framequat、gyro、accelerometer 各一個；有多個時取名稱為 `imu_quat` / `gyro` / `imu_acc` 的），orientation 為該 site 在世界座標系的姿態。
+  - **`fixed_base`**（launch 的 `mujoco_fixed_base`）：模型有 free joint 時，每步把基座重設回初始位姿和零速度，等效吊掛（不是真正的約束，步與步之間會有極小的漂移）。fb70 另有沒有 free joint 的 `t170_fixed.xml`，兩種方式都可用。
+  - **`missing_joints: virtual`**：模型沒有的 joint 照樣匯出介面，狀態固定在初始值、忽略指令，啟動時 log 列出。t170a 沒有頸部，三軸以這種方式處理，controller 設定不需要改。
 - **時序**：
-  - `write()` 把 command 寫入 ctrl，再依 controller 週期推進物理（100 Hz 時每次 2 步，每次最多 20 步）。
+  - `write()` 把 command 寫入 ctrl，再依 controller 週期推進物理（100 Hz 時每次 2 步，每次最多 20 步）。`hardware/mujoco_pd.yaml` 把 `update_rate` 設為 200，PD 與物理同為 5 ms，與訓練相同。
   - `read()` 複製 qpos / qvel / qacc 與感測器值。
   - 模擬時間跟著 controller_manager 的 wall clock。
 - **viewer**：`viewer_port` > 0 時，`read()` 以非阻塞 UDP 把 `[time, qpos…]` 送到 127.0.0.1:port（約 60 Hz），並在 port+1 接收 `reset`。容器沒有 GL，所以畫面由主機的 [mujoco_viewer.py](../src/graphen_mujoco/tools/mujoco_viewer.py) 用同一份 MJCF 跑 `mj_forward` 顯示。
 
-### 2.11 T170VelocityPolicy（graphen_rl_policy）
+### 2.11 RL policy plugin（graphen_rl_policy）
 
-原始碼：[t170_velocity_policy.cpp](../src/graphen_rl_policy/src/t170_velocity_policy.cpp)
-類型：`LocomotionAlgorithm` plugin（`graphen_rl_policy/T170VelocityPolicy`），`controllers.yaml` 的 `rl_walk` 模式使用它。
+原始碼：[policy_runner.hpp](../src/graphen_rl_policy/include/graphen_rl_policy/policy_runner.hpp)、[onnx_model.hpp](../src/graphen_rl_policy/include/graphen_rl_policy/onnx_model.hpp)、[obs_history.hpp](../src/graphen_rl_policy/include/graphen_rl_policy/obs_history.hpp)、[t170_velocity_policy.cpp](../src/graphen_rl_policy/src/t170_velocity_policy.cpp)、[ti5_flat_policy.cpp](../src/graphen_rl_policy/src/ti5_flat_policy.cpp)
+類型：`LocomotionAlgorithm` plugin。`controllers.yaml` 的 `type: plugin` 模式使用（`rl_walk`、`rl_flat`）。
 
-- **輸入對應**（obs 107 維，組成與 FullBodyT70 的 `T170Policy` 相同）：
-  - gyro ← `base.angular_velocity`
-  - 重力投影 ← `base.projected_gravity`
-  - 指令 ← `command.velocity`
-  - 關節 ← `measured_positions` / `measured_velocities`（以 `name_map` 依名稱對應 policy 順序）
-  - 相位：指令 < 0.1 時為 0，時鐘每次推論前進 `policy_dt`
-- **頻率**：planner 100 Hz，policy 每累積 `policy_dt`（0.02 s）推論一次，其餘週期重送上一次的目標。`base.valid` 為 false 或量測值有 NaN 時改為保持。
-- **不限速**：`rl_walk.max_steps` 設為 10 rad/週期（必須 > 0），LocomotionPlanner 的 clamp 不會生效。`sample_period` 為 0，子群組不插補，目標直接寫到硬體。
-- **延遲**：狀態經 try-lock buffer 交給 planner，輸出在下一次 `update()` 寫出，有效延遲約 10–20 ms 且會抖動（訓練時為 0）。在 MuJoCo 中注入 0–60 ms 的觀測延遲都沒有跌倒，速度追蹤下降約 10–30%。
-- **上實機前要確認**（`TODO(verify-on-hw)`）：
-  - Ti5 位置模式的實際剛性 / 阻尼與訓練的 PD 差異。
+**設計：onnx 綁定 plugin**。onnx 只是「數字進、數字出」的函數，obs 的組法與 action 的換算屬於 policy 的一部分。所以採用以下做法：
+- 每個 policy 家族（相同的 obs / action 組法）寫一個 plugin。
+- 訓練常數（關節順序、預設姿態、scale、增益）放在 YAML 模式參數，不編譯進程式。
+- `model_sha256` 把 onnx 檔與這份設定綁在一起。
+- 換 policy 時 controller 與硬體都不用動：同家族重新訓練只改 YAML；新家族加一個 plugin。
+
+**共用基類 `PolicyRunner`**（子類只實作 `configure_policy()`、`reset_policy()`、`build_obs()`、`action_to_targets()`）：
+- **綁定檢查**：`OnnxModel` 計算 onnx 的 SHA-256，和 `model_sha256` 比對，並檢查輸入輸出形狀 `[1, obs_dim] → [1, joints 數]`。不符時 configure 失敗，錯誤訊息會列出實際的 sha。ORT 型別只在 `.cpp` 中，其他套件可以繼承 `PolicyRunner`，不需要 ORT 的 include。
+- **進入**：從 `commanded_positions` 以 `entry_speed` 插補到 `default_joint_pos`（`fixed_joints` 到 `fixed_positions`），到達後才開始推論。不需要先切到 `home`。
+- **頻率**：planner 100 Hz，每累積 `policy_dt` 推論一次，其餘週期重送上一次的目標。`base.valid` 為 false 或量測值有 NaN 時改為保持。
+- **增益**：有設定 `kp` / `kd` 時每週期寫入 `JointCommand`。下游為 `PdController`（`hardware:=mujoco_pd`）時以訓練的增益執行；position 模式則由硬體 / MJCF 的增益決定。
+- **不限速**：模式的 `max_steps` 設為 10 rad/週期（必須 > 0），LocomotionPlanner 的 clamp 不會生效。`sample_period` 為 0，子群組不插補。
+- 共用參數見 `policy_runner.hpp` 開頭的說明（`model_path`、`model_sha256`、`joints`、`name_map`、`default_joint_pos`、`policy_dt`、`kp`、`kd`、`fixed_joints`、`fixed_positions`、`entry_speed`、`log_period`）。
+
+**T170VelocityPolicy**（`graphen_rl_policy/T170VelocityPolicy`，FullBodyT70 / mjlab，`rl_walk`）：
+- obs = gyro、重力投影、指令、相位（sin, cos）、joint_pos − default、joint_vel、last_action（11 + 3N）。
+- 相位：指令 < `phase_stand_threshold` 時為 0，時鐘每次推論前進 `policy_dt`。
+- 目標 = default + `action_scale` ⊙ action（逐軸）。obs normalization 已包在 onnx 內。
+
+**Ti5FlatPolicy**（`graphen_rl_policy/Ti5FlatPolicy`，robolab / Isaac Lab，`rl_flat`）：
+- 每幀 = ang_vel、重力投影、指令、joint_pos − default、joint_vel、last_action（9 + 3N），各乘 obs scale、限制在 `±clip_observations`。
+- `ObsHistory` 保留 `history_length` 幀。reset 後第一幀填滿整個 history（同 Isaac Lab CircularBuffer）。
+- 目標 = default + `action_scale` × clip(action)。沒有相位，頸部以 `fixed_joints` 固定。
+- **TODO(verify-with-training)**：關節順序（目前是由 onnx 權重推斷的 Isaac Lab 廣度優先順序）、history 排法、last_action 的定義，都要由訓練端確認後才能使用。
+
+**延遲**：狀態經 try-lock buffer 交給 planner，輸出在下一次 `update()` 寫出，有效延遲約 10–20 ms 且會抖動（訓練時為 0）。在 MuJoCo 中注入 0–60 ms 的觀測延遲，`rl_walk` 都沒有跌倒，速度追蹤下降約 10–30%。
+
+**上實機前要確認**（`TODO(verify-on-hw)`）：
+  - Ti5 位置模式的實際剛性 / 阻尼與訓練的 PD 差異（Ti5 沒有 kp/kd 指令，也沒有 effort 介面）。
   - IMU16460 的姿態參考座標系與安裝姿態（`ImuLeakyEstimator` 假設 z 朝上）。
   - `Ti5Hardware` 的 `max_command_velocity`（預設 0.5 rad/s）會限制 policy 輸出，要另外決定上限。
 
@@ -612,6 +678,10 @@ IfThenElse "WalkEnabled"
 | D19 | 外部演算法以 pluginlib plugin 接入（`<mode>.type: plugin`），介面放在不依賴 rclcpp 的 `graphen_locomotion`；參數透過 `ParameterSource` 讀取 | 演算法在 planner thread 中執行，延遲最低，並沿用既有的模式切換、`max_steps` 限制與下游插補；換演算法不需要修改或重編 controller。介面套件很小，外部團隊只依賴它，不會被 controller 的改動影響；參數仍然放在 YAML。量測狀態由 RT 端以 try_lock 寫入（`TryLockBuffer`），不阻塞 `update()` |
 | D20 | 機身狀態估測器獨立成 plugin，在演算法之前執行，結果放在 `RobotState::base` | 估測方法會演進（先用 IMU，之後改 IMU + 腿部運動學），獨立出來之後只要換 YAML，演算法不必修改；座標轉換、重力投影也集中在一處，每個演算法拿到的都是同一份機身座標系的狀態。估測器與模式無關、每週期執行，切換模式時積分狀態不中斷 |
 | D17 | BVH 轉換放在獨立的 `graphen_motion`（不依賴 rclcpp），提供 `bvh_retarget_cli` | 轉換與 ros2_control 無關，可以離線檢查新的 BVH、決定 max_steps，也能在其他程式重用 |
+| D21 | RL policy 採「onnx 綁定 plugin」：每個 policy 家族一個 `PolicyRunner` 子類，訓練常數放 YAML，以 `model_sha256` 綁定 onnx；不要求 onnx 帶 metadata | obs 組法與 action 換算是 policy 的一部分，onnx 本身只是數字到數字的函數。各訓練框架匯出的格式不同，不強制 metadata 才能接入任何來源的 policy；組法寫在 plugin、常數寫在 YAML，同家族重新訓練不用重新建置。sha 檢查避免「維度相同但設定不同」的 onnx 被靜靜載入 |
+| D23 | MuJoCo 改為環境依賴（版本鎖定 3.11.0，`MUJOCO_DIR` 或 `~/.local` / `/opt` 的 `mujoco-3.11.0`），不再把 libmujoco 放進 repo | MujocoSystem 只用 C API，原始碼跨平台，只有二進位和架構有關；內附單一架構的 `.so` 會讓其他架構的機器（x86_64 開發機）無法連結。代價是每台機器（含 Orin 容器）要多一個安裝步驟 |
+| D24 | 硬體以單一 `hardware:=`（mock / mujoco / mujoco_pd / real）選擇，模擬模型另以 `mujoco_robot` 選擇；controller 設定分成共用的 `controllers.yaml` 與 `hardware/`、`imu/` 下的 profile 檔 | 原本由 `use_mock_hardware`、`use_mujoco`、`mujoco_control_mode` 等布林參數組合，優先順序與合法組合要靠記憶，子群組的 type 與增益經多層 overlay 覆蓋，看不出最後生效的設定（t170a 振盪就是 fb70 的增益沒被覆蓋到）。改成 profile 後，每種硬體的 controller 設定集中在一個檔案，增益依模型分檔；實機必須明確寫 `hardware:=real`。不保留舊參數（目前只有一位使用者） |
+| D22 | 子群組分成 `PositionController`（原 `SubGroupController`）與 `PdController`，kp / kd 經 `JointCommand` 由模式指定 | RL policy 的訓練假設是「關節 PD 以特定增益追目標」，增益因 policy 而異；Ti5 協議沒有 kp/kd，只能在 controller 端做 PD 輸出力矩。兩者導出相同名稱的位置 reference，上游接線不變。目前只在 MuJoCo 使用，實機待驗證電流模式與迴圈頻率 |
 
 ---
 
@@ -627,7 +697,10 @@ IfThenElse "WalkEnabled"
 
 ### 新增一個子群組（例如 leg）
 1. 在 URDF 的 `<ros2_control>` 中新增 joint 和 interface。
-2. 在 `controllers.yaml` 新增一個 `type: graphen_control/SubGroupController` 的 controller，`input_interfaces` 用 joint 名稱，`output_interfaces` 為 `<joint>/position`（兩者 1:1）。
+2. 在每個 `hardware/*.yaml` 加上新 controller 的 type 與接線：
+   - `mock`、`mujoco`、`real`：`type: graphen_control/PositionController`，`input_interfaces` 用 joint 名稱，`output_interfaces` 為 `<joint>/position`（兩者 1:1）。
+   - `mujoco_pd`：`type: graphen_control/PdController`、`joints`，並在 switch 的 `velocity/kp/kd_command_interfaces` 加上 `<新 controller>/<joint>/velocity|kp|kd`；每個 `mujoco_pd_<robot>.yaml` 加上 `default_kp`、`default_kd`、`effort_limits`。
+   - 與硬體無關的參數（`reference_publish_rate`、`output_enabled`）寫在 `controllers.yaml`（與範本）。
 3. 在 `switch_group_controller` 的 `command_interfaces` 加上 `<新 controller>/<joint>`，`sample_period_interfaces` 加上 `<新 controller>/sample_period`，`target_state_interfaces`、`state_interfaces` 加上 `<joint>/position`，`planner_max_steps` 與各模式的 `max_steps` / `approach_max_steps` 各加一個值。target 模式只列出要動的 joint，不需要修改。
 4. 在 launch 的 `sub_group_controllers` 清單加上新 controller，它會自動串進啟動鏈。
 
@@ -642,6 +715,11 @@ IfThenElse "WalkEnabled"
 3. 在 `controllers.yaml` 的 `modes` 加上名稱，設定 `type: plugin`、`plugin: <plugin 名稱>`、`max_steps`（每週期上限，建議依演算法的最大速度 / `planner_rate` 設定），其餘參數也寫在 `<mode>.` 下。
 4. 參數在 `configure()` 讀取並驗證，錯誤時丟例外；`update()` 中不要長時間阻塞（會拖慢 planner 週期）。
 5. 機身狀態用 `state.base`（機身座標系），速度指令用 `state.command`；使用前先檢查 `base.valid`、`command.active`。
+
+### 新增 RL policy
+- **同一個家族重新訓練**（obs / action 組法相同）：把 onnx 放進 `graphen_rl_policy/policy/`，複製一個模式，更新 `model_path`、`model_sha256`（`sha256sum <onnx>`），以及改變的常數（`default_joint_pos`、`action_scale`、`kp`、`kd` 等）。不需要重新建置程式（`--symlink-install` 下新的 onnx 要重建 `graphen_rl_policy` 才會安裝到 share）。
+- **新的家族**：在 `graphen_rl_policy`（或自己的套件，依賴 `graphen_rl_policy`）繼承 `PolicyRunner`，實作 `configure_policy()`、`reset_policy()`、`build_obs()`、`action_to_targets()`；history 可用 `ObsHistory`。plugin XML 以 `pluginlib_export_plugin_description_file(graphen_locomotion <xml>)` 導出。
+- 向訓練端索取：`robot.joint_names` 的實際順序、obs 的組法（term 順序、scale、history 排法）、action 的換算、預設姿態、PD 增益、控制週期、是否有 obs normalization 以及是否包在 onnx 內。
 
 ### 新增機身狀態估測器
 實作 `graphen::locomotion::BaseStateEstimator`，以 `PLUGINLIB_EXPORT_CLASS` 導出，plugin 描述檔同樣以 `pluginlib_export_plugin_description_file(graphen_locomotion <xml>)` 導出。在 `controllers.yaml` 把 `base_estimator.plugin` 換成新的名稱，參數寫在 `base_estimator.` 下。
@@ -661,10 +739,7 @@ IfThenElse "WalkEnabled"
 
 - **Motion plugin 化（已部分完成）**：外部演算法已可用 `type: plugin` 接入（D19），新增動作種類不必修改 `graphen_controllers`。`target` / `hold` / `bvh` 仍是內建的 Motion；如果之後需要，可以改寫成 `LocomotionAlgorithm` plugin。
 - **TODO：機身線速度估測**：目前的 `ImuLeakyEstimator` 只用 IMU，線速度只能當短時間的近似值。需要準確的線速度時（例如 RL policy 的 observation），改寫一個融合 IMU 與腿部運動學（足底接觸判斷）的 `BaseStateEstimator` plugin，換掉 `base_estimator.plugin` 即可。
-- **TODO：速度前饋往下游傳**：`JointCommand::velocities` 已傳到 `LocomotionPlanner::Output::velocities`，但子群組與硬體都只有 position 介面，目前不寫往下游。要使用時：
-  1. `SubGroupController` 導出 velocity reference。
-  2. 硬體加上 velocity command interface（`Ti5Hardware` 需要確認馬達協議是否支援）。
-  3. switch 加上對應的 `velocity_command_interfaces` 參數。
+- **速度前饋與增益只有 PdController 使用**：`PositionController` 與 `Ti5Hardware` 只有 position 介面，位置模式下 `JointCommand::velocities` / `kp` / `kd` 不會生效。實機要使用 PD 需要先驗證 Ti5 的電流模式（`TODO(verify-on-hw)`）。
 - **BT 的方向與 controller 的模式可能不一致**：controller 被 reconfigure 回到 `default_mode` 時，BT 的 `{mode}` 不會跟著改變，要等到下一次換向（或切換 `gp_enable_*`）才會重新同步。
 - **planner 的速度受 non-RT 排程影響**：max_steps 是「每週期」的量，planner thread 被延遲時，實際速度會變慢（WSL 在高負載下觀察得到）。BVH 的播放時間以實際經過時間推進，不受影響，但輸出仍受 max_steps 限制。
 - **BVH 步態是開環播放**：沒有平衡控制，浮動基座（root 位移、`BASE_S` 旋轉）被忽略；實機只能在吊掛等安全條件下使用。
@@ -678,7 +753,7 @@ IfThenElse "WalkEnabled"
   - `write()` 先把 `hw_commands_` clamp 到關節限位，再以 `max_command_velocity` 限速逼近。限位依序取自 ros2_control `<command_interface name="position">` 的 `min`/`max`、joint 的 `<param name="min/max">`、robot_description 的 `<limit>`（目前只用最後一項）；開始 / 結束 clamp 時各印一次 log。
   - 命令為 NaN / inf 時無法 clamp，`read()` / `write()` 改為回傳 ERROR，直到重新 activate。
   - 原本 activate 時的 encoder 讀取被註解掉，需實機確認此時讀取是否可靠（`TODO(verify-on-hw)`）。
-- **T170 實機尚未在本架構下驗證**：`use_mock_hardware:=false`、`use_hands:=true` + 實機只做過 xacro 展開檢查；限位 clamp 的行為只做過建置檢查；IMU 在 T170 上的安裝位置待確認（`TODO(verify-on-hw)`）。
+- **T170 實機尚未在本架構下驗證**：`hardware:=real`、`use_hands:=true` + 實機只做過 xacro 展開檢查；限位 clamp 的行為只做過建置檢查；IMU 在 T170 上的安裝位置待確認（`TODO(verify-on-hw)`）。
 - **RateControl 的並行存取**：worker thread 和主樹會並行存取 child 和 blackboard（沿用原型設計）。因此 `sys_count` 可能略微超過 target（實測約 3006）。若要嚴格同步，需要重新設計。
 - **CheckSysCount 的 target（3000）寫死在 tree XML**：可以考慮改成 blackboard 變數。
 - **Groot 只支援 v1**：要改用 Groot2 必須升級到 BT.CPP v4。
@@ -686,6 +761,8 @@ IfThenElse "WalkEnabled"
 - **WSL 環境**：沒有 RT scheduling（會印 WARN），ros2 daemon 探索偏慢。
 - **IMU 待實機驗證**：坐標系方向、Euler 順序、S1 長度、共變異數（見 [IMU16460.md §3](IMU16460.md#3-待實機驗證)），程式中以 `TODO(verify-on-hw)` 標記。
 - **IMU 時間戳**：Humble 的 `imu_sensor_broadcaster` 以 controller_manager 的更新時間打時間戳，無法傳遞裝置 timer；需要精確時間戳時改用獨立 node 發布。
-- **RL policy 只在 MuJoCo 驗證**：`rl_walk` 尚未上實機，見 §2.11 的待確認項目。
-- **MuJoCo 模擬沒有靈巧手**：`use_mujoco:=true` 搭配 `use_hands:=true` 時，手部仍跟隨 `use_mock_hardware`。
+- **RL policy 只在 MuJoCo 驗證**：`rl_walk` 尚未上實機，見 §2.11 的待確認項目。`rl_flat`（Ti5FlatPolicy）在 t170a 上能自由站立與邁步，但關節順序與 obs 組法仍是推斷的，還沒有經訓練端確認。
+- **fb70 的 MJCF 依賴 Orin 上的 mesh**：`graphen_mujoco/models/*.xml` 的 meshdir 指向 `/devtest/FullBodyT70/...`，沒有這些 mesh 的機器（例如 WSL）無法載入。t170a（`t170a_description`，mesh 用相對路徑）在任何機器上都可以使用。
+- **模型尚未統一**：fb70、t170a、`ti5_170a_graphen` 三份模型的運動學大致一致，但質量分布差異很大（例如單腿 16.5 / 7.7 / 11.8 kg）。t170a 暫時用來驗證控制架構，不代表實機。
+- **MuJoCo 模擬沒有靈巧手**：`hardware:=mujoco*` 搭配 `use_hands:=true` 時，手部是 mock。
 - **測試**：只有 `imu16460_core` 有自動化測試；`graphen_motion` 目前以 `bvh_retarget_cli` 檢查（GoogleTest，`colcon test --packages-select imu16460_core`）；其他套件尚無，測試方式待討論。
