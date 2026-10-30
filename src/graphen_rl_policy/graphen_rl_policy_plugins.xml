@@ -1,10 +1,18 @@
 <library path="graphen_rl_policy_plugins">
-  <!-- FullBodyT70 的 T170 全身速度追蹤 policy（policy.onnx） -->
+  <!-- FullBodyT70（mjlab）的 T170 全身速度追蹤 policy 家族（例如 policy/wtz_policy.onnx） -->
   <class name="graphen_rl_policy/T170VelocityPolicy"
          type="graphen::rl_policy::T170VelocityPolicy"
          base_class_type="graphen::locomotion::LocomotionAlgorithm">
     <description>
-      T170 full-body velocity-tracking policy trained in FullBodyT70, run with ONNX Runtime.
+      T170 full-body velocity-tracking policy trained with mjlab (FullBodyT70), run with ONNX Runtime.
+    </description>
+  </class>
+  <!-- robolab（Isaac Lab）ti5_flat 的平地速度追蹤 policy 家族（例如 policy/tc_flat_policy.onnx） -->
+  <class name="graphen_rl_policy/Ti5FlatPolicy"
+         type="graphen::rl_policy::Ti5FlatPolicy"
+         base_class_type="graphen::locomotion::LocomotionAlgorithm">
+    <description>
+      Ti5 flat-terrain velocity-tracking policy with observation history trained with robolab (Isaac Lab).
     </description>
   </class>
 </library>

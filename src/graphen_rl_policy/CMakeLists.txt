@@ -9,24 +9,18 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(graphen_locomotion REQUIRED)
 find_package(pluginlib REQUIRED)
 
-find_package(ament_index_cpp REQUIRED)
-
-# policy/：policy.onnx 與對應的 t170_policy_config.h（obs 組成、q_home、action scale），兩者必須來自同一次訓練。
-# 換 policy 時兩個檔案一起換掉再重新建置（來源：FullBodyT70/cpp_interface）。
-# third_party/onnxruntime：ONNX Runtime 1.31.0（aarch64，不進版控，從 FullBodyT70/cpp_interface 複製）
-set(T170_POLICY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/policy CACHE PATH
-  "Directory with policy.onnx and t170_policy_config.h")
+# third_party/onnxruntime：ONNX Runtime 1.31.0（include/ 與 lib/libonnxruntime.so.1），不進版控。
+# 依建置機器的架構準備：Orin 用 aarch64 版（FullBodyT70/cpp_interface/third_party/onnxruntime），
+# x86_64 開發機用 github.com/microsoft/onnxruntime releases 的 onnxruntime-linux-x64-1.31.0.tgz
 set(ORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime CACHE PATH
   "ONNX Runtime directory (include/ and lib/libonnxruntime.so.1)")
-if(NOT EXISTS ${T170_POLICY_DIR}/t170_policy_config.h OR NOT EXISTS ${T170_POLICY_DIR}/policy.onnx)
-  message(FATAL_ERROR "T170_POLICY_DIR=${T170_POLICY_DIR} must contain policy.onnx and t170_policy_config.h")
-endif()
 if(NOT EXISTS ${ORT_DIR}/lib/libonnxruntime.so.1)
   message(FATAL_ERROR "ORT_DIR=${ORT_DIR} must contain lib/libonnxruntime.so.1 "
-    "(copy FullBodyT70/cpp_interface/third_party/onnxruntime)")
+    "built for ${CMAKE_SYSTEM_PROCESSOR}")
 endif()
 
 add_library(onnxruntime::onnxruntime SHARED IMPORTED)
@@ -37,31 +31,56 @@ set_target_properties(onnxruntime::onnxruntime PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES ${ORT_DIR}/include
 )
 
-add_library(graphen_rl_policy_plugins SHARED
+# 共用函式庫：OnnxModel、PolicyRunner、ObsHistory。其他套件也可以繼承 PolicyRunner 寫 policy plugin；
+# ORT 只在實作中使用，header 不需要 ORT
+add_library(${PROJECT_NAME} SHARED
+  src/onnx_model.cpp
+  src/policy_runner.cpp
+)
+target_include_directories(${PROJECT_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
+target_link_libraries(${PROJECT_NAME}
+  PUBLIC graphen_locomotion::graphen_locomotion
+  PRIVATE ament_index_cpp::ament_index_cpp onnxruntime::onnxruntime
+)
+
+# policy plugin：一個 policy 家族（obs / action 組法）一個 class
+add_library(${PROJECT_NAME}_plugins SHARED
   src/t170_velocity_policy.cpp
+  src/ti5_flat_policy.cpp
 )
-target_include_directories(graphen_rl_policy_plugins PRIVATE ${T170_POLICY_DIR})
-target_link_libraries(graphen_rl_policy_plugins
-  ament_index_cpp::ament_index_cpp
-  graphen_locomotion::graphen_locomotion
+target_link_libraries(${PROJECT_NAME}_plugins
+  ${PROJECT_NAME}
   pluginlib::pluginlib
-  onnxruntime::onnxruntime
 )
-# libonnxruntime 與 plugin 安裝在同一個 lib 目錄
-set_target_properties(graphen_rl_policy_plugins PROPERTIES INSTALL_RPATH "$ORIGIN")
+
+# libonnxruntime 與兩個函式庫安裝在同一個 lib 目錄，載入時由 RPATH 找到
+set_target_properties(${PROJECT_NAME} ${PROJECT_NAME}_plugins PROPERTIES INSTALL_RPATH "$ORIGIN")
 
 pluginlib_export_plugin_description_file(graphen_locomotion graphen_rl_policy_plugins.xml)
 
-install(TARGETS graphen_rl_policy_plugins
+install(
+  DIRECTORY include/
+  DESTINATION include/${PROJECT_NAME}
+)
+install(
+  TARGETS ${PROJECT_NAME}
+  EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-# 以 SONAME 安裝，plugin 載入時由 RPATH 找到
+install(TARGETS ${PROJECT_NAME}_plugins
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+# 以 SONAME 安裝
 install(FILES ${ORT_LIBRARY} DESTINATION lib RENAME libonnxruntime.so.1)
-# YAML 以 package://graphen_rl_policy/policy/policy.onnx 指定
-install(FILES ${T170_POLICY_DIR}/policy.onnx ${T170_POLICY_DIR}/t170_policy_config.h
-  DESTINATION share/${PROJECT_NAME}/policy)
+# onnx 模型；YAML 以 package://graphen_rl_policy/policy/<檔名>.onnx 指定，並以 model_sha256 綁定
+install(DIRECTORY policy/ DESTINATION share/${PROJECT_NAME}/policy)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -70,4 +89,6 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(graphen_locomotion)
 ament_package()
