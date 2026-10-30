@@ -1,29 +1,32 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ti5_170a_graphen">
 
-  <!-- 本體：true 使用 mock_components/GenericSystem，false 使用 ti5_hardware/Ti5Hardware（CAN 實機） -->
-  <xacro:arg name="use_mock_hardware" default="true"/>
+  <!-- 本體硬體：mock（mock_components/GenericSystem）、mujoco（MuJoCo 位置致動器）、
+       mujoco_pd（MuJoCo 力矩致動器，配合 graphen_control/PdController）、real（ti5_hardware/Ti5Hardware，CAN 實機） -->
+  <xacro:arg name="hardware" default="mock"/>
   <xacro:arg name="initial_positions_file" default="$(find ti5_170a_graphen)/config/initial_positions.yaml"/>
-  <!-- 實機本體參數（use_mock_hardware:=false 時必填，由 bringup launch 傳入） -->
+  <!-- 實機本體參數（hardware:=real 時必填，由 bringup launch 傳入） -->
   <xacro:arg name="can_config_path" default=""/>
   <xacro:arg name="real_initial_positions_file" default=""/>
   <xacro:arg name="hw_read_timeout_ms" default="20"/>
   <!-- 送往馬達的指令最大變化速度（rad/s），開機走向 real_initial_positions 時也受限；應 >= planner 的速度 -->
   <xacro:arg name="max_command_velocity" default="0.5"/>
 
-  <!-- MuJoCo 模擬：true 時本體與 IMU 都由 graphen_mujoco/MujocoSystem 提供（優先於 use_mock_hardware、use_mock_imu） -->
-  <xacro:arg name="use_mujoco" default="false"/>
+  <!-- MuJoCo 模擬（hardware:=mujoco / mujoco_pd）：本體與 IMU 都由 graphen_mujoco/MujocoSystem 提供 -->
   <xacro:arg name="mujoco_model" default=""/>
   <xacro:arg name="mujoco_viewer_port" default="0"/>
+  <!-- MujocoSystem 的 fixed_base（吊掛）與 missing_joints（error / virtual） -->
+  <xacro:arg name="mujoco_fixed_base" default="false"/>
+  <xacro:arg name="mujoco_missing_joints" default="error"/>
 
-  <!-- 靈巧手：預設不啟用；啟用時 mock / 實機跟隨 use_mock_hardware -->
+  <!-- 靈巧手：預設不啟用；啟用時 hardware:=real 才用實機，其他都是 mock -->
   <xacro:arg name="use_hands" default="false"/>
   <xacro:arg name="left_hand_port" default="/dev/ttyUSB1"/>
   <xacro:arg name="right_hand_port" default="/dev/ttyUSB0"/>
   <xacro:arg name="hand_baudrate" default="115200"/>
 
-  <!-- IMU：use_mock_imu:=true 時使用 mock IMU（與實機同名的 imu_sensor/* 介面，可用 topic 寫入模擬值），
-       false 時使用實機 FSS-IMU16460-C（imu16460_hardware） -->
+  <!-- IMU（hardware:=mock / real 時）：use_mock_imu:=true 時使用 mock IMU（與實機同名的 imu_sensor/* 介面，
+       可用 topic 寫入模擬值），false 時使用實機 FSS-IMU16460-C（imu16460_hardware）。MuJoCo 時由 MujocoSystem 提供 -->
   <xacro:arg name="use_mock_imu" default="true"/>
   <xacro:arg name="imu_port" default="/dev/ttyTHS1"/>
   <xacro:arg name="imu_baudrate" default="921600"/>
@@ -48,21 +51,22 @@
   <xacro:ti5_170a_graphen_ros2_control
     name="UpperBody"
     initial_positions_file="$(arg initial_positions_file)"
-    use_fake_hardware="$(arg use_mock_hardware)"
+    hardware="$(arg hardware)"
     can_config_path="$(arg can_config_path)"
     real_initial_positions_file="$(arg real_initial_positions_file)"
     hw_read_timeout_ms="$(arg hw_read_timeout_ms)"
     max_command_velocity="$(arg max_command_velocity)"
-    use_mujoco="$(arg use_mujoco)"
     mujoco_model="$(arg mujoco_model)"
-    mujoco_viewer_port="$(arg mujoco_viewer_port)"/>
+    mujoco_viewer_port="$(arg mujoco_viewer_port)"
+    mujoco_fixed_base="$(arg mujoco_fixed_base)"
+    mujoco_missing_joints="$(arg mujoco_missing_joints)"/>
 
   <!-- 3. 靈巧手 ros2_control（只在 use_hands:=true 時存在） -->
   <xacro:if value="$(arg use_hands)">
     <xacro:include filename="$(find dexterous_hand_description)/urdf/ros2_control.xacro"/>
-    <xacro:right_hand_ros2_control use_fake_hardware="$(arg use_mock_hardware)"
+    <xacro:right_hand_ros2_control use_fake_hardware="${'$(arg hardware)' != 'real'}"
                                    serial_port="$(arg right_hand_port)" baudrate="$(arg hand_baudrate)"/>
-    <xacro:left_hand_ros2_control use_fake_hardware="$(arg use_mock_hardware)"
+    <xacro:left_hand_ros2_control use_fake_hardware="${'$(arg hardware)' != 'real'}"
                                   serial_port="$(arg left_hand_port)" baudrate="$(arg hand_baudrate)"/>
   </xacro:if>
 
@@ -71,7 +75,7 @@
        獨立成一個 mock system，讓本體改用實機時 mock IMU 仍可單獨使用。
        初始值為靜止水平：單位四元數，z 軸加速度 9.81（靜止時加速度計量到的值） -->
   <!-- MuJoCo 模擬時 IMU 由 MujocoSystem 提供，兩者都不建立 -->
-  <xacro:unless value="$(arg use_mujoco)">
+  <xacro:unless value="${'$(arg hardware)'.startswith('mujoco')}">
   <xacro:if value="$(arg use_mock_imu)">
     <ros2_control name="MockImu" type="system">
       <hardware>

@@ -2,7 +2,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, SetLaunchConfiguration)
+    DeclareLaunchArgument, LogInfo, OpaqueFunction, RegisterEventHandler,
+    SetLaunchConfiguration)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import Command, LaunchConfiguration, PythonExpression
@@ -14,17 +15,15 @@ def generate_launch_description():
     bringup_share = get_package_share_directory('graphen_bringup')
 
     xacro_file = os.path.join(description_share, 'urdf', 'ti5_170a_graphen.urdf.xacro')
-    controllers_yaml_file = os.path.join(bringup_share, 'config', 'controllers.yaml')
+    config_dir = os.path.join(bringup_share, 'config')
+    # 與硬體無關的設定（模式、switch 接線）；硬體相關的設定依 hardware:= 疊加 hardware/*.yaml、imu/*.yaml
+    controllers_yaml_file = os.path.join(config_dir, 'controllers.yaml')
     # 實機本體（ti5_hardware）使用的 CAN 設定與初始位置
     can_config_file = os.path.join(bringup_share, 'config', 'can_driver_config.json')
     real_initial_positions_file = os.path.join(
         bringup_share, 'config', 'real_initial_positions.yaml')
-    # 實機 IMU 時疊加的設定（imu_sensor_broadcaster、switch_group_controller 的 sensor）
-    imu_yaml_file = os.path.join(bringup_share, 'config', 'controllers_imu16460.yaml')
-    # MuJoCo 模擬時疊加的設定（imu_sensor_broadcaster）
-    mujoco_yaml_file = os.path.join(bringup_share, 'config', 'controllers_mujoco.yaml')
 
-    use_mock_hardware = LaunchConfiguration('use_mock_hardware')
+    hardware = LaunchConfiguration('hardware')
     hw_read_timeout_ms = LaunchConfiguration('hw_read_timeout_ms')
     max_command_velocity = LaunchConfiguration('max_command_velocity')
     use_hands = LaunchConfiguration('use_hands')
@@ -34,27 +33,32 @@ def generate_launch_description():
     use_mock_imu = LaunchConfiguration('use_mock_imu')
     imu_port = LaunchConfiguration('imu_port')
     imu_baudrate = LaunchConfiguration('imu_baudrate')
-    use_mujoco = LaunchConfiguration('use_mujoco')
     mujoco_fixed_base = LaunchConfiguration('mujoco_fixed_base')
     mujoco_model = LaunchConfiguration('mujoco_model')
     mujoco_viewer_port = LaunchConfiguration('mujoco_viewer_port')
+    mujoco_robot = LaunchConfiguration('mujoco_robot')
+    scenario_params = LaunchConfiguration('scenario_params')
+    # 由 resolve_mujoco_model 依 mujoco_robot 設定
+    mujoco_missing_joints = LaunchConfiguration('mujoco_missing_joints')
 
     declare_args = [
         DeclareLaunchArgument(
-            'use_mock_hardware', default_value='true',
-            description='true: mock_components/GenericSystem; '
-                        'false: real T170 joints via ti5_hardware (CAN)'),
+            'hardware', default_value='mock',
+            choices=['mock', 'mujoco', 'mujoco_pd', 'real'],
+            description='mock: mock_components/GenericSystem + PositionController; '
+                        'mujoco: MuJoCo position actuators + PositionController; '
+                        'mujoco_pd: MuJoCo torque actuators + PdController; '
+                        'real: T170 joints via ti5_hardware (CAN) + PositionController'),
         DeclareLaunchArgument(
             'hw_read_timeout_ms', default_value='20',
-            description='CAN read timeout of ti5_hardware (use_mock_hardware:=false)'),
+            description='CAN read timeout of ti5_hardware (hardware:=real)'),
         DeclareLaunchArgument(
             'max_command_velocity', default_value='0.5',
             description='Max command velocity [rad/s] of ti5_hardware, also limits the move '
                         'to real_initial_positions at startup (0 disables)'),
         DeclareLaunchArgument(
             'use_hands', default_value='false',
-            description='Enable dexterous hands ros2_control '
-                        '(mock or real follows use_mock_hardware)'),
+            description='Enable dexterous hands ros2_control (real only with hardware:=real)'),
         DeclareLaunchArgument(
             'left_hand_port', default_value='/dev/ttyUSB1',
             description='Serial port of the real left hand'),
@@ -66,8 +70,8 @@ def generate_launch_description():
             description='Baudrate of the real hands'),
         DeclareLaunchArgument(
             'use_mock_imu', default_value='true',
-            description='true: mock imu_sensor/* written via sensor_forwarder; '
-                        'false: real FSS-IMU16460-C via imu16460_hardware'),
+            description='hardware:=mock / real only. true: mock imu_sensor/* written via '
+                        'sensor_forwarder; false: real FSS-IMU16460-C via imu16460_hardware'),
         DeclareLaunchArgument(
             'imu_port', default_value='/dev/ttyTHS1',
             description='Serial port of the real IMU (use_mock_imu:=false)'),
@@ -75,36 +79,58 @@ def generate_launch_description():
             'imu_baudrate', default_value='921600',
             description='Baudrate of the real IMU (use_mock_imu:=false)'),
         DeclareLaunchArgument(
-            'use_mujoco', default_value='false',
-            description='true: T170 joints and IMU simulated in MuJoCo (graphen_mujoco), '
-                        'overrides use_mock_hardware / use_mock_imu'),
-        DeclareLaunchArgument(
             'mujoco_fixed_base', default_value='true',
-            description='true: base fixed in the air (like hanging); false: free-standing '
-                        '(ignored when mujoco_model is set)'),
+            description='true: base fixed in the air (like hanging); false: free-standing. '
+                        'fb70 selects t170_fixed.xml; models with a free joint (t170a) are pinned'),
+        DeclareLaunchArgument(
+            'mujoco_robot', default_value='fb70',
+            choices=['fb70', 't170a'],
+            description='hardware:=mujoco / mujoco_pd only. fb70: graphen_mujoco/models '
+                        '(FullBodyT70 export); t170a: t170a_description/mjcf/t170a.xml '
+                        '(motor actuators, hardware:=mujoco_pd only, no neck joints)'),
         DeclareLaunchArgument(
             'mujoco_model', default_value='',
-            description='MJCF path; empty selects graphen_mujoco/models/t170_{fixed,free}.xml'),
+            description='MJCF path; empty selects the model of mujoco_robot'),
+        DeclareLaunchArgument(
+            'scenario_params', default_value='',
+            description='Parameter file loaded after all others; used by scenario launch files '
+                        '(e.g. sim_rl.launch.py) to override the mode settings'),
         DeclareLaunchArgument(
             'mujoco_viewer_port', default_value='9870',
             description='UDP port of graphen_mujoco/tools/mujoco_viewer.py (0 disables)'),
     ]
 
-    # mujoco_model 沒有指定時依 mujoco_fixed_base 選擇模型。只在 use_mujoco 時查詢 graphen_mujoco，
-    # 沒有建置 graphen_mujoco 時其他模式仍可使用
+    def is_mujoco(context):
+        return hardware.perform(context).startswith('mujoco')
+
+    # 依 mujoco_robot 選擇模型與 MujocoSystem 的設定。只在 MuJoCo 時查詢模型套件，
+    # 沒有建置 graphen_mujoco / t170a_description 時其他硬體仍可使用
     def resolve_mujoco_model(context):
-        if not IfCondition(use_mujoco).evaluate(context) or mujoco_model.perform(context):
-            return []
-        name = 't170_fixed.xml' if IfCondition(mujoco_fixed_base).evaluate(context) \
-            else 't170_free.xml'
-        path = os.path.join(get_package_share_directory('graphen_mujoco'), 'models', name)
-        return [SetLaunchConfiguration('mujoco_model', path)]
+        actions = [SetLaunchConfiguration('mujoco_missing_joints', 'error')]
+        if not is_mujoco(context):
+            return actions
+        robot = mujoco_robot.perform(context)
+        if robot == 't170a':
+            # t170a 的致動器是力矩馬達，只能用 PD；模型沒有頸部，三軸改為虛擬關節
+            if hardware.perform(context) != 'mujoco_pd':
+                raise RuntimeError('mujoco_robot:=t170a needs hardware:=mujoco_pd '
+                                   '(the model has motor actuators)')
+            actions = [SetLaunchConfiguration('mujoco_missing_joints', 'virtual')]
+            path = os.path.join(
+                get_package_share_directory('t170a_description'), 'mjcf', 't170a.xml')
+        else:
+            name = 't170_fixed.xml' if IfCondition(mujoco_fixed_base).evaluate(context) \
+                else 't170_free.xml'
+            path = os.path.join(get_package_share_directory('graphen_mujoco'), 'models', name)
+        if not mujoco_model.perform(context):
+            actions.append(SetLaunchConfiguration('mujoco_model', path))
+        return actions
 
     set_mujoco_model = OpaqueFunction(function=resolve_mujoco_model)
 
     robot_description_raw = Command([
         'xacro ', xacro_file,
-        ' use_mock_hardware:=', use_mock_hardware,
+        ' hardware:=', hardware,
         ' can_config_path:=', can_config_file,
         ' real_initial_positions_file:=', real_initial_positions_file,
         ' hw_read_timeout_ms:=', hw_read_timeout_ms,
@@ -116,9 +142,10 @@ def generate_launch_description():
         ' use_mock_imu:=', use_mock_imu,
         ' imu_port:=', imu_port,
         ' imu_baudrate:=', imu_baudrate,
-        ' use_mujoco:=', use_mujoco,
         ' mujoco_model:="', mujoco_model, '"',
         ' mujoco_viewer_port:=', mujoco_viewer_port,
+        ' mujoco_fixed_base:=', mujoco_fixed_base,
+        ' mujoco_missing_joints:=', mujoco_missing_joints,
     ])
     robot_description = {'robot_description': robot_description_raw}
 
@@ -131,18 +158,29 @@ def generate_launch_description():
     )
 
     # 2. Controller Manager
-    #    實機 IMU 時多載入 imu_yaml_file，MuJoCo 模擬時多載入 mujoco_yaml_file；
+    #    共用設定 → hardware/<hardware>.yaml →（mujoco_pd）hardware/mujoco_pd_<mujoco_robot>.yaml
+    #    →（mock / real）imu/<mock|imu16460>.yaml →（情境 launch）scenario_params，後載入的覆蓋先載入的。
     #    參數檔無法用 condition 切換，所以在 OpaqueFunction 中組合
     def create_controller_manager(context):
-        parameters = [robot_description, controllers_yaml_file]
-        if IfCondition(use_mujoco).evaluate(context):
-            parameters.append(mujoco_yaml_file)
-        elif not IfCondition(use_mock_imu).evaluate(context):
-            parameters.append(imu_yaml_file)
-        return [Node(
+        hw = hardware.perform(context)
+        files = [controllers_yaml_file, os.path.join(config_dir, 'hardware', f'{hw}.yaml')]
+        if hw == 'mujoco_pd':
+            # 預設增益依模型：顯式 PD 的增益要配合模型的慣量，否則會振盪
+            files.append(os.path.join(
+                config_dir, 'hardware', f'mujoco_pd_{mujoco_robot.perform(context)}.yaml'))
+        if not is_mujoco(context):
+            imu = 'mock' if IfCondition(use_mock_imu).evaluate(context) else 'imu16460'
+            files.append(os.path.join(config_dir, 'imu', f'{imu}.yaml'))
+        # 情境 launch 的覆寫（例如一開始就進入 RL 模式），不改本機 controllers.yaml
+        if scenario_params.perform(context):
+            files.append(scenario_params.perform(context))
+        def shown(path):
+            return os.path.relpath(path, config_dir) if path.startswith(config_dir) else path
+        return [LogInfo(msg='controller parameter files: ' + ', '.join(
+            shown(f) for f in files)), Node(
             package='controller_manager',
             executable='ros2_control_node',
-            parameters=parameters,
+            parameters=[robot_description] + files,
             output='screen'
         )]
 
@@ -156,9 +194,9 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3-1. 模擬 IMU 資料寫入 (imu_sensor/*)，只在 mock IMU 時啟動（MuJoCo 模擬時不啟動）
+    # 3-1. 模擬 IMU 資料寫入 (imu_sensor/*)，只在 mock IMU 時啟動（MuJoCo 時 IMU 由 MujocoSystem 提供）
     mock_imu_active = PythonExpression(
-        ["'", use_mock_imu, "'.lower() == 'true' and '", use_mujoco, "'.lower() != 'true'"])
+        ["'", use_mock_imu, "'.lower() == 'true' and not '", hardware, "'.startswith('mujoco')"])
     spawn_sensor_forwarder = Node(
         package='controller_manager',
         executable='spawner',

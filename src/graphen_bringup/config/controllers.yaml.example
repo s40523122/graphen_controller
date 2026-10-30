@@ -1,51 +1,12 @@
 controller_manager:
   ros__parameters:
-    update_rate: 100   # 實機 CAN 讀取有 timeout，不使用過高的頻率
-
+    # update_rate、6 個子群組（PositionController / PdController）與 IMU 相關 controller 依硬體設定，
+    # 放在 hardware/<hardware>.yaml、imu/*.yaml；launch 依 hardware:= 疊加在這個檔案之後
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    # T170 本體 32 軸，依部位分成 6 個子群組（分組參考 ti5_170a_graphen.srdf）
-    left_arm_group_controller:
-      type: graphen_control/SubGroupController
-
-    right_arm_group_controller:
-      type: graphen_control/SubGroupController
-
-    waist_group_controller:
-      type: graphen_control/SubGroupController
-
-    head_group_controller:
-      type: graphen_control/SubGroupController
-
-    left_leg_group_controller:
-      type: graphen_control/SubGroupController
-
-    right_leg_group_controller:
-      type: graphen_control/SubGroupController
-
     switch_group_controller:
       type: graphen_control/SwitchGroupController
-
-    # mock IMU 的模擬資料寫入（只在 use_mock_imu:=true 時啟動）
-    sensor_forwarder:
-      type: forward_command_controller/MultiInterfaceForwardCommandController
-
-# /sensor_forwarder/commands（Float64MultiArray）的 10 個值依 interface_names 的順序寫入 mock IMU
-sensor_forwarder:
-  ros__parameters:
-    joint: imu_sensor
-    interface_names:
-      - orientation.x
-      - orientation.y
-      - orientation.z
-      - orientation.w
-      - angular_velocity.x
-      - angular_velocity.y
-      - angular_velocity.z
-      - linear_acceleration.x
-      - linear_acceleration.y
-      - linear_acceleration.z
 
 switch_group_controller:
   ros__parameters:
@@ -221,7 +182,7 @@ switch_group_controller:
 
     # 模式以名稱識別（BT、action、~/mode topic 都用這些名稱），名稱同時是下面參數的前綴。
     # controller 不認得任何特定模式，行為完全由 type 與參數決定
-    modes: [forward, reverse, walk, stop, sine, home, rl_walk]
+    modes: [forward, reverse, walk, stop, sine, home, rl_walk, rl_flat]
     # 空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
     # 收到 BT / action / ~/mode 的命令後才開始移動
     default_mode: ""
@@ -274,7 +235,7 @@ switch_group_controller:
       log_period: 1.0     # s，0 表示不 log
 
     # home：FullBodyT70 policy 的預設姿態（手臂自然下垂的 A-pose，其他 0），以預設速度走過去。
-    # 進入 rl_walk 前先切到這裡，policy 的第一個輸出才不會離目前姿態太遠
+    # （rl_walk 進入時會自己走到這個姿態，這個模式只是方便手動使用）
     home:
       type: target
       joints: [L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R,
@@ -288,19 +249,110 @@ switch_group_controller:
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
-    # rl_walk：FullBodyT70 訓練的全身速度追蹤 policy（graphen_rl_policy/T170VelocityPolicy），
+    # rl_walk：FullBodyT70（mjlab）訓練的全身速度追蹤 policy（graphen_rl_policy/T170VelocityPolicy），
     # 以 ~/cmd_vel 的 vx、vy、wz 為指令（逾時或沒有指令時原地站立）。
+    # 進入時先以 entry_speed 走到 default_joint_pos，再開始推論（不需要先切到 home）。
     # policy 每 20 ms 輸出一次 32 軸絕對目標，閉迴路控制不能被限速：max_steps 設成 10 rad/週期，
-    # 實際上不限制（必須 > 0）。進入前先切到 home。
-    # 目前只在 MuJoCo（use_mujoco:=true mujoco_fixed_base:=false）驗證過，實機的馬達增益與 IMU 姿態
+    # 實際上不限制（必須 > 0）。
+    # 常數必須與 onnx 來自同一次訓練：換 onnx 時一起更新，model_sha256 為 `sha256sum <onnx>` 的結果。
+    # kp / kd 只在 PdController（hardware:=mujoco_pd）下生效，position 模式由 MJCF 的增益決定。
+    # 目前只在 MuJoCo（hardware:=mujoco mujoco_fixed_base:=false）驗證過，實機的馬達增益與 IMU 姿態
     # 都還沒有確認，不要在實機上使用
     rl_walk:
       type: plugin
       plugin: graphen_rl_policy/T170VelocityPolicy
-      model_path: package://graphen_rl_policy/policy/policy.onnx
-      policy_dt: 0.02     # s，訓練的控制週期
-      name_map: ["NECK_Y1:NECK_Y"]   # policy 名稱:controller 名稱
+      model_path: package://graphen_rl_policy/policy/wtz_policy.onnx
+      model_sha256: 92de47232a95bb248892b4302c2ad189e5f1238cfb1cc4eafa004bdb42c9840c
+      policy_dt: 0.02     # s，訓練的控制週期（sim dt 0.005 × decimation 4）
+      phase_period: 0.6   # s
+      phase_stand_threshold: 0.1
+      entry_speed: 0.5    # rad/s
       log_period: 2.0     # s，0 表示不 log
+      # policy 的關節順序（onnx metadata 的 joint_names），NECK_Y1 在 controller 中叫 NECK_Y
+      joints: [L_HIP_P, L_HIP_R, L_HIP_Y, L_KNEE_P, L_ANKLE_P, L_ANKLE_R,
+               R_HIP_P, R_HIP_R, R_HIP_Y, R_KNEE_P, R_ANKLE_P, R_ANKLE_R,
+               WAIST_Y, WAIST_R, WAIST_P,
+               L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R,
+               R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R,
+               NECK_Y1, NECK_P, NECK_R]
+      name_map: ["NECK_Y1:NECK_Y"]   # policy 名稱:controller 名稱
+      # 手臂自然下垂的 A-pose，其他 0
+      default_joint_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                          0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                          0.0, 0.0, 0.0,
+                          0.0, -1.19, 0.0, 0.0, 0.0, 0.0, 0.0,
+                          0.0, 1.05, 0.0, 0.0, 0.0, 0.0, 0.0,
+                          0.0, 0.0, 0.0]
+      # 0.25 × effort_limit / stiffness（訓練設定）
+      action_scale: [0.06763189008512659, 0.06649202676908512, 0.06385345427824841,
+                     0.06763189008512659, 0.06649202676908512, 0.07282460074709322,
+                     0.06763189008512659, 0.06649202676908512, 0.06385345427824841,
+                     0.06763189008512659, 0.06649202676908512, 0.07282460074709322,
+                     0.06649202676908512, 0.06649202676908512, 0.06649202676908512,
+                     0.19947608030725536, 0.19947608030725536, 0.13298405353817025,
+                     0.13298405353817025, 0.2912984029883729, 0.10512072803493458,
+                     0.10512072803493458, 0.19947608030725536, 0.19947608030725536,
+                     0.13298405353817025, 0.13298405353817025, 0.2912984029883729,
+                     0.10512072803493458, 0.10512072803493458, 0.05256036401746729,
+                     0.014564920149418644, 0.014564920149418644]
+      # 訓練的 PD 增益（onnx metadata 的 joint_stiffness / joint_damping，與 MJCF 相同）
+      kp: [986.96, 236.871, 473.741, 986.96, 236.871, 78.957,
+           986.96, 236.871, 473.741, 986.96, 236.871, 78.957,
+           236.871, 236.871, 236.871,
+           78.957, 78.957, 78.957, 78.957, 19.739, 19.739, 19.739,
+           78.957, 78.957, 78.957, 78.957, 19.739, 19.739, 19.739,
+           39.478, 39.478, 39.478]
+      kd: [62.832, 15.080, 30.159, 62.832, 15.080, 5.027,
+           62.832, 15.080, 30.159, 62.832, 15.080, 5.027,
+           15.080, 15.080, 15.080,
+           5.027, 5.027, 5.027, 5.027, 1.257, 1.257, 1.257,
+           5.027, 5.027, 5.027, 5.027, 1.257, 1.257, 1.257,
+           2.513, 2.513, 2.513]
+      max_steps: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # left arm
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # right arm
+                  10.0, 10.0, 10.0,                           # waist
+                  10.0, 10.0, 10.0,                           # head
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0,         # left leg
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0]         # right leg
+
+    # rl_flat：robolab（Isaac Lab）ti5_flat 訓練的平地速度追蹤 policy（graphen_rl_policy/Ti5FlatPolicy），
+    # 29 軸（頸部不在 policy 中，固定在 0）、10 幀 history、沒有步態相位。
+    # 設定依 graphen_rl_policy/ref/env.yaml（2026-10-20_01-37-45_ft_std025）。
+    # TODO(verify-with-training): joints 的順序是由 onnx 權重推斷的 Isaac Lab 廣度優先順序，
+    # history 的排法也是推斷的。在 t170a（hardware:=mujoco_pd mujoco_robot:=t170a）上能自由站立與邁步，
+    # 但訓練端確認 robot.joint_names 與 obs 組法之前不要用於實機。
+    # 訓練的 PD 增益（kp / kd）與 fb70 的 MJCF 差很多，要在 hardware:=mujoco_pd 下測試
+    rl_flat:
+      type: plugin
+      plugin: graphen_rl_policy/Ti5FlatPolicy
+      model_path: package://graphen_rl_policy/policy/tc_flat_policy.onnx
+      model_sha256: 95aa49c3af040afefd60b31685efe8b55d3c85a5b98740c266d93f44c1f57ffd
+      policy_dt: 0.02     # s（sim dt 0.005 × decimation 4）
+      entry_speed: 0.5    # rad/s
+      log_period: 2.0
+      action_scale: 0.25
+      history_length: 10
+      history_layout: frame_major
+      history_oldest_first: true
+      # obs_scales 全部為 1.0、clip 100（env.yaml normalization），使用預設值
+      joints: [L_HIP_P, R_HIP_P, WAIST_Y, L_HIP_R, R_HIP_R, WAIST_R,
+               L_HIP_Y, R_HIP_Y, WAIST_P, L_KNEE_P, R_KNEE_P, L_SHOULDER_P,
+               R_SHOULDER_P, L_ANKLE_P, R_ANKLE_P, L_SHOULDER_R, R_SHOULDER_R, L_ANKLE_R,
+               R_ANKLE_R, L_SHOULDER_Y, R_SHOULDER_Y, L_ELBOW_Y, R_ELBOW_Y, L_WRIST_P,
+               R_WRIST_P, L_WRIST_Y, R_WRIST_Y, L_WRIST_R, R_WRIST_R]
+      # env.yaml 的 init_state.joint_pos（微彎膝、手臂下垂），沒有列出的為 0
+      default_joint_pos: [-0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4,
+                          -0.4, 0.0, 0.0, 0.2, -0.2, -1.3, 1.3, 0.0, 0.0, 0.0,
+                          0.0, -0.3, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      # env.yaml 的 actuators stiffness / damping
+      kp: [200.0, 200.0, 300.0, 150.0, 150.0, 300.0, 150.0, 150.0, 300.0, 200.0,
+           200.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 30.0, 30.0, 40.0,
+           40.0, 40.0, 40.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]
+      kd: [5.0, 5.0, 6.0, 4.0, 4.0, 6.0, 4.0, 4.0, 6.0, 5.0,
+           5.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 1.5, 1.5, 1.5,
+           1.5, 1.5, 1.5, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5]
+      fixed_joints: [NECK_Y, NECK_P, NECK_R]
+      fixed_positions: [0.0, 0.0, 0.0]
       max_steps: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # left arm
                   10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # right arm
                   10.0, 10.0, 10.0,                           # waist
@@ -316,80 +368,38 @@ switch_group_controller:
       damping: 1.0e-6
       residual_tolerance: 1.0e-3   # rad
 
-# output_enabled：false 時該群組不寫 command，關節維持最後的 command（不斷電、不卸力），
-# 用來停用會碰撞或故障的部位；只在啟動時讀取。
+# 子群組 controller 與硬體無關的參數（type 與介面接線在 hardware/<hardware>.yaml）。
+# output_enabled（只有 PositionController 有）：false 時該群組不寫 command，關節維持最後的 command
+# （不斷電、不卸力），用來停用會碰撞或故障的部位；只在啟動時讀取。PdController 沒有這個參數。
 # 注意：forward / reverse 只動手腕，BT 的 joint_reciprocate 等 L_WRIST_P 越過門檻才換向，
 # 關閉手臂時 BT 會一直等待，所以手臂只在跑 walk 等模式時才關閉
+
 left_arm_group_controller:
   ros__parameters:
-    input_interfaces: [L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R]
-    output_interfaces:
-      - L_SHOULDER_P/position
-      - L_SHOULDER_R/position
-      - L_SHOULDER_Y/position
-      - L_ELBOW_Y/position
-      - L_WRIST_P/position
-      - L_WRIST_Y/position
-      - L_WRIST_R/position
     reference_publish_rate: 50.0
     output_enabled: true
 
 right_arm_group_controller:
   ros__parameters:
-    input_interfaces: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R]
-    output_interfaces:
-      - R_SHOULDER_P/position
-      - R_SHOULDER_R/position
-      - R_SHOULDER_Y/position
-      - R_ELBOW_Y/position
-      - R_WRIST_P/position
-      - R_WRIST_Y/position
-      - R_WRIST_R/position
     reference_publish_rate: 50.0
     output_enabled: true
 
 waist_group_controller:
   ros__parameters:
-    input_interfaces: [WAIST_Y, WAIST_R, WAIST_P]
-    output_interfaces:
-      - WAIST_Y/position
-      - WAIST_R/position
-      - WAIST_P/position
     reference_publish_rate: 50.0
     output_enabled: true
 
 head_group_controller:
   ros__parameters:
-    input_interfaces: [NECK_Y, NECK_P, NECK_R]
-    output_interfaces:
-      - NECK_Y/position
-      - NECK_P/position
-      - NECK_R/position
     reference_publish_rate: 50.0
     output_enabled: true
 
 left_leg_group_controller:
   ros__parameters:
-    input_interfaces: [L_HIP_P, L_HIP_R, L_HIP_Y, L_KNEE_P, L_ANKLE_P, L_ANKLE_R]
-    output_interfaces:
-      - L_HIP_P/position
-      - L_HIP_R/position
-      - L_HIP_Y/position
-      - L_KNEE_P/position
-      - L_ANKLE_P/position
-      - L_ANKLE_R/position
     reference_publish_rate: 50.0
     output_enabled: true
 
 right_leg_group_controller:
   ros__parameters:
-    input_interfaces: [R_HIP_P, R_HIP_R, R_HIP_Y, R_KNEE_P, R_ANKLE_P, R_ANKLE_R]
-    output_interfaces:
-      - R_HIP_P/position
-      - R_HIP_R/position
-      - R_HIP_Y/position
-      - R_KNEE_P/position
-      - R_ANKLE_P/position
-      - R_ANKLE_R/position
     reference_publish_rate: 50.0
     output_enabled: true

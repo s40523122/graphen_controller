@@ -11,8 +11,10 @@
 
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>forward_command_controller</exec_depend>
-  <!-- use_mujoco:=true 時才需要；沒有建置時其他模式仍可使用 -->
+  <!-- hardware:=mujoco / mujoco_pd 時才需要；沒有建置時其他硬體仍可使用 -->
   <exec_depend>graphen_mujoco</exec_depend>
+  <!-- mujoco_robot:=t170a 時的模型 -->
+  <exec_depend>t170a_description</exec_depend>
   <exec_depend>graphen_controllers</exec_depend>
   <exec_depend>hardware_interface</exec_depend>
   <exec_depend>imu_sensor_broadcaster</exec_depend>

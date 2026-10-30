@@ -1,5 +1,4 @@
-# 實機 IMU（use_mock_imu:=false）時，疊加在 controllers.yaml 之後載入。
-# mock 模式不會載入這個檔案。
+# use_mock_imu:=false（hardware:=mock / real）：實機 FSS-IMU16460-C（imu16460_hardware）。
 
 controller_manager:
   ros__parameters:

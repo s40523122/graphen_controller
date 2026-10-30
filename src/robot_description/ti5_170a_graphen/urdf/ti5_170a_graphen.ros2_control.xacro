@@ -1,24 +1,36 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
     <!-- T170 本體 ros2_control。
-         use_fake_hardware 為 true 時使用 mock_components/GenericSystem，否則使用 ti5_hardware/Ti5Hardware（CAN 實機）。
+         hardware：mock（mock_components/GenericSystem）、real（ti5_hardware/Ti5Hardware，CAN 實機）、
+         mujoco / mujoco_pd（graphen_mujoco/MujocoSystem，見下）；其他值會讓展開失敗。
          initial_positions_file：mock 的 position 初始值；real_initial_positions_file：Ti5Hardware 使用的初始位置。
          Ti5Hardware 的關節限位取自 robot_description 的 <limit>，超限命令會 clamp 到限位。
          state interface：position（rad）、velocity（rad/s）、current（濾波電流）、error_code（馬達錯誤碼），
          後兩者為自訂介面，只出現在 /dynamic_joint_states，不在 /joint_states。
          max_command_velocity：送往馬達的指令最大變化速度（rad/s，0 為不限速），開機走向初始姿態時也受此限制。
          實機參數由頂層 xacro 傳入，不在這裡給預設路徑，缺少時 Ti5Hardware 會在 on_init 失敗。
-         use_mujoco 為 true 時改用 graphen_mujoco/MujocoSystem（MuJoCo 模擬，優先於 use_fake_hardware），
-         同一個 system 另外宣告 imu_sensor（介面與 imu16460 實機相同）；mujoco_model 為 MJCF 路徑，
-         mujoco_viewer_port 為 viewer 的 UDP port（0 為關閉）。position 初始值同樣取自 initial_positions_file -->
+         MuJoCo 時同一個 system 另外宣告 imu_sensor（介面與 imu16460 實機相同）；mujoco_model 為 MJCF 路徑，
+         mujoco_viewer_port 為 viewer 的 UDP port（0 為關閉）。position 初始值同樣取自 initial_positions_file。
+         hardware:=mujoco_pd 時各 joint 的 command interface 為 effort，子群組使用 graphen_control/PdController
+         （見 graphen_bringup/config/hardware/mujoco_pd.yaml）；其他都是 position -->
     <xacro:macro name="ti5_170a_graphen_ros2_control"
-                 params="name initial_positions_file use_fake_hardware
+                 params="name initial_positions_file hardware
                          can_config_path real_initial_positions_file hw_read_timeout_ms
                          max_command_velocity
-                         use_mujoco:=false mujoco_model:='' mujoco_viewer_port:=0">
+                         mujoco_model:='' mujoco_viewer_port:=0
+                         mujoco_fixed_base:=false mujoco_missing_joints:=error">
+
+        <!-- 不合法的 hardware 直接讓展開失敗，避免默默選到其他硬體 -->
+        <xacro:if value="${hardware not in ['mock', 'mujoco', 'mujoco_pd', 'real']}">
+            ${xacro.fatal("hardware must be one of mock, mujoco, mujoco_pd, real; got '" + hardware + "'")}
+        </xacro:if>
+        <xacro:property name="use_mujoco" value="${hardware in ['mujoco', 'mujoco_pd']}"/>
 
         <xacro:property name="initial_positions"
                 value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
+        <!-- mock 與 Ti5 實機只有 position 指令 -->
+        <xacro:property name="joint_command_interface"
+                value="${'effort' if hardware == 'mujoco_pd' else 'position'}"/>
 
         <ros2_control name="${name}" type="system">
             <hardware>
@@ -26,26 +38,30 @@
                     <plugin>graphen_mujoco/MujocoSystem</plugin>
                     <param name="model_path">${mujoco_model}</param>
                     <param name="viewer_port">${mujoco_viewer_port}</param>
+                    <!-- true：每步把浮動基座重設回初始位姿（吊掛）；模型沒有 free joint 時無作用 -->
+                    <param name="fixed_base">${mujoco_fixed_base}</param>
+                    <!-- virtual：模型沒有的 joint（例如 t170a 的頸部）照樣匯出介面，狀態固定在初始值 -->
+                    <param name="missing_joints">${mujoco_missing_joints}</param>
                 </xacro:if>
 
                 <xacro:unless value="${use_mujoco}">
-                <xacro:if value="${use_fake_hardware}">
+                <xacro:if value="${hardware == 'mock'}">
                     <plugin>mock_components/GenericSystem</plugin>
                     <!-- 由 position 指令推算 velocity 狀態；current / error_code 在 mock 中沒有資料（NaN） -->
                     <param name="calculate_dynamics">true</param>
                 </xacro:if>
 
-                <xacro:unless value="${use_fake_hardware}">
+                <xacro:if value="${hardware == 'real'}">
                     <plugin>ti5_hardware/Ti5Hardware</plugin>
                     <param name="can_config_path">${can_config_path}</param>
                     <param name="hw_read_timeout_ms">${hw_read_timeout_ms}</param>
                     <param name="initial_positions_file">${real_initial_positions_file}</param>
                     <param name="max_command_velocity">${max_command_velocity}</param>
-                </xacro:unless>
+                </xacro:if>
                 </xacro:unless>
             </hardware>
             <joint name="L_SHOULDER_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_SHOULDER_P']}</param>
                 </state_interface>
@@ -54,7 +70,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_SHOULDER_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_SHOULDER_R']}</param>
                 </state_interface>
@@ -63,7 +79,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_SHOULDER_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_SHOULDER_Y']}</param>
                 </state_interface>
@@ -72,7 +88,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_ELBOW_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_ELBOW_Y']}</param>
                 </state_interface>
@@ -81,7 +97,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_WRIST_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_WRIST_P']}</param>
                 </state_interface>
@@ -90,7 +106,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_WRIST_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_WRIST_Y']}</param>
                 </state_interface>
@@ -99,7 +115,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_WRIST_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_WRIST_R']}</param>
                 </state_interface>
@@ -108,7 +124,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_SHOULDER_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_SHOULDER_P']}</param>
                 </state_interface>
@@ -117,7 +133,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_SHOULDER_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_SHOULDER_R']}</param>
                 </state_interface>
@@ -126,7 +142,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_SHOULDER_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_SHOULDER_Y']}</param>
                 </state_interface>
@@ -135,7 +151,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_ELBOW_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_ELBOW_Y']}</param>
                 </state_interface>
@@ -144,7 +160,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_WRIST_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_WRIST_P']}</param>
                 </state_interface>
@@ -153,7 +169,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_WRIST_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_WRIST_Y']}</param>
                 </state_interface>
@@ -162,7 +178,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_WRIST_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_WRIST_R']}</param>
                 </state_interface>
@@ -173,7 +189,7 @@
 
             <!-- Waist -->
             <joint name="WAIST_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['WAIST_Y']}</param>
                 </state_interface>
@@ -182,7 +198,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="WAIST_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['WAIST_R']}</param>
                 </state_interface>
@@ -191,7 +207,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="WAIST_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['WAIST_P']}</param>
                 </state_interface>
@@ -202,7 +218,7 @@
 
             <!-- Head -->
             <joint name="NECK_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['NECK_Y']}</param>
                 </state_interface>
@@ -211,7 +227,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="NECK_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['NECK_R']}</param>
                 </state_interface>
@@ -220,7 +236,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="NECK_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['NECK_P']}</param>
                 </state_interface>
@@ -231,7 +247,7 @@
 
             <!-- Left Leg -->
             <joint name="L_HIP_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_HIP_P']}</param>
                 </state_interface>
@@ -240,7 +256,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_HIP_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_HIP_R']}</param>
                 </state_interface>
@@ -249,7 +265,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_HIP_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_HIP_Y']}</param>
                 </state_interface>
@@ -259,7 +275,7 @@
             </joint>
 
             <joint name="L_KNEE_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_KNEE_P']}</param>
                 </state_interface>
@@ -268,7 +284,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_ANKLE_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_ANKLE_P']}</param>
                 </state_interface>
@@ -277,7 +293,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="L_ANKLE_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['L_ANKLE_R']}</param>
                 </state_interface>
@@ -288,7 +304,7 @@
 
             <!-- Right Leg -->
             <joint name="R_HIP_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_HIP_P']}</param>
                 </state_interface>
@@ -297,7 +313,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_HIP_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_HIP_R']}</param>
                 </state_interface>
@@ -306,7 +322,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_HIP_Y">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_HIP_Y']}</param>
                 </state_interface>
@@ -316,7 +332,7 @@
             </joint>
 
             <joint name="R_KNEE_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_KNEE_P']}</param>
                 </state_interface>
@@ -325,7 +341,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_ANKLE_P">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_ANKLE_P']}</param>
                 </state_interface>
@@ -334,7 +350,7 @@
                 <state_interface name="error_code"/>
             </joint>
             <joint name="R_ANKLE_R">
-                <command_interface name="position"/>
+                <command_interface name="${joint_command_interface}"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['R_ANKLE_R']}</param>
                 </state_interface>
