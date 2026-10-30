@@ -33,7 +33,8 @@ add_library(${PROJECT_NAME} SHARED
   src/locomotion_planner.cpp
   src/plugin_motion.cpp
   src/switch_group_controller.cpp
-  src/sub_group_controller.cpp
+  src/sub_group_controller/pd_controller.cpp
+  src/sub_group_controller/position_controller.cpp
   src/target_motion.cpp
 )
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)

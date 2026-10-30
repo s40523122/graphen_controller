@@ -56,12 +56,16 @@ struct RobotState {
 };
 
 // 演算法每個週期的輸出，長度等於 joint 數。
-// planner 在每次 update() 之前會把兩者都填成 NaN，沒有寫入的 joint 即為保持
+// planner 在每次 update() 之前會把全部欄位填成 NaN，沒有寫入的 joint 即為保持
 struct JointCommand {
   // 期望關節角度（rad）；NaN 表示保持目前位置
   std::vector<double> positions;
   // 速度前饋（rad/s）；NaN 表示沒有前饋
   std::vector<double> velocities;
+  // PD 增益（kp：Nm/rad，kd：Nm·s/rad）；NaN 表示使用下游 controller 的預設值。
+  // 只有下游為 PD controller 時才生效，位置模式的下游會忽略
+  std::vector<double> kp;
+  std::vector<double> kd;
 };
 
 }  // namespace graphen::locomotion

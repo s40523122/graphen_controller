@@ -51,6 +51,8 @@ void LocomotionPlanner::start(
   constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
   output_.positions = initial_positions;
   output_.velocities.assign(num_interfaces_, kNaN);
+  output_.kp.assign(num_interfaces_, kNaN);
+  output_.kd.assign(num_interfaces_, kNaN);
   output_.sample_period = 0.0;
   state_ = RobotState{};
   state_.measured_positions.assign(num_interfaces_, kNaN);
@@ -58,6 +60,8 @@ void LocomotionPlanner::start(
   state_.commanded_positions = initial_positions;
   command_.positions.assign(num_interfaces_, kNaN);
   command_.velocities.assign(num_interfaces_, kNaN);
+  command_.kp.assign(num_interfaces_, kNaN);
+  command_.kd.assign(num_interfaces_, kNaN);
   motion_.reset();
   sink_ = sink;
   read_state_ = std::move(read_state);
@@ -107,9 +111,11 @@ void LocomotionPlanner::loop() {
 
     auto & current = output_.positions;
     if (motion_) {
-      // 沒有寫入的介面為 NaN（保持、沒有前饋）
+      // 沒有寫入的介面為 NaN（保持、沒有前饋、預設增益）
       std::fill(command_.positions.begin(), command_.positions.end(), kNaN);
       std::fill(command_.velocities.begin(), command_.velocities.end(), kNaN);
+      std::fill(command_.kp.begin(), command_.kp.end(), kNaN);
+      std::fill(command_.kd.begin(), command_.kd.end(), kNaN);
       motion_->update(dt, state_, command_);
       const auto & max_steps = motion_->max_steps();
       const auto & desired = command_.positions;
@@ -122,6 +128,14 @@ void LocomotionPlanner::loop() {
       for (size_t i = 0; i < output_.velocities.size() && i < command_.velocities.size(); ++i) {
         const double velocity = command_.velocities[i];
         output_.velocities[i] = std::isfinite(velocity) ? velocity : kNaN;
+      }
+      // 增益必須是非負的有限值，否則改用下游的預設值
+      const auto valid_gain = [](double gain) {return std::isfinite(gain) && gain >= 0.0;};
+      for (size_t i = 0; i < output_.kp.size() && i < command_.kp.size(); ++i) {
+        output_.kp[i] = valid_gain(command_.kp[i]) ? command_.kp[i] : kNaN;
+      }
+      for (size_t i = 0; i < output_.kd.size() && i < command_.kd.size(); ++i) {
+        output_.kd[i] = valid_gain(command_.kd[i]) ? command_.kd[i] : kNaN;
       }
       output_.sample_period = motion_->sample_period();
     }

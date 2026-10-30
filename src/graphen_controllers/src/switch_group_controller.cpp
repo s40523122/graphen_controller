@@ -189,6 +189,10 @@ controller_interface::CallbackReturn SwitchGroupController::on_init() {
   try {
     auto_declare<std::vector<std::string>>("command_interfaces", std::vector<std::string>{});
     auto_declare<std::vector<std::string>>("sample_period_interfaces", std::vector<std::string>{});
+    auto_declare<std::vector<std::string>>(
+      "velocity_command_interfaces", std::vector<std::string>{});
+    auto_declare<std::vector<std::string>>("kp_command_interfaces", std::vector<std::string>{});
+    auto_declare<std::vector<std::string>>("kd_command_interfaces", std::vector<std::string>{});
     auto_declare<std::vector<std::string>>("state_interfaces", std::vector<std::string>{});
     auto_declare<std::string>("sensor", std::string{});
     auto_declare<double>("state_publish_rate", 50.0);
@@ -232,22 +236,40 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
   }
   const size_t num_commands = command_interface_names_.size();
 
-  // 下游插補用的點間隔，接在 command_interfaces 之後 claim
+  // 速度前饋與 PD 增益（選填，下游為 PD controller 時使用），與 command_interfaces 一一對應
+  const auto read_per_command_interfaces =
+    [&](const char * parameter, std::vector<std::string> & names) {
+      names = get_node()->get_parameter(parameter).as_string_array();
+      if (!names.empty() && names.size() != num_commands) {
+        RCLCPP_ERROR(logger,
+          "'%s' must be empty or contain %zu entries (one per command interface), got %zu.",
+          parameter, num_commands, names.size());
+        return false;
+      }
+      return true;
+    };
+  if (!read_per_command_interfaces("velocity_command_interfaces", velocity_interface_names_) ||
+    !read_per_command_interfaces("kp_command_interfaces", kp_interface_names_) ||
+    !read_per_command_interfaces("kd_command_interfaces", kd_interface_names_))
+  {
+    return controller_interface::CallbackReturn::ERROR;
+  }
+
+  // 下游插補用的點間隔，接在所有 command 之後 claim
   sample_period_interface_names_ =
     get_node()->get_parameter("sample_period_interfaces").as_string_array();
-  for (size_t i = 0; i < sample_period_interface_names_.size(); ++i) {
-    const auto & name = sample_period_interface_names_[i];
-    const bool duplicated = std::find(
-      sample_period_interface_names_.begin() + static_cast<std::ptrdiff_t>(i) + 1,
-      sample_period_interface_names_.end(), name) != sample_period_interface_names_.end();
-    const bool overlaps = std::find(
-      command_interface_names_.begin(), command_interface_names_.end(), name) !=
-      command_interface_names_.end();
-    if (duplicated || overlaps) {
-      RCLCPP_ERROR(logger,
-        "Sample period interface [ %s ] is duplicated or also listed in 'command_interfaces'.",
-        name.c_str());
-      return controller_interface::CallbackReturn::ERROR;
+
+  // claim 的介面不可重複
+  {
+    const auto claimed = command_interface_configuration().names;
+    for (size_t i = 0; i < claimed.size(); ++i) {
+      if (std::find(claimed.begin() + static_cast<std::ptrdiff_t>(i) + 1, claimed.end(),
+        claimed[i]) != claimed.end())
+      {
+        RCLCPP_ERROR(logger, "Command interface [ %s ] is listed more than once.",
+          claimed[i].c_str());
+        return controller_interface::CallbackReturn::ERROR;
+      }
     }
   }
 
@@ -527,11 +549,13 @@ controller_interface::InterfaceConfiguration
 SwitchGroupController::command_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
-  // 位置在前，sample_period 在後；update() 依此順序寫入
+  // 依序為位置、速度、kp、kd、sample_period；update() 依此順序寫入
   config.names = command_interface_names_;
-  config.names.insert(
-    config.names.end(), sample_period_interface_names_.begin(),
-    sample_period_interface_names_.end());
+  for (const auto * names : {&velocity_interface_names_, &kp_interface_names_,
+      &kd_interface_names_, &sample_period_interface_names_})
+  {
+    config.names.insert(config.names.end(), names->begin(), names->end());
+  }
   return config;
 }
 
@@ -882,17 +906,31 @@ controller_interface::return_type SwitchGroupController::update(
   state_buffer_.try_write([this](RobotState & state) {read_robot_state(state);});
 
   // 輸出 planner 的最新目標；planner 尚未寫入（長度不符）時不輸出。
-  // Output::velocities（速度前饋）目前沒有寫往下游：子群組與硬體都只有 position 介面
+  // 速度與增益只在有設定對應介面時寫入（NaN 由下游解讀為沒有前饋 / 預設增益）
   const auto * output = target_buffer_.readFromRT();
   const size_t num_commands = command_interface_names_.size();
+  const size_t num_claimed = num_commands + velocity_interface_names_.size() +
+    kp_interface_names_.size() + kd_interface_names_.size() +
+    sample_period_interface_names_.size();
   if (output != nullptr && output->positions.size() == num_commands &&
-    command_interfaces_.size() >= num_commands)
+    output->velocities.size() == num_commands && output->kp.size() == num_commands &&
+    output->kd.size() == num_commands && command_interfaces_.size() == num_claimed)
   {
-    for (size_t i = 0; i < num_commands; ++i) {
-      command_interfaces_[i].set_value(output->positions[i]);
-    }
-    for (size_t i = num_commands; i < command_interfaces_.size(); ++i) {
-      command_interfaces_[i].set_value(output->sample_period);
+    size_t index = 0;
+    const auto write_all = [&](const std::vector<double> & values, bool enabled) {
+        if (!enabled) {
+          return;
+        }
+        for (const double value : values) {
+          command_interfaces_[index++].set_value(value);
+        }
+      };
+    write_all(output->positions, true);
+    write_all(output->velocities, !velocity_interface_names_.empty());
+    write_all(output->kp, !kp_interface_names_.empty());
+    write_all(output->kd, !kd_interface_names_.empty());
+    for (; index < command_interfaces_.size(); ++index) {
+      command_interfaces_[index].set_value(output->sample_period);
     }
   }
 

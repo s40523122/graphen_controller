@@ -7,12 +7,20 @@
       Top-level controller that switches command targets of downstream groups by mode.
     </description>
   </class>
-  <!-- 底層子群組 chainable controller -->
-  <class name="graphen_control/SubGroupController"
-         type="graphen::control::SubGroupController"
+  <!-- 底層子群組 chainable controller：位置模式 -->
+  <class name="graphen_control/PositionController"
+         type="graphen::control::PositionController"
          base_class_type="controller_interface::ChainableControllerInterface">
     <description>
-      Chainable sub-group controller that forwards references to hardware command interfaces.
+      Chainable sub-group controller that forwards position references to hardware command interfaces.
+    </description>
+  </class>
+  <!-- 底層子群組 chainable controller：PD 模式（輸出 effort） -->
+  <class name="graphen_control/PdController"
+         type="graphen::control::PdController"
+         base_class_type="controller_interface::ChainableControllerInterface">
+    <description>
+      Chainable sub-group controller that computes joint PD torques and writes effort commands.
     </description>
   </class>
 </library>

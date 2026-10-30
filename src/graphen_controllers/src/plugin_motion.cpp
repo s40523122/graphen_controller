@@ -62,6 +62,8 @@ void PluginMotion::update(double dt, const RobotState & state, JointCommand & co
     constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
     std::fill(command.positions.begin(), command.positions.end(), kNaN);
     std::fill(command.velocities.begin(), command.velocities.end(), kNaN);
+    std::fill(command.kp.begin(), command.kp.end(), kNaN);
+    std::fill(command.kd.begin(), command.kd.end(), kNaN);
   }
 }
 

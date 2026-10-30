@@ -27,7 +27,8 @@
 
 namespace graphen::control {
 
-// 頂層切換 controller：依目前模式，寫入下游 SubGroupController 的 reference interface。
+// 頂層切換 controller：依目前模式，寫入下游子群組 controller（PositionController / PdController）
+// 的 reference interface。
 //
 // 每個模式對應一個 Motion（固定目標、BVH 動作或外部演算法 plugin），由 LocomotionPlanner 在 non-RT thread 中以
 // planner_rate 播放、每週期最多移動 max_steps，寫入 target_buffer_；update() 只讀取最新值輸出。
@@ -39,6 +40,10 @@ namespace graphen::control {
 //   command_interfaces       下游 reference interface（例如 left_arm_group_controller/L_SHOULDER_P）
 //   sample_period_interfaces （選填）下游的 sample_period reference（例如 left_arm_group_controller/sample_period），
 //                            每週期寫入目前 Motion 的輸出點間隔，供下游插補
+//   velocity_command_interfaces / kp_command_interfaces / kd_command_interfaces
+//                            （選填）與 command_interfaces 一一對應的下游速度前饋與 PD 增益 reference
+//                            （例如 left_arm_group_controller/L_SHOULDER_P/kp），下游為 PdController 時設定。
+//                            每週期寫入 Motion 的輸出，沒有指定的值為 NaN（下游使用預設值）
 //   state_interfaces         要讀取並發布的 state interface
 //   sensor                   （選填）sensor state interface，會自動加入 state_interfaces
 //   state_publish_rate       ~/states 的發布頻率 (Hz)
@@ -140,6 +145,10 @@ private:
   std::unique_ptr<pluginlib::ClassLoader<locomotion::BaseStateEstimator>> estimator_loader_;
 
   std::vector<std::string> command_interface_names_;
+  // 速度前饋與 PD 增益的下游介面；沒有設定時為空（下游為位置模式）
+  std::vector<std::string> velocity_interface_names_;
+  std::vector<std::string> kp_interface_names_;
+  std::vector<std::string> kd_interface_names_;
   std::vector<std::string> sample_period_interface_names_;
   std::vector<std::string> state_interface_names_;
 

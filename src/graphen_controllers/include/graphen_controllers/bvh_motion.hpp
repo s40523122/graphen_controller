@@ -11,7 +11,7 @@ namespace graphen::control {
 
 // 播放 BVH 動作。每一幀在 planner thread 中才以 BvhRetargeter 轉成 joint 角度。
 // 依檔案頻率輸出原始幀（幀與幀之間保持），並以 sample_period() 告知幀間隔，
-// 插補由下游的 SubGroupController 在 RT 迴圈中進行。
+// 插補由下游的子群組 controller（PositionController / PdController）在 RT 迴圈中進行。
 //
 // 流程：
 //   Approach：以 approach_max_steps 走向第 0 幀，所有介面都在一步之內時開始播放（sample_period 為 0）

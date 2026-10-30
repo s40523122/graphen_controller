@@ -28,6 +28,9 @@ public:
     std::vector<double> positions;
     // Motion 的速度前饋（rad/s），NaN 表示沒有
     std::vector<double> velocities;
+    // Motion 指定的 PD 增益，NaN 表示使用下游的預設值
+    std::vector<double> kp;
+    std::vector<double> kd;
     // 目前 Motion 的輸出點間隔（秒），供下游插補；0 表示連續
     double sample_period{0.0};
   };

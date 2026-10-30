@@ -3,7 +3,7 @@
 <package format="3">
   <name>graphen_controllers</name>
   <version>0.0.0</version>
-  <description>Graphen ros2_control controller plugins (SwitchGroupController, SubGroupController).</description>
+  <description>Graphen ros2_control controller plugins (SwitchGroupController, PositionController, PdController).</description>
   <maintainer email="riverji@graphen.ai">jin</maintainer>
   <license>TODO: License declaration</license>
 

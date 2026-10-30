@@ -70,7 +70,7 @@ void BvhMotion::update(double dt, const RobotState & state, JointCommand & comma
   }
 
   if (phase_ == Phase::kPlay) {
-    // 依檔案頻率輸出原始幀（幀與幀之間保持），插補交給下游的 SubGroupController
+    // 依檔案頻率輸出原始幀（幀與幀之間保持），插補交給下游的子群組 controller
     time_in_frame_ += dt * options_.time_scale;
     while (time_in_frame_ >= frame_time) {
       time_in_frame_ -= frame_time;
