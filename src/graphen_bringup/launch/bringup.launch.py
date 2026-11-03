@@ -56,9 +56,10 @@ def generate_launch_description():
             description='CAN read timeout of ti5_hardware (hardware:=real / real_pd); '
                         'empty selects 20 for real and 2 for real_pd (must fit in the 5 ms cycle)'),
         DeclareLaunchArgument(
-            'max_missed_cycles', default_value='2',
+            'max_missed_cycles', default_value='10',
             description='hardware:=real_pd only. Consecutive cycles with missing CAN feedback '
-                        'tolerated before all motors fall back to position hold'),
+                        'tolerated before all motors fall back to position hold '
+                        '(default 10 gives ~50 ms transition margin after entering current mode)'),
         DeclareLaunchArgument(
             'max_command_velocity', default_value='0.5',
             description='Max command velocity [rad/s] of ti5_hardware, also limits the move '

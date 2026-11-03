@@ -20,6 +20,8 @@ namespace
 constexpr char kCurrentInterface[] = "current";
 constexpr char kErrorCodeInterface[] = "error_code";
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+// 進入電流模式後，馬達需要幾個週期才能穩定回應 0x41 GetFeedback；此期間跳過收取，不計入 missed_cycles_
+constexpr int kStartupGraceCycles = 10;
 }  // namespace
 
 std::vector<hardware_interface::StateInterface> Ti5Hardware::export_state_interfaces() {
@@ -178,6 +180,12 @@ hardware_interface::CallbackReturn Ti5Hardware::on_init(const hardware_interface
     }
 
     // 指令模式由 URDF 決定（hardware:=real 為 position、real_pd 為 effort），所有 joint 必須一致
+    RCLCPP_INFO(rclcpp::get_logger("Ti5Hardware"),
+                "First joint '%s' has %zu command interface(s): [%s].",
+                mapped_joints.empty() ? "(none)" : mapped_joints[0].name.c_str(),
+                mapped_joints.empty() ? 0u : mapped_joints[0].command_interfaces.size(),
+                mapped_joints.empty() ? "" : (mapped_joints[0].command_interfaces.empty()
+                    ? "(empty)" : mapped_joints[0].command_interfaces[0].name.c_str()));
     std::string mode_interface;
     for (const hardware_interface::ComponentInfo & joint : mapped_joints) {
         if (joint.command_interfaces.size() != 1 ||
@@ -461,6 +469,7 @@ hardware_interface::CallbackReturn Ti5Hardware::on_activate(const rclcpp_lifecyc
     }
     consecutive_read_fail_cycles_ = 0;
     torque_active_ = false;
+    prev_torque_active_ = false;
     position_hold_fallback_ = false;
     missed_cycles_ = 0;
     return CallbackReturn::SUCCESS;
@@ -656,12 +665,39 @@ hardware_interface::return_type Ti5Hardware::readEffortMode() {
         return hardware_interface::return_type::ERROR;
     }
 
-    // 所有通道先送出查詢再收回覆，各通道的匯流排傳輸互相重疊；共用同一個 deadline
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(hw_read_timeout_ms_);
-    for (ChannelGroup & group : channel_groups_) {
-        group.builder->drainReceived();
-        group.builder->requestFeedbackAll(true);
+    // GetFeedback (0x41) 只在電流模式有效；位置保持階段馬達不回應此命令，
+    // 直接沿用 on_activate() 讀到的位置，等待 controller 送出第一個 effort 命令。
+    if (!torque_active_) {
+        prev_torque_active_ = false;
+        return hardware_interface::return_type::OK;
     }
+
+    // torque_active_ 剛從 false 切到 true：32 顆馬達同時切換到電流模式，
+    // 第一個 read cycle 馬達尚未完全進入電流模式，0x41 回覆可能尚未就緒；
+    // 直接 return OK 跳過收取，讓下個週期再開始正式偵測。
+    if (!prev_torque_active_) {
+        prev_torque_active_ = true;
+        missed_cycles_ = -kStartupGraceCycles;
+        RCLCPP_INFO(rclcpp::get_logger("Ti5Hardware"),
+                    "Entered current mode, skipping %d startup cycles before feedback collection.",
+                    kStartupGraceCycles);
+        return hardware_interface::return_type::OK;
+    }
+
+    // 進入電流模式後的過渡期（missed_cycles_ < 0）：馬達尚未穩定回應 0x41，直接跳過收取
+    if (missed_cycles_ < 0) {
+        ++missed_cycles_;
+        return hardware_interface::return_type::OK;
+    }
+
+    // 所有通道先送出 0x41 查詢再收回覆，各通道的匯流排傳輸互相重疊；deadline 在所有請求送出後設定。
+    // poll_error=false：error response 會佔用 deadline budget（collectFeedbackAll 等到 deadline 才放棄），
+    // 導致後續通道的收取視窗被榨乾，所有通道的 motor feedback 都 timeout。
+    for (size_t k = 0; k < channel_groups_.size(); ++k) {
+        channel_groups_[k].builder->drainReceived();
+        channel_groups_[k].builder->requestFeedbackAll(false);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(hw_read_timeout_ms_);
 
     bool complete = true;
     for (size_t k = 0; k < channel_groups_.size(); ++k) {

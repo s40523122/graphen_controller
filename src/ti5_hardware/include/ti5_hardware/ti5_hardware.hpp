@@ -238,6 +238,7 @@ class Ti5Hardware : public hardware_interface::SystemInterface
         * @brief effort 模式：所有 joint 都收到有限的力矩命令後才切到電流模式，之前維持位置保持
         */
         bool torque_active_{false};
+        bool prev_torque_active_{false};  // 追蹤 torque_active_ 轉換，切換瞬間重設 missed_cycles_
 
         /**
         * @brief effort 模式：已退回位置保持（見 enterPositionHold）
