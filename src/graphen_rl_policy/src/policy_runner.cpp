@@ -84,14 +84,17 @@ void PolicyRunner::configure(const Context & context) {
 
   joint_names_ = params.get_string_array("joints").value_or(std::vector<std::string>{});
   if (joint_names_.empty()) {
-    throw std::invalid_argument("'joints' is required");
+    joint_names_ = context.joint_names;  // 未指定時使用 controller 的全部 joints
   }
   const auto name_map = params.get_string_array("name_map").value_or(std::vector<std::string>{});
   joint_indices_.clear();
   for (const auto & joint : joint_names_) {
     joint_indices_.push_back(controller_index(joint, name_map, context.joint_names));
   }
-  default_positions_ = required_array(params, "default_joint_pos", num_joints());
+  const auto default_pos_val = params.get_double_array("default_joint_pos");
+  default_positions_ = default_pos_val
+    ? required_array(params, "default_joint_pos", num_joints())
+    : std::vector<double>(num_joints(), 0.0);
   kp_ = optional_gains(params, "kp", num_joints());
   kd_ = optional_gains(params, "kd", num_joints());
 

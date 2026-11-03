@@ -192,6 +192,13 @@ class CanDriverBuilder {
         */
         bool collectFeedbackAll(std::chrono::steady_clock::time_point deadline, ChannelFeedback & out);
 
+        /**
+        * @brief 收取 socket buffer 中所有已到達的 8-byte feedback（不等待）。
+        *        與 setTargetCurrentMaWithFeedback 搭配：write 送 0x42，下一個 read 週期呼叫此方法。
+        * @param out 結果；out.motors 會被重設為 dof() 個元素
+        */
+        void drainAndCollectFeedback(ChannelFeedback & out);
+
     private:
         /**
         * @brief config 檔案路徑

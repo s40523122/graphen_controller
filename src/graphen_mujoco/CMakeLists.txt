@@ -40,12 +40,15 @@ if(NOT TARGET mujoco::mujoco)
   find_library(MUJOCO_LIBRARY NAMES mujoco
     HINTS ${_mujoco_search_dirs} PATH_SUFFIXES lib NO_DEFAULT_PATH)
   if(NOT MUJOCO_INCLUDE_DIR OR NOT MUJOCO_LIBRARY)
-    string(REPLACE ";" "\n  " _mujoco_searched "${_mujoco_search_dirs}")
-    message(FATAL_ERROR
-      "MuJoCo ${MUJOCO_VERSION} not found. Searched:\n  ${_mujoco_searched}\n"
-      "Download mujoco-${MUJOCO_VERSION}-linux-${CMAKE_SYSTEM_PROCESSOR}.tar.gz from "
-      "https://github.com/google-deepmind/mujoco/releases and extract it to "
-      "~/.local/mujoco-${MUJOCO_VERSION} (or set MUJOCO_DIR).")
+    string(REPLACE ";" "\n    " _mujoco_searched "${_mujoco_search_dirs}")
+    message(WARNING
+      "MuJoCo ${MUJOCO_VERSION} not found — graphen_mujoco will NOT be built.\n"
+      "  Searched:\n    ${_mujoco_searched}\n"
+      "  Download mujoco-${MUJOCO_VERSION}-linux-${CMAKE_SYSTEM_PROCESSOR}.tar.gz from\n"
+      "  https://github.com/google-deepmind/mujoco/releases and extract to\n"
+      "  ~/.local/mujoco-${MUJOCO_VERSION} (or set MUJOCO_DIR).")
+    ament_package()
+    return()
   endif()
   add_library(mujoco::mujoco SHARED IMPORTED)
   set_target_properties(mujoco::mujoco PROPERTIES

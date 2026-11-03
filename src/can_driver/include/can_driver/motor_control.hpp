@@ -228,6 +228,13 @@ class MotorControl
         bool setTargetCurrentMa(int32_t current_ma);
 
         /**
+        * @brief 設定目標電流並觸發 feedback（五字節 0x42，mA）；
+        *        馬達切換到電流模式，並非同步回覆 8 位元組 feedback（格式同 parseFeedback）。
+        *        下一個 read 週期用 drainAndCollectFeedback 收取。
+        */
+        bool setTargetCurrentMaWithFeedback(int32_t current_ma);
+
+        /**
         * @brief 送出 0x41（取得電流速度位置），不等待回覆；回覆用 parseFeedback 解析
         */
         bool requestFeedback();

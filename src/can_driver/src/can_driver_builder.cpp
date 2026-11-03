@@ -314,5 +314,26 @@ bool CanDriverBuilder::collectFeedbackAll(std::chrono::steady_clock::time_point 
     return remaining == 0;
 }
 
+void CanDriverBuilder::drainAndCollectFeedback(ChannelFeedback & out) {
+    out.motors.assign(motors_.size(), std::nullopt);
+    out.error.reset();
+    if (!socketCan_) {
+        return;
+    }
+    struct can_frame frame;
+    while (socketCan_->receiveFrame(frame, std::chrono::microseconds(0))) {
+        if (frame.can_id < can_id_ || frame.can_id >= can_id_ + motors_.size()) {
+            continue;
+        }
+        const size_t idx = frame.can_id - can_id_;
+        MotorFeedback fb;
+        if (MotorControl::parseFeedback(frame, fb)) {
+            if (!out.motors[idx]) {
+                out.motors[idx] = fb;
+            }
+        }
+    }
+}
+
 }  // namespace can_driver
 

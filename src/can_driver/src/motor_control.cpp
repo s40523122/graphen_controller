@@ -217,6 +217,10 @@ bool MotorControl::setTargetCurrentMa(int32_t current_ma) {
     return sendFiveByte(FiveByteCommand::SetTargetCurrent, current_ma);
 }
 
+bool MotorControl::setTargetCurrentMaWithFeedback(int32_t current_ma) {
+    return sendFiveByte(FiveByteCommand::SetCurrentWithFeedback, current_ma);
+}
+
 bool MotorControl::requestFeedback() {
     return sendOneByte(OneByteCommand::GetFeedback);
 }
