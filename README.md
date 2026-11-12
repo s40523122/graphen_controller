@@ -39,6 +39,7 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [dexterous_hand_hardware](src/dexterous_hands/dexterous_hand_hardware/) | hardware plugin（外部） | 靈巧手 `SystemInterface`（RS485） | — |
 | [graphen_mujoco](src/graphen_mujoco/) | hardware plugin | MuJoCo 模擬的 T170 本體 + IMU（`graphen_mujoco/MujocoSystem`）、MJCF 匯出與主機端 viewer（`tools/`） | — |
 | [t170a_description](src/robot_description/t170a/) | 資源（外部） | robolab 訓練用的 T170 A0 模型（URDF、MJCF、mesh），MuJoCo 驗證控制架構用，不代表實機 | — |
+| [ti5_t170_description](src/robot_description/ti5_t170_description/) | 資源（外部） | T170-V2.1-A0 模型（URDF xacro、MJCF、mesh），robolab `Ti5T170-Flat`（tc_new_025）的訓練模型 | — |
 | [graphen_rl_policy](src/graphen_rl_policy/) | locomotion plugin | RL policy 共用基類 `PolicyRunner`（ONNX Runtime）與 policy plugin：`T170VelocityPolicy`（FullBodyT70）、`Ti5FlatPolicy`（robolab） | graphen_locomotion |
 
 ## 快速開始
@@ -228,19 +229,25 @@ colcon build --symlink-install --packages-select graphen_mujoco   # 裝在其他
 |---|---|---|---|
 | `fb70`（預設） | `graphen_mujoco/models/t170_{free,fixed}.xml`（FullBodyT70 匯出，wtz 的訓練模型） | `mujoco`、`mujoco_pd` | mesh 指向 Orin 上的 `/devtest/FullBodyT70/...`，只能在 Orin 上載入 |
 | `t170a` | `t170a_description/mjcf/t170a.xml`（robolab，tc_flat 的訓練模型） | `mujoco_pd` | mesh 用相對路徑，WSL 也能跑；沒有頸部（三軸為虛擬關節） |
+| `ti5_t170` | `ti5_t170_description/mjcf/ti5_t170.xml`（T170-V2.1-A0 T-pose，tc_new_025 的訓練模型） | `mujoco_pd` | mesh 用相對路徑，WSL 也能跑；頸部是真正的關節；初始基座高度 1.07 m |
 
-`mujoco_fixed_base:=true`（預設）時基座固定在空中，相當於吊掛：fb70 改用 `t170_fixed.xml`，t170a 每步把基座重設回初始位姿。`false` 時為自由站立。
+policy 只在自己的訓練模型上才站得穩（例如 tc_new_025 在 t170a 上會倒），模型與 policy 要對應。各模型的浮動基座初始高度不同（訓練初始姿態下腳底貼地），由 launch 依 `mujoco_robot` 帶入 MujocoSystem 的 `initial_base_height`。
+
+`mujoco_fixed_base:=true`（預設）時基座固定在空中，相當於吊掛：fb70 改用 `t170_fixed.xml`，t170a / ti5_t170 每步把基座重設回初始位姿。`false` 時為自由站立。
 
 ```bash
 # fb70（Orin 容器內）
 ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco mujoco_fixed_base:=false
 ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_fixed_base:=false
-# t170a（任何機器）
+# t170a / ti5_t170（任何機器）
 ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_robot:=t170a mujoco_fixed_base:=true
+ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_robot:=ti5_t170 mujoco_fixed_base:=true
 
 # 主機上另開視窗（只顯示，不需要 ROS；視窗內按 End 重置模擬）。模型要與 launch 一致
 bash src/graphen_mujoco/tools/mujoco_viewer.sh                                  # fb70 自由站立
 bash src/graphen_mujoco/tools/mujoco_viewer.sh --model ../models/t170_fixed.xml # fb70 吊掛
+bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/t170a/mjcf/t170a.xml"
+bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/ti5_t170_description/mjcf/ti5_t170.xml"  # sim_rl 預設
 
 # 切到 policy：進入時會先以 entry_speed 走到 policy 的預設姿態，再開始推論
 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: rl_walk}"
@@ -253,12 +260,15 @@ ros2 topic pub -r 20 /switch_group_controller/cmd_vel geometry_msgs/msg/Twist "{
 - **自由站立測 RL policy 要用 `sim_rl.launch.py`**：PD 只保持姿態、沒有平衡能力，`bringup.launch.py` 自由站立啟動後幾秒內就會倒下（姿態約 90°），之後才切到 RL 模式已經來不及。`sim_rl.launch.py` 會在最後疊加一份情境參數（`default_mode` 設為 `mode`、該模式的 `entry_speed` 設為 0），讓 policy 從模擬開始就接手；本機 `controllers.yaml` 不用改，但 `mode` 必須已經定義在其中：
 
   ```bash
-  ros2 launch graphen_bringup sim_rl.launch.py                        # t170a + rl_flat（預設）
+  ros2 launch graphen_bringup sim_rl.launch.py                        # ti5_t170 + rl_flat（預設）
+  ros2 launch graphen_bringup sim_rl.launch.py mujoco_robot:=t170a    # tc_flat_policy*（t170a 訓練）
   ros2 launch graphen_bringup sim_rl.launch.py mode:=rl_walk mujoco_robot:=fb70   # Orin
   ```
 - `controllers.yaml.example` 有兩個 RL 模式（本機的 `controllers.yaml` 要使用時，從範本複製並加到 `modes`）：
   - `rl_walk`：`T170VelocityPolicy` + `policy/wtz_policy.onnx`，用 fb70 訓練。實測（fb70、position、自由站立）：能穩定站立；vx=0.5 時實際約 0.23 m/s，這是 policy 本身的表現（直接跑 `play_mujoco.py` 也約 0.25 m/s）。
   - `rl_flat`：`Ti5FlatPolicy` + `policy/tc_flat_policy.onnx`，用 t170a 訓練。實測（t170a、`mujoco_pd`、自由站立、WSL）：能穩定站立（傾斜約 2.5°）；vx=0.5 時能邁步、不會倒下。關節順序與 obs 組法是推斷的，**仍待訓練端確認**。
+- ti5_t170 的 MJCF 由 CAD 匯出的 T-pose 檔產生（補上 timestep、armature、ctrlrange、IMU、碰撞設定與 keyframe）；原檔或 `param.csv` 更新後重新產生：
+  `python3 src/robot_description/ti5_t170_description/scripts/make_mjcf.py --base-height 1.07`
 - fb70 的 MJCF 由 FullBodyT70 的訓練場景匯出，重新訓練或修改場景後要重新產生（需要主機的 `~/learnWalk_env`）：
   `~/learnWalk_env/bin/python src/graphen_mujoco/tools/export_mjcf.py`
 - **onnx 與設定綁定**：每個 RL 模式以 `model_sha256` 綁定 onnx，不符時 controller configure 失敗。

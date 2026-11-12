@@ -2,6 +2,7 @@ build/
 install/
 log/
 __pycache__/
+.vscode/
 
 # BVH 動作檔只追蹤預設檔，其他自行加入的動作不進版控
 *.bvh
@@ -17,3 +18,9 @@ src/graphen_rl_policy/third_party/onnxruntime/
 
 # MuJoCo 為環境依賴（各機器依架構安裝到 ~/.local 或 /opt 的 mujoco-3.11.0，或設定 MUJOCO_DIR），不放進 repo
 src/graphen_mujoco/third_party/
+
+# policy 模型不進版控（已追蹤的舊 onnx 不受影響）
+*.onnx
+
+# 專案的 Claude Code 指示只留在本機，不進版控
+CLAUDE.md

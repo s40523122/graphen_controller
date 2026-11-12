@@ -41,6 +41,7 @@ def generate_launch_description():
     scenario_params = LaunchConfiguration('scenario_params')
     # 由 resolve_mujoco_model 依 mujoco_robot 設定
     mujoco_missing_joints = LaunchConfiguration('mujoco_missing_joints')
+    mujoco_initial_base_height = LaunchConfiguration('mujoco_initial_base_height')
 
     declare_args = [
         DeclareLaunchArgument(
@@ -92,10 +93,12 @@ def generate_launch_description():
                         'fb70 selects t170_fixed.xml; models with a free joint (t170a) are pinned'),
         DeclareLaunchArgument(
             'mujoco_robot', default_value='fb70',
-            choices=['fb70', 't170a'],
+            choices=['fb70', 't170a', 'ti5_t170'],
             description='hardware:=mujoco / mujoco_pd only. fb70: graphen_mujoco/models '
                         '(FullBodyT70 export); t170a: t170a_description/mjcf/t170a.xml '
-                        '(motor actuators, hardware:=mujoco_pd only, no neck joints)'),
+                        '(motor actuators, hardware:=mujoco_pd only, no neck joints); '
+                        'ti5_t170: ti5_t170_description/mjcf/ti5_t170.xml '
+                        '(T170-V2.1-A0 T-pose, motor actuators, hardware:=mujoco_pd only)'),
         DeclareLaunchArgument(
             'mujoco_model', default_value='',
             description='MJCF path; empty selects the model of mujoco_robot'),
@@ -112,20 +115,30 @@ def generate_launch_description():
         return hardware.perform(context).startswith('mujoco')
 
     # 依 mujoco_robot 選擇模型與 MujocoSystem 的設定。只在 MuJoCo 時查詢模型套件，
-    # 沒有建置 graphen_mujoco / t170a_description 時其他硬體仍可使用
+    # 沒有建置 graphen_mujoco / 模型套件時其他硬體仍可使用
+    # 力矩馬達模型（只能用 PD）：(套件, MJCF 相對路徑, 缺少的 joint 處理, 浮動基座初始高度)。
+    # 初始高度為訓練初始姿態（微彎膝）下腳底貼地的高度
+    motor_models = {
+        # 模型沒有頸部，三軸改為虛擬關節
+        't170a': ('t170a_description', 'mjcf/t170a.xml', 'virtual', '0.894'),
+        # 腳底貼地為 1.065 m（ti5_t170_description/scripts/make_mjcf.py），留 5 mm 落地
+        'ti5_t170': ('ti5_t170_description', 'mjcf/ti5_t170.xml', 'error', '1.07'),
+    }
+
     def resolve_mujoco_model(context):
-        actions = [SetLaunchConfiguration('mujoco_missing_joints', 'error')]
+        actions = [SetLaunchConfiguration('mujoco_missing_joints', 'error'),
+                   SetLaunchConfiguration('mujoco_initial_base_height', '1.07')]
         if not is_mujoco(context):
             return actions
         robot = mujoco_robot.perform(context)
-        if robot == 't170a':
-            # t170a 的致動器是力矩馬達，只能用 PD；模型沒有頸部，三軸改為虛擬關節
+        if robot in motor_models:
             if hardware.perform(context) != 'mujoco_pd':
-                raise RuntimeError('mujoco_robot:=t170a needs hardware:=mujoco_pd '
+                raise RuntimeError(f'mujoco_robot:={robot} needs hardware:=mujoco_pd '
                                    '(the model has motor actuators)')
-            actions = [SetLaunchConfiguration('mujoco_missing_joints', 'virtual')]
-            path = os.path.join(
-                get_package_share_directory('t170a_description'), 'mjcf', 't170a.xml')
+            package, relpath, missing_joints, base_height = motor_models[robot]
+            actions = [SetLaunchConfiguration('mujoco_missing_joints', missing_joints),
+                       SetLaunchConfiguration('mujoco_initial_base_height', base_height)]
+            path = os.path.join(get_package_share_directory(package), relpath)
         else:
             name = 't170_fixed.xml' if IfCondition(mujoco_fixed_base).evaluate(context) \
                 else 't170_free.xml'
@@ -165,6 +178,7 @@ def generate_launch_description():
         ' mujoco_viewer_port:=', mujoco_viewer_port,
         ' mujoco_fixed_base:=', mujoco_fixed_base,
         ' mujoco_missing_joints:=', mujoco_missing_joints,
+        ' mujoco_initial_base_height:=', mujoco_initial_base_height,
     ])
     robot_description = {'robot_description': robot_description_raw}
 

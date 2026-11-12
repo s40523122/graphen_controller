@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!--
+  Q-pose / Unitree zero (= commit 10666da).
+  Call <xacro:ti5_load_q_pose/> when pose:=q.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="ti5_load_q_pose">
+    <xacro:property name="L_SHOULDER_R_rr" value="-1.45" scope="parent"/>
+    <xacro:property name="L_SHOULDER_R_rp" value="0.0" scope="parent"/>
+    <xacro:property name="L_SHOULDER_R_ry" value="0.0" scope="parent"/>
+    <xacro:property name="L_SHOULDER_R_lower" value="-0.12" scope="parent"/>
+    <xacro:property name="L_SHOULDER_R_upper" value="3.02" scope="parent"/>
+
+    <xacro:property name="R_SHOULDER_R_rr" value="1.45" scope="parent"/>
+    <xacro:property name="R_SHOULDER_R_rp" value="0.0" scope="parent"/>
+    <xacro:property name="R_SHOULDER_R_ry" value="0.0" scope="parent"/>
+    <xacro:property name="R_SHOULDER_R_lower" value="-3.02" scope="parent"/>
+    <xacro:property name="R_SHOULDER_R_upper" value="0.12" scope="parent"/>
+
+    <xacro:property name="L_ELBOW_Y_rr" value="0.0" scope="parent"/>
+    <xacro:property name="L_ELBOW_Y_rp" value="0.0" scope="parent"/>
+    <xacro:property name="L_ELBOW_Y_ry" value="-1.57" scope="parent"/>
+    <xacro:property name="L_ELBOW_Y_lower" value="-0.83" scope="parent"/>
+    <xacro:property name="L_ELBOW_Y_upper" value="2.44" scope="parent"/>
+
+    <xacro:property name="R_ELBOW_Y_rr" value="0.0" scope="parent"/>
+    <xacro:property name="R_ELBOW_Y_rp" value="0.0" scope="parent"/>
+    <xacro:property name="R_ELBOW_Y_ry" value="1.57" scope="parent"/>
+    <xacro:property name="R_ELBOW_Y_lower" value="-2.44" scope="parent"/>
+    <xacro:property name="R_ELBOW_Y_upper" value="0.83" scope="parent"/>
+  </xacro:macro>
+</robot>

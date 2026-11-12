@@ -20,7 +20,8 @@
                          can_config_path real_initial_positions_file hw_read_timeout_ms
                          max_command_velocity max_missed_cycles
                          mujoco_model:='' mujoco_viewer_port:=0
-                         mujoco_fixed_base:=false mujoco_missing_joints:=error">
+                         mujoco_fixed_base:=false mujoco_missing_joints:=error
+                         mujoco_initial_base_height:=1.07">
 
         <!-- 不合法的 hardware 直接讓展開失敗，避免默默選到其他硬體 -->
         <xacro:if value="${hardware not in ['mock', 'mujoco', 'mujoco_pd', 'real', 'real_pd']}">
@@ -45,6 +46,7 @@
                     <param name="fixed_base">${mujoco_fixed_base}</param>
                     <!-- virtual：模型沒有的 joint（例如 t170a 的頸部）照樣匯出介面，狀態固定在初始值 -->
                     <param name="missing_joints">${mujoco_missing_joints}</param>
+                    <param name="initial_base_height">${mujoco_initial_base_height}</param>
                 </xacro:if>
 
                 <xacro:unless value="${use_mujoco}">

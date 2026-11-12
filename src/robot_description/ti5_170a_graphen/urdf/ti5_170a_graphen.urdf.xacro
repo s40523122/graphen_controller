@@ -21,6 +21,8 @@
   <!-- MujocoSystem 的 fixed_base（吊掛）與 missing_joints（error / virtual） -->
   <xacro:arg name="mujoco_fixed_base" default="false"/>
   <xacro:arg name="mujoco_missing_joints" default="error"/>
+  <!-- 浮動基座的初始高度（m），依模型而定（腳底貼地），由 bringup 依 mujoco_robot 帶入 -->
+  <xacro:arg name="mujoco_initial_base_height" default="1.07"/>
 
   <!-- 靈巧手：預設不啟用；啟用時 hardware:=real / real_pd 才用實機，其他都是 mock -->
   <xacro:arg name="use_hands" default="false"/>
@@ -63,7 +65,8 @@
     mujoco_model="$(arg mujoco_model)"
     mujoco_viewer_port="$(arg mujoco_viewer_port)"
     mujoco_fixed_base="$(arg mujoco_fixed_base)"
-    mujoco_missing_joints="$(arg mujoco_missing_joints)"/>
+    mujoco_missing_joints="$(arg mujoco_missing_joints)"
+    mujoco_initial_base_height="$(arg mujoco_initial_base_height)"/>
 
   <!-- 3. 靈巧手 ros2_control（只在 use_hands:=true 時存在） -->
   <xacro:if value="$(arg use_hands)">

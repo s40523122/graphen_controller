@@ -1,0 +1,14 @@
+<!DOCTYPE MeshLabDocument>
+<MeshLabProject>
+ <MeshGroup>
+  <MLMesh filename="../../../../../???��?????-V2/T170-V2.1-urdf/T170-V2.1-????????-??????/T170-V2.1-A0/meshes/L_WRIST_R_S.STL" label="L_WRIST_R_S.STL">
+   <MLMatrix44>
+1 0 0 0 
+0 1 0 0 
+0 0 1 0 
+0 0 0 1 
+</MLMatrix44>
+  </MLMesh>
+ </MeshGroup>
+ <RasterGroup/>
+</MeshLabProject>

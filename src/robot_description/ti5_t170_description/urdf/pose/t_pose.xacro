@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!--
+  T-pose kinematic zero (= state BEFORE commit 10666da).
+  Call <xacro:ti5_load_t_pose/> from T170-V2.1-A0.urdf.xacro.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="ti5_load_t_pose">
+    <xacro:property name="L_SHOULDER_R_rr" value="0.0" scope="parent"/>
+    <xacro:property name="L_SHOULDER_R_rp" value="0.0" scope="parent"/>
+    <xacro:property name="L_SHOULDER_R_ry" value="0.0" scope="parent"/>
+    <xacro:property name="L_SHOULDER_R_lower" value="-1.57" scope="parent"/>
+    <xacro:property name="L_SHOULDER_R_upper" value="1.57" scope="parent"/>
+
+    <xacro:property name="R_SHOULDER_R_rr" value="0.0" scope="parent"/>
+    <xacro:property name="R_SHOULDER_R_rp" value="0.0" scope="parent"/>
+    <xacro:property name="R_SHOULDER_R_ry" value="0.0" scope="parent"/>
+    <xacro:property name="R_SHOULDER_R_lower" value="-1.57" scope="parent"/>
+    <xacro:property name="R_SHOULDER_R_upper" value="1.57" scope="parent"/>
+
+    <xacro:property name="L_ELBOW_Y_rr" value="0.0" scope="parent"/>
+    <xacro:property name="L_ELBOW_Y_rp" value="0.0" scope="parent"/>
+    <xacro:property name="L_ELBOW_Y_ry" value="0.0" scope="parent"/>
+    <xacro:property name="L_ELBOW_Y_lower" value="-2.4" scope="parent"/>
+    <xacro:property name="L_ELBOW_Y_upper" value="0.87" scope="parent"/>
+
+    <xacro:property name="R_ELBOW_Y_rr" value="0.0" scope="parent"/>
+    <xacro:property name="R_ELBOW_Y_rp" value="0.0" scope="parent"/>
+    <xacro:property name="R_ELBOW_Y_ry" value="0.0" scope="parent"/>
+    <xacro:property name="R_ELBOW_Y_lower" value="-0.87" scope="parent"/>
+    <xacro:property name="R_ELBOW_Y_upper" value="2.4" scope="parent"/>
+  </xacro:macro>
+</robot>

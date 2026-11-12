@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="T170-V2_1-A0_urdf">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+    <xacro:arg name="use_dexterous_hand" default="true"/>
+    <xacro:arg name="use_gazebo" default="false"/>
+    <xacro:arg name="use_ros2_control" default="false"/>
+    <!-- Forward to T170-V2.1-A0.urdf.xacro: pose:=t|q (see urdf/pose/) -->
+    <xacro:arg name="pose" default="t"/>
+
+    <!-- Import ti5_170a_graphen urdf file -->
+    <xacro:include filename="$(find ti5_t170_description)/urdf/T170-V2.1-A0.urdf.xacro" />
+
+    <!-- 引入左右手 macro -->
+    <xacro:include filename="$(find dexterous_hand_description)/urdf/right_hand.xacro"/>
+    <xacro:include filename="$(find dexterous_hand_description)/urdf/left_hand.xacro"/>
+
+    <!-- 底座朝向維持 CAD。手掌在 hand frame 再繞 X 轉 180°，改朝前方；base mesh 用反向旋轉留在原地。 -->
+    <xacro:right_hand
+        parent="R_WRIST_R_S"
+        xyz="-0.0065 -0.086 0.00"
+        rpy="0 -1.5708 1.5708"/>
+
+    <xacro:left_hand
+        parent="L_WRIST_R_S"
+        xyz="-0.0065 0.086 -0.00"
+        rpy="0 1.5708 1.5708"/>
+
+    <!-- Import control_xacro -->
+    <xacro:include filename="$(find ti5_t170_description)/urdf/ti5.ros2_control.real.xacro"/>
+    <xacro:include filename="$(find dexterous_hand_description)/urdf/ros2_control.xacro"/>
+
+</robot>

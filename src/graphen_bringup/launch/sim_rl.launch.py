@@ -5,7 +5,8 @@
 情境參數：default_mode 設為 mode、該模式的 entry_speed 設為 0（不先插補到預設姿態，直接推論）。
 本機的 controllers.yaml 不需要修改，但 mode 必須已經定義在其中（modes 與該模式的參數）。
 
-  ros2 launch graphen_bringup sim_rl.launch.py                       # t170a + rl_flat
+  ros2 launch graphen_bringup sim_rl.launch.py                       # ti5_t170 + rl_flat
+  ros2 launch graphen_bringup sim_rl.launch.py mujoco_robot:=t170a   # t170a 訓練的 policy（Ti5-Flat）
   ros2 launch graphen_bringup sim_rl.launch.py mode:=rl_walk mujoco_robot:=fb70
 """
 import os
@@ -35,8 +36,9 @@ def generate_launch_description():
             'hardware', default_value='mujoco_pd', choices=['mujoco', 'mujoco_pd'],
             description='MuJoCo control: position actuators or torque actuators + PdController'),
         DeclareLaunchArgument(
-            'mujoco_robot', default_value='t170a', choices=['fb70', 't170a'],
-            description='Simulated model (t170a needs hardware:=mujoco_pd)'),
+            'mujoco_robot', default_value='ti5_t170', choices=['fb70', 't170a', 'ti5_t170'],
+            description='Simulated model; must match the model the policy was trained on '
+                        '(t170a / ti5_t170 need hardware:=mujoco_pd)'),
         DeclareLaunchArgument(
             'mujoco_viewer_port', default_value='9870',
             description='UDP port of graphen_mujoco/tools/mujoco_viewer.py (0 disables)'),

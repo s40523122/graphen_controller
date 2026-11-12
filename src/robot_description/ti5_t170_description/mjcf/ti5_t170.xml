@@ -1,0 +1,267 @@
+<!-- 由 scripts/make_mjcf.py 從 xml/T170-V2.1-A0_t_pose.xml 產生，不要手動修改 -->
+<mujoco model="ti5_t170">
+  <compiler angle="radian" meshdir="../meshes" autolimits="true" />
+  <option timestep="0.005" integrator="implicitfast" />
+  <default>
+    <geom contype="1" conaffinity="0" condim="3" friction="1.0 0.005 0.0001" />
+  </default>
+  <asset>
+    <mesh name="BASE_S" content_type="model/stl" file="BASE_S.STL" />
+    <mesh name="L_HIP_P_S" content_type="model/stl" file="L_HIP_P_S.STL" />
+    <mesh name="L_HIP_R_S" content_type="model/stl" file="L_HIP_R_S.STL" />
+    <mesh name="L_HIP_Y_S" content_type="model/stl" file="L_HIP_Y_S.STL" />
+    <mesh name="L_KNEE_P_S" content_type="model/stl" file="L_KNEE_P_S.STL" />
+    <mesh name="L_ANKLE_P_S" content_type="model/stl" file="L_ANKLE_P_S.STL" />
+    <mesh name="L_ANKLE_R_S" content_type="model/stl" file="L_ANKLE_R_S.STL" />
+    <mesh name="R_HIP_P_S" content_type="model/stl" file="R_HIP_P_S.STL" />
+    <mesh name="R_HIP_R_S" content_type="model/stl" file="R_HIP_R_S.STL" />
+    <mesh name="R_HIP_Y_S" content_type="model/stl" file="R_HIP_Y_S.STL" />
+    <mesh name="R_KNEE_P_S" content_type="model/stl" file="R_KNEE_P_S.STL" />
+    <mesh name="R_ANKLE_P_S" content_type="model/stl" file="R_ANKLE_P_S.STL" />
+    <mesh name="R_ANKLE_R_S" content_type="model/stl" file="R_ANKLE_R_S.STL" />
+    <mesh name="WAIST_Y_S" content_type="model/stl" file="WAIST_Y_S.STL" />
+    <mesh name="WAIST_R_S" content_type="model/stl" file="WAIST_R_S.STL" />
+    <mesh name="WAIST_P_S" content_type="model/stl" file="WAIST_P_S.STL" />
+    <mesh name="L_SHOULDER_P_S" content_type="model/stl" file="L_SHOULDER_P_S.STL" />
+    <mesh name="L_SHOULDER_R_S" content_type="model/stl" file="L_SHOULDER_R_S.STL" />
+    <mesh name="L_SHOULDER_Y_S" content_type="model/stl" file="L_SHOULDER_Y_S.STL" />
+    <mesh name="L_ELBOW_Y_S" content_type="model/stl" file="L_ELBOW_Y_S.STL" />
+    <mesh name="L_WRIST_P_S" content_type="model/stl" file="L_WRIST_P_S.STL" />
+    <mesh name="L_WRIST_Y_S" content_type="model/stl" file="L_WRIST_Y_S.STL" />
+    <mesh name="L_WRIST_R_S" content_type="model/stl" file="L_WRIST_R_S.STL" scale="0.001 0.001 0.001" />
+    <mesh name="R_SHOULDER_P_S" content_type="model/stl" file="R_SHOULDER_P_S.STL" />
+    <mesh name="R_SHOULDER_R_S" content_type="model/stl" file="R_SHOULDER_R_S.STL" />
+    <mesh name="R_SHOULDER_Y_S" content_type="model/stl" file="R_SHOULDER_Y_S.STL" />
+    <mesh name="R_ELBOW_Y_S" content_type="model/stl" file="R_ELBOW_Y_S.STL" />
+    <mesh name="R_WRIST_P_S" content_type="model/stl" file="R_WRIST_P_S.STL" />
+    <mesh name="R_WRIST_Y_S" content_type="model/stl" file="R_WRIST_Y_S.STL" />
+    <mesh name="R_WRIST_R_S" content_type="model/stl" file="R_WRIST_R_S.STL" scale="0.001 0.001 0.001" />
+    <mesh name="NECK_Y_S" content_type="model/stl" file="NECK_Y_S.STL" />
+    <mesh name="NECK_P_S" content_type="model/stl" file="NECK_P_S.STL" />
+    <mesh name="NECK_R_S" content_type="model/stl" file="NECK_R_S.STL" />
+    <mesh name="NECK_CAMERA_S" content_type="model/stl" file="NECK_CAMERA_S.STL" />
+    <mesh name="ZJ1_S" content_type="model/stl" file="ZJ1_S.STL" />
+    <mesh name="CHEST_CAMERA_S" content_type="model/stl" file="CHEST_CAMERA_S.STL" />
+  </asset>
+  <worldbody>
+    <body name="BASE_S" pos="0 0 1.07">
+      <inertial pos="0.012912 0 1e-06" quat="0.636066 -0.000732068 -0.0010025 0.771634" mass="1.59576" diaginertia="0.00262983 0.00227235 0.00226035" />
+      <joint name="floating_base_joint" type="free" />
+      <site name="imu" size="0.01" />
+      <geom type="mesh" rgba="1 1 1 1" mesh="BASE_S" />
+      <body name="L_HIP_P_S" pos="0 0.04975 -0.10135">
+        <inertial pos="0.005506 0.081517 0" quat="0.718827 0.0662956 0.0901577 0.686123" mass="2.44318" diaginertia="0.00835541 0.00788314 0.00311014" />
+        <joint name="L_HIP_P" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" armature="1.01704302" />
+        <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="L_HIP_P_S" />
+        <body name="L_HIP_R_S" pos="0 0.084 0">
+          <inertial pos="0.001701 0.00709 -0.240257" quat="0.661742 0.00396192 0.0233025 0.749359" mass="3.31319" diaginertia="0.0181551 0.0177251 0.00656312" />
+          <joint name="L_HIP_R" pos="0 0 0" axis="1 0 0" range="-0.2616 1.7444" armature="0.15512364" />
+          <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="L_HIP_R_S" />
+          <body name="L_HIP_Y_S" pos="0 0 -0.1558">
+            <inertial pos="0.008184 0.010517 -0.130885" quat="0.997832 -0.0176105 0.0149964 -0.0616165" mass="2.98234" diaginertia="0.0307323 0.0290367 0.00650716" />
+            <joint name="L_HIP_Y" pos="0 0 0" axis="0 0 -1" range="-3.14 3.14" armature="0.38432376" />
+            <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="L_HIP_Y_S" />
+            <body name="L_KNEE_P_S" pos="0 0 -0.2642">
+              <inertial pos="-0.005192 -0.003718 -0.12538" quat="0.53418 0.555916 -0.441686 0.458827" mass="4.5782" diaginertia="0.000155826 0.000113 7.9519e-05" />
+              <joint name="L_KNEE_P" pos="0 0 0" axis="0 1 0" range="0 2.3038" armature="1.01704302" />
+              <geom type="mesh" rgba="0.776471 0.756863 0.737255 1" mesh="L_KNEE_P_S" />
+              <body name="L_ANKLE_P_S" pos="0 0 -0.37">
+                <inertial pos="0.039403 2e-06 -0.055027" quat="0.517578 0.481801 0.481782 0.517559" mass="1.69896" diaginertia="0.00876116 0.00716381 0.00355196" />
+                <joint name="L_ANKLE_P" pos="0 0 0" axis="0 -1 0" range="-1.57 0.314" armature="0.15512364" />
+                <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="L_ANKLE_P_S" />
+                <body name="L_ANKLE_R_S">
+                  <inertial pos="0.013551 2e-06 0" quat="0.73421 6.48407e-05 6.30472e-05 0.678922" mass="1.52055" diaginertia="0.00246112 0.00209335 0.00206762" />
+                  <joint name="L_ANKLE_R" pos="0 0 0" axis="1 0 0" range="-0.34 0.34" armature="0.044336646" />
+                  <geom pos="0 0 -0.085" quat="1 0 0 0" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="L_ANKLE_R_S" />
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="R_HIP_P_S" pos="0 -0.04975 -0.10135">
+        <inertial pos="0.005506 -0.081517 0" quat="0.686102 0.0901619 0.0663039 0.718845" mass="2.44318" diaginertia="0.00835549 0.00788313 0.00311014" />
+        <joint name="R_HIP_P" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" armature="1.01704302" />
+        <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_HIP_P_S" />
+        <body name="R_HIP_R_S" pos="0 -0.084 0">
+          <inertial pos="0.001702 -0.007193 -0.240251" quat="0.748803 0.0230215 0.00421749 0.662379" mass="3.31329" diaginertia="0.018158 0.0177277 0.00656287" />
+          <joint name="R_HIP_R" pos="0 0 0" axis="1 0 0" range="-1.7444 0.2616" armature="0.15512364" />
+          <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_HIP_R_S" />
+          <body name="R_HIP_Y_S" pos="0 0 -0.1558">
+            <inertial pos="0.008185 -0.010518 -0.130898" quat="0.997831 0.0175982 0.0149804 0.0616423" mass="2.98245" diaginertia="0.0307372 0.0290419 0.00650726" />
+            <joint name="R_HIP_Y" pos="0 0 0" axis="0 0 -1" range="-3.14 3.14" armature="0.38432376" />
+            <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_HIP_Y_S" />
+            <body name="R_KNEE_P_S" pos="0 0 -0.2642">
+              <inertial pos="-0.005285 0.003051 -0.12538" quat="0.550448 0.53975 -0.454653 0.446058" mass="4.5782" diaginertia="0.000149728 0.000106968 7.78683e-05" />
+              <joint name="R_KNEE_P" pos="0 0 0" axis="0 -1 0" range="-2.3038 0" armature="1.01704302" />
+              <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_KNEE_P_S" />
+              <body name="R_ANKLE_P_S" pos="0 0 -0.37">
+                <inertial pos="0.039403 -2e-06 -0.055027" quat="0.517559 0.481782 0.481801 0.517577" mass="1.69896" diaginertia="0.00876116 0.00716381 0.00355197" />
+                <joint name="R_ANKLE_P" pos="0 0 0" axis="0 1 0" range="-0.314 1.57" armature="0.15512364" />
+                <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_ANKLE_P_S" />
+                <body name="R_ANKLE_R_S">
+                  <inertial pos="0.013551 -2e-06 0" quat="0.73421 6.48407e-05 6.30472e-05 0.678922" mass="1.52055" diaginertia="0.00246112 0.00209335 0.00206762" />
+                  <joint name="R_ANKLE_R" pos="0 0 0" axis="1 0 0" range="-0.34 0.34" armature="0.044336646" />
+                  <geom pos="0 0 -0.085" quat="1 0 0 0" type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_ANKLE_R_S" />
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="WAIST_Y_S">
+        <inertial pos="-0.001862 0.006023 0" quat="0.477334 0.480884 0.51886 0.521236" mass="1.36489" diaginertia="0.00153674 0.00142714 0.00135615" />
+        <joint name="WAIST_Y" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" armature="0.15512364" />
+        <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="WAIST_Y_S" />
+        <body name="WAIST_R_S" pos="0 0 0.09265">
+          <inertial pos="0.01549 -1.2e-05 0.181067" quat="0.705004 -0.0519517 -0.0522273 0.705367" mass="1.36" diaginertia="0.000878785 0.000777587 0.00061923" />
+          <joint name="WAIST_R" pos="0 0 0" axis="1 0 0" range="-0.61 0.61" armature="0.15512364" />
+          <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="WAIST_R_S" />
+          <body name="WAIST_P_S">
+            <inertial pos="0.0156539 -0.00613381 0.0227622" quat="0.974247 0.1215 0.101946 -0.160276" mass="7.5377" diaginertia="0.0482869 0.0476929 0.00413887" />
+            <joint name="WAIST_P" pos="0 0 0" axis="0 1 0" range="-0.244 0.523" armature="0.15512364" />
+            <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="WAIST_P_S" />
+            <geom pos="0.0735 0 0.28325" quat="0.707105 0.707108 0 0" type="mesh" rgba="0.64706 0.61961 0.58824 1" mesh="ZJ1_S" />
+            <geom pos="0.0786063 2.75365e-07 0.208284" quat="0.704415 0.704417 0.0616275 -0.0616273" type="mesh" rgba="0.86667 0.86667 0.8902 1" mesh="CHEST_CAMERA_S" />
+            <body name="L_SHOULDER_P_S" pos="0.0005 0.0896 0.336">
+              <inertial pos="0.003756 0.088344 0.000207" quat="0.447448 0.556775 -0.430307 0.551931" mass="1.01723" diaginertia="0.00266296 0.00244502 0.00106651" />
+              <joint name="L_SHOULDER_P" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" armature="0.15512364" />
+              <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="L_SHOULDER_P_S" />
+              <body name="L_SHOULDER_R_S" pos="0.01965 0.10035 0">
+                <inertial pos="-0.002242 0.163933 0.013931" quat="0.688256 0.724315 0.00981676 -0.0396925" mass="1.09809" diaginertia="0.00436308 0.00416629 0.00101084" />
+                <joint name="L_SHOULDER_R" pos="0 0 0" axis="1 0 0" range="-1.57 1.57" armature="0.15512364" />
+                <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="L_SHOULDER_R_S" />
+                <body name="L_SHOULDER_Y_S" pos="-0.01965 0.10375 0">
+                  <inertial pos="-0.000772 0.079344 0.003345" quat="0.779309 0.625873 -0.000692162 -0.0309908" mass="0.71509" diaginertia="0.00153346 0.001364 0.000810757" />
+                  <joint name="L_SHOULDER_Y" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" armature="0.10268748" />
+                  <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="L_SHOULDER_Y_S" />
+                  <body name="L_ELBOW_Y_S" pos="0 0.19625 0">
+                    <inertial pos="1e-06 0.085602 0.015987" quat="0.574381 0.818372 0.0159216 -0.00997791" mass="0.809161" diaginertia="0.00207308 0.00203628 0.000571112" />
+                    <joint name="L_ELBOW_Y" pos="0 0 0" axis="0 0 1" range="-2.4 0.87" armature="0.10268748" />
+                    <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="L_ELBOW_Y_S" />
+                    <body name="L_WRIST_P_S" pos="0 0.09685 0">
+                      <inertial pos="0.001498 0 0.00128" quat="0.495671 0.504291 0.50432 0.495643" mass="0.495016" diaginertia="0.000326239 0.000306453 0.000251589" />
+                      <joint name="L_WRIST_P" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" armature="0.04130388" />
+                      <geom type="mesh" rgba="0.776471 0.756863 0.737255 1" mesh="L_WRIST_P_S" />
+                      <body name="L_WRIST_Y_S" pos="0 0.17615 -0.0035">
+                        <inertial pos="0.004761 0.110285 -0.003891" quat="0.573993 0.538735 -0.443329 0.428668" mass="0.730783" diaginertia="0.00339734 0.00271482 0.000977877" />
+                        <joint name="L_WRIST_Y" pos="0 0 0" axis="0 0 -1" range="-0.69 0.69" armature="0.0189873" />
+                        <geom type="mesh" rgba="1 1 1 1" mesh="L_WRIST_Y_S" />
+                        <body name="L_WRIST_R_S" pos="0.00665 0 -0.0035">
+                          <inertial pos="0.01174 -0.094004 0" quat="0.434037 0.558215 -0.434044 0.558224" mass="1.43947" diaginertia="0.00193378 0.0019203 0.0015284" />
+                          <joint name="L_WRIST_R" pos="0 0 0" axis="-1 0 0" range="-0.348 2.35" armature="0.0189873" />
+                          <geom pos="-1.0469 1.0536 1.0368" quat="0.5 0.5 0.5 -0.5" type="mesh" rgba="1 1 1 1" mesh="L_WRIST_R_S" />
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+            <body name="R_SHOULDER_P_S" pos="0.0005 -0.08965 0.336">
+              <inertial pos="0.003757 -0.088343 0.000206" quat="0.556798 0.44747 -0.551909 0.430282" mass="1.01727" diaginertia="0.00266304 0.0024451 0.00106658" />
+              <joint name="R_SHOULDER_P" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" armature="0.15512364" />
+              <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_SHOULDER_P_S" />
+              <body name="R_SHOULDER_R_S" pos="0 -0.10035 0">
+                <inertial pos="-0.002243 -0.164011 0.01393" quat="0.724311 0.688252 0.0398 -0.00990529" mass="1.0981" diaginertia="0.00436253 0.00416591 0.00101077" />
+                <joint name="R_SHOULDER_R" pos="0 0 0" axis="1 0 0" range="-1.57 1.57" armature="0.15512364" />
+                <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_SHOULDER_R_S" />
+                <body name="R_SHOULDER_Y_S" pos="0 -0.10367 0">
+                  <inertial pos="-0.00077 -0.079347 0.003347" quat="0.62583 0.779349 0.03085 0.000760536" mass="0.715036" diaginertia="0.00153338 0.00136386 0.000810693" />
+                  <joint name="R_SHOULDER_Y" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" armature="0.10268748" />
+                  <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_SHOULDER_Y_S" />
+                  <body name="R_ELBOW_Y_S" pos="0 -0.19633 0">
+                    <inertial pos="1.9e-05 -0.085592 0.016017" quat="0.818288 0.574429 0.0110919 -0.0176923" mass="0.809895" diaginertia="0.00207402 0.00203671 0.000571747" />
+                    <joint name="R_ELBOW_Y" pos="0 0 0" axis="0 0 1" range="-0.87 2.4" armature="0.10268748" />
+                    <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_ELBOW_Y_S" />
+                    <body name="R_WRIST_P_S" pos="0 -0.09685 0">
+                      <inertial pos="0.001498 0 0.00128" quat="0.495647 0.504318 0.504293 0.495666" mass="0.495016" diaginertia="0.000326239 0.000306453 0.00025159" />
+                      <joint name="R_WRIST_P" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" armature="0.04130388" />
+                      <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_WRIST_P_S" />
+                      <body name="R_WRIST_Y_S" pos="0 -0.17615 -0.0035">
+                        <inertial pos="0.007651 -0.109169 -0.002162" quat="0.536655 0.584777 -0.408351 0.450873" mass="0.730783" diaginertia="0.00357876 0.00296756 0.000874121" />
+                        <joint name="R_WRIST_Y" pos="0 0 0" axis="0 0 -1" range="-0.69 0.69" armature="0.0189873" />
+                        <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_WRIST_Y_S" />
+                        <body name="R_WRIST_R_S" pos="0.00675 0 -0.0035">
+                          <inertial pos="0.01174 0.094004 0" quat="0.434037 0.558215 -0.434044 0.558224" mass="1.43947" diaginertia="0.00193378 0.0019203 0.0015284" />
+                          <joint name="R_WRIST_R" pos="0 0 0" axis="-1 0 0" range="-2.35 0.348" armature="0.0189873" />
+                          <geom pos="-1.0470 -1.0538 -1.0369" quat="0.5 -0.5 -0.5 -0.5" type="mesh" rgba="0.752941 0.752941 0.752941 1" mesh="R_WRIST_R_S" />
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+            <body name="NECK_Y_S" pos="0 0 0.336">
+              <inertial pos="8.3048e-05 -0.016082 0.058359" quat="0.90844 0.418014 -8.22582e-05 0.000954098" mass="0.415678" diaginertia="0.00040539 0.000326532 0.000142447" />
+              <joint name="NECK_Y" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" armature="0.0189873" />
+              <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="NECK_Y_S" />
+              <body name="NECK_P_S" pos="0 0 0.12">
+                <inertial pos="0.00040928 -0.0012918 -3.4508e-05" quat="0.452307 0.793772 0.10275 0.39343" mass="0.250307" diaginertia="1.37622e-05 1.07297e-05 6.14361e-06" />
+                <joint name="NECK_P" pos="0 0 0" axis="0 1 0" range="-0.6807 0.6807" armature="0.00712674" />
+                <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="NECK_P_S" />
+                <body name="NECK_R_S" quat="0.707105 0.707108 0 0">
+                  <inertial pos="-0.00909518 0.0552878 -0.0151752" quat="0.434994 0.153839 -0.742855 0.485057" mass="1.2865" diaginertia="0.0103194 0.00823211 0.00576109" />
+                  <joint name="NECK_R" pos="0 0 0" axis="1 0 0" range="-0.7854 0.7854" armature="0.00712674" />
+                  <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="NECK_R_S" />
+                  <geom pos="0.056875 0.10712 0" quat="0.996195 0 0 -0.0871543" type="mesh" rgba="0.86667 0.86667 0.8902 1" mesh="NECK_CAMERA_S" />
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="L_HIP_P" joint="L_HIP_P" ctrlrange="-267 267" />
+    <motor name="L_HIP_R" joint="L_HIP_R" ctrlrange="-63 63" />
+    <motor name="L_HIP_Y" joint="L_HIP_Y" ctrlrange="-121 121" />
+    <motor name="L_KNEE_P" joint="L_KNEE_P" ctrlrange="-267 267" />
+    <motor name="L_ANKLE_P" joint="L_ANKLE_P" ctrlrange="-63 63" />
+    <motor name="L_ANKLE_R" joint="L_ANKLE_R" ctrlrange="-23 23" />
+    <motor name="R_HIP_P" joint="R_HIP_P" ctrlrange="-267 267" />
+    <motor name="R_HIP_R" joint="R_HIP_R" ctrlrange="-63 63" />
+    <motor name="R_HIP_Y" joint="R_HIP_Y" ctrlrange="-121 121" />
+    <motor name="R_KNEE_P" joint="R_KNEE_P" ctrlrange="-267 267" />
+    <motor name="R_ANKLE_P" joint="R_ANKLE_P" ctrlrange="-63 63" />
+    <motor name="R_ANKLE_R" joint="R_ANKLE_R" ctrlrange="-23 23" />
+    <motor name="WAIST_Y" joint="WAIST_Y" ctrlrange="-63 63" />
+    <motor name="WAIST_R" joint="WAIST_R" ctrlrange="-63 63" />
+    <motor name="WAIST_P" joint="WAIST_P" ctrlrange="-63 63" />
+    <motor name="L_SHOULDER_P" joint="L_SHOULDER_P" ctrlrange="-63 63" />
+    <motor name="L_SHOULDER_R" joint="L_SHOULDER_R" ctrlrange="-63 63" />
+    <motor name="L_SHOULDER_Y" joint="L_SHOULDER_Y" ctrlrange="-42 42" />
+    <motor name="L_ELBOW_Y" joint="L_ELBOW_Y" ctrlrange="-42 42" />
+    <motor name="L_WRIST_P" joint="L_WRIST_P" ctrlrange="-23 23" />
+    <motor name="L_WRIST_Y" joint="L_WRIST_Y" ctrlrange="-8.3 8.3" />
+    <motor name="L_WRIST_R" joint="L_WRIST_R" ctrlrange="-8.3 8.3" />
+    <motor name="R_SHOULDER_P" joint="R_SHOULDER_P" ctrlrange="-63 63" />
+    <motor name="R_SHOULDER_R" joint="R_SHOULDER_R" ctrlrange="-63 63" />
+    <motor name="R_SHOULDER_Y" joint="R_SHOULDER_Y" ctrlrange="-42 42" />
+    <motor name="R_ELBOW_Y" joint="R_ELBOW_Y" ctrlrange="-42 42" />
+    <motor name="R_WRIST_P" joint="R_WRIST_P" ctrlrange="-23 23" />
+    <motor name="R_WRIST_Y" joint="R_WRIST_Y" ctrlrange="-8.3 8.3" />
+    <motor name="R_WRIST_R" joint="R_WRIST_R" ctrlrange="-8.3 8.3" />
+    <motor name="NECK_Y" joint="NECK_Y" ctrlrange="-8.3 8.3" />
+    <motor name="NECK_P" joint="NECK_P" ctrlrange="-2.3 2.3" />
+    <motor name="NECK_R" joint="NECK_R" ctrlrange="-2.3 2.3" />
+  </actuator>
+  <asset>
+    <texture name="texplane" builtin="checker" height="512" width="512" rgb1=".2 .3 .4" rgb2=".1 .15 .2" type="2d" />
+    <material name="MatPlane" reflectance="0.5" shininess="0.01" specular="0.1" texrepeat="1 1" texture="texplane" texuniform="true" />
+  </asset>
+  <worldbody>
+    <geom name="floor" type="plane" size="10 10 0.1" material="MatPlane" contype="0" conaffinity="1" friction="1.0 0.005 0.0001" />
+    <light diffuse=".5 .5 .5" pos="0 0 4" dir="0 0 -1" />
+  </worldbody>
+  <sensor>
+    <framequat name="imu_quat" objtype="site" objname="imu" />
+    <gyro name="gyro" site="imu" />
+    <accelerometer name="imu_acc" site="imu" />
+  </sensor>
+  <keyframe>
+    <key name="home" qpos="0 0 1.07 1 0 0 0 -0.2 0 0 0.4 0.2 0 0.2 0 0 -0.4 -0.2 0 0 0 0 0 -1.3 0 -0.3 0 0 0 0 1.3 0 0.3 0 0 0 0 0 0" />
+  </keyframe>
+</mujoco>

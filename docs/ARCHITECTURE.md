@@ -325,7 +325,7 @@ launch argument：
 | 參數 | 預設值 | 說明 |
 |---|---|---|
 | `hardware` | `mock` | `mock`（GenericSystem + PositionController）、`mujoco`（MuJoCo 位置伺服 + PositionController）、`mujoco_pd`（MuJoCo 力矩 + PdController）、`real`（`ti5_hardware`，CAN 位置模式 + PositionController）、`real_pd`（`ti5_hardware`，CAN 電流模式 + PdController） |
-| `mujoco_robot` | `fb70` | （MuJoCo）`fb70`：`graphen_mujoco/models`；`t170a`：`t170a_description`，只能搭配 `mujoco_pd`，其他組合在 launch 時報錯 |
+| `mujoco_robot` | `fb70` | （MuJoCo）`fb70`：`graphen_mujoco/models`；`t170a`：`t170a_description`；`ti5_t170`：`ti5_t170_description`；後兩者只能搭配 `mujoco_pd`，其他組合在 launch 時報錯。浮動基座初始高度依模型帶入（t170a / fb70 0.894 m、ti5_t170 1.07 m） |
 | `mujoco_fixed_base` | `true` | （MuJoCo）吊掛：fb70 用 `t170_fixed.xml`，有 free joint 的模型每步重設基座 |
 | `scenario_params` | `""` | 最後疊加的參數檔，給情境 launch 使用（例如 `sim_rl.launch.py`），不改本機 `controllers.yaml` |
 | `mujoco_model` / `mujoco_viewer_port` | `""` / `9870` | （MuJoCo）指定 MJCF 路徑（空的時候依 `mujoco_robot`）/ viewer 的 UDP port |
@@ -349,7 +349,7 @@ launch argument：
 
 後載入的覆蓋先載入的，所以 profile 一定會蓋掉本機檔中殘留的硬體設定。launch 會以 `LogInfo` 印出這次的參數檔清單。xacro 收到不合法的 `hardware` 時展開失敗。
 
-情境 launch：`sim_rl.launch.py` 以 `hardware:=mujoco_pd mujoco_robot:=t170a`（可改）自由站立啟動 bringup，並以 `scenario_params` 把 `default_mode` 設為 `mode`（預設 `rl_flat`）、該模式的 `entry_speed` 設為 0。自由站立時 PD 保持姿態沒有平衡能力，必須讓 policy 從模擬開始就接手。之後有其他固定情境時，同樣以新的 launch 檔加上 `scenario_params` 實作。
+情境 launch：`sim_rl.launch.py` 以 `hardware:=mujoco_pd mujoco_robot:=ti5_t170`（可改；必須是 policy 的訓練模型）自由站立啟動 bringup，並以 `scenario_params` 把 `default_mode` 設為 `mode`（預設 `rl_flat`）、該模式的 `entry_speed` 設為 0。自由站立時 PD 保持姿態沒有平衡能力，必須讓 policy 從模擬開始就接手。之後有其他固定情境時，同樣以新的 launch 檔加上 `scenario_params` 實作。
 
 ### 2.7 Imu16460SensorInterface（imu16460_hardware）
 
@@ -763,7 +763,7 @@ IfThenElse "WalkEnabled"
 - **IMU 待實機驗證**：坐標系方向、Euler 順序、S1 長度、共變異數（見 [IMU16460.md §3](IMU16460.md#3-待實機驗證)），程式中以 `TODO(verify-on-hw)` 標記。
 - **IMU 時間戳**：Humble 的 `imu_sensor_broadcaster` 以 controller_manager 的更新時間打時間戳，無法傳遞裝置 timer；需要精確時間戳時改用獨立 node 發布。
 - **RL policy 只在 MuJoCo 驗證**：`rl_walk` 尚未上實機，見 §2.11 的待確認項目。`rl_flat`（Ti5FlatPolicy）在 t170a 上能自由站立與邁步，但關節順序與 obs 組法仍是推斷的，還沒有經訓練端確認。
-- **fb70 的 MJCF 依賴 Orin 上的 mesh**：`graphen_mujoco/models/*.xml` 的 meshdir 指向 `/devtest/FullBodyT70/...`，沒有這些 mesh 的機器（例如 WSL）無法載入。t170a（`t170a_description`，mesh 用相對路徑）在任何機器上都可以使用。
-- **模型尚未統一**：fb70、t170a、`ti5_170a_graphen` 三份模型的運動學大致一致，但質量分布差異很大（例如單腿 16.5 / 7.7 / 11.8 kg）。t170a 暫時用來驗證控制架構，不代表實機。
+- **fb70 的 MJCF 依賴 Orin 上的 mesh**：`graphen_mujoco/models/*.xml` 的 meshdir 指向 `/devtest/FullBodyT70/...`，沒有這些 mesh 的機器（例如 WSL）無法載入。t170a、ti5_t170（mesh 用相對路徑）在任何機器上都可以使用。
+- **模型尚未統一**：fb70、t170a、ti5_t170、`ti5_170a_graphen` 的運動學大致一致，但質量分布差異很大（例如總質量 t170a 74.2 kg、ti5_t170 59.5 kg，軀幹 WAIST_P_S 44.4 / 7.5 kg）。policy 只在自己的訓練模型上可靠：tc_new_025（ti5_t170 訓練）放到 t170a 上會在幾秒內倒下。哪一份最接近實機仍待確認。
 - **MuJoCo 模擬沒有靈巧手**：`hardware:=mujoco*` 搭配 `use_hands:=true` 時，手部是 mock。
 - **測試**：只有 `imu16460_core` 有自動化測試；`graphen_motion` 目前以 `bvh_retarget_cli` 檢查（GoogleTest，`colcon test --packages-select imu16460_core`）；其他套件尚無，測試方式待討論。

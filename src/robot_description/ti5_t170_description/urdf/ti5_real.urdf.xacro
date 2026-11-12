@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<!--
+REAL 用整機 URDF（不含 Gazebo plugin），並掛載 ros2_control REAL 定義。
+放在 ti5_t170_description 以便實機不依賴 robot_gazebo。
+-->
+    <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ti5_real">
+
+    <xacro:arg name="use_gazebo" default="false"/>
+    <xacro:arg name="use_ros2_control" default="true"/>
+    <xacro:arg name="can_config_path" default="$(find can_driver)/config/can_driver_config.json"/>
+    <!-- Forward to T170-V2.1-A0.urdf.xacro: pose:=t|q (see urdf/pose/) -->
+    <xacro:arg name="pose" default="t"/>
+    <!-- 以下與 ti5_bringup_real.launch.py 對齊，可由 launch 覆寫後注入 Ti5Hardware -->
+    <xacro:arg name="urdf_path" default="$(find ti5_t170_description)/urdf/T170-V2.1-A0.urdf"/>
+    <xacro:arg name="hw_read_timeout_ms" default="20"/>
+    <xacro:arg name="limit_epsilon_rad" default="0.0"/>
+
+<!-- Base robot -->
+    <xacro:include filename="$(find ti5_t170_description)/urdf/T170-V2.1-A0.urdf.xacro"/>
+
+<!-- ros2_control (REAL) -->
+    <xacro:include filename="$(find ti5_t170_description)/urdf/ti5.ros2_control.real.xacro"/>
+
+</robot>
+
