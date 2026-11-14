@@ -46,6 +46,7 @@ void BvhMotion::on_enter(const RobotState & state) {
   first_frame_ = current;
   solve_frame(0, first_frame_);
   phase_ = Phase::kApproach;
+  finished_ = false;
 }
 
 void BvhMotion::update(double dt, const RobotState & state, JointCommand & command) {
@@ -86,6 +87,7 @@ void BvhMotion::update(double dt, const RobotState & state, JointCommand & comma
   }
 
   desired = frame_q_;  // kPlay / kHold
+  finished_ = phase_ == Phase::kHold && all_reached(current, frame_q_);
 }
 
 double BvhMotion::sample_period() const {

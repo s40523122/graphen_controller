@@ -107,7 +107,10 @@
         <Action ID="SwitchMode">
             <input_port name="action_name" type="std::string" default="/switch_group_controller/switch_mode">SwitchMode action name</input_port>
             <input_port name="mode" type="std::string">Mode name to switch to</input_port>
-            <input_port name="timeout_ms" type="int" default="1000">Timeout including server discovery</input_port>
+            <input_port name="timeout_ms" type="int" default="1000">Timeout for server discovery and the switch itself</input_port>
+            <input_port name="wait_finished" type="bool" default="false">Return SUCCESS only after the mode's motion has finished</input_port>
+            <input_port name="on_same_mode" type="std::string" default="ignore">When already in this mode: ignore, restart or restart_if_finished</input_port>
+            <input_port name="finish_timeout_ms" type="int" default="0">With wait_finished: limit on waiting for the motion to finish, 0 = no limit</input_port>
         </Action>
     </TreeNodesModel>
     <!-- ////////// -->

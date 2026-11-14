@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -60,6 +61,10 @@ namespace graphen::control {
 //   modes                    可用的模式名稱，同時作為下面各模式參數的前綴（只允許 [A-Za-z0-9_]）
 //   <mode>.type              target（預設）、hold 或 bvh
 //   <mode>.max_steps         （選填）該模式的每週期最大移動量（bvh 為播放時），預設為 planner_max_steps
+//   <mode>.interruptible     （選填，預設 true）false 時，這個模式播放中（尚未結束）拒絕切換到其他模式
+//                            或重播，只有 preempt 的模式可以切入；播完或失敗之後恢復可切換
+//   <mode>.preempt           （選填，hold 預設 true，其他預設 false）true 時可以切入不可中斷的模式，
+//                            用於停止類的模式（安全底線）
 //   type: target
 //     <mode>.joints          （選填）要移動的 joint；省略時為全部，依 command_interfaces 順序
 //     <mode>.targets         對應 joints 的目標位置；沒有列出的 joint 保持進入模式時的位置
@@ -80,12 +85,14 @@ namespace graphen::control {
 //                            BvhRetargeter 的分組與求解設定
 //   default_mode             configure 時的初始模式名稱；空字串表示不進入任何模式，
 //                            activate 時保持目前位置，直到收到第一個模式命令
+//   switch_mode_poll_rate    檢查「等待模式播完」的 switch_mode goal 的頻率 (Hz)，也是 feedback 的頻率
 //   robot_description        （使用 bvh 模式時必要）URDF，由 launch 傳給 controller_manager
 //
 // 介面：
 //   ~/mode        (std_msgs/String, 訂閱)                切換模式；未知模式會被忽略
 //   ~/cmd_vel     (geometry_msgs/Twist, 訂閱)            機身速度指令（linear.x、linear.y、angular.z）
-//   ~/switch_mode (graphen_interfaces/action/SwitchMode) 切換模式，result 附 state 快照
+//   ~/switch_mode (graphen_interfaces/action/SwitchMode) 切換模式，result 附 state 快照；
+//                                                         wait_until_finished 時等動作播完才回傳
 //   ~/states      (control_msgs/DynamicJointState)        發布所有 state interface
 class SwitchGroupController : public controller_interface::ControllerInterface {
 public:
@@ -110,8 +117,16 @@ public:
     const rclcpp::Duration & period) override;
 
 private:
+  // 模式的中斷設定（<mode>.interruptible / <mode>.preempt）
+  struct ModePolicy {
+    bool interruptible{true};
+    bool preempt{false};
+  };
+
   // 依模式名稱取得 Motion；未知模式回傳 nullptr
   std::shared_ptr<Motion> motion_for_mode(const std::string & mode) const;
+  // 依模式名稱取得中斷設定；未知模式回傳 nullptr
+  const ModePolicy * policy_for_mode(const std::string & mode) const;
 
   // 讀取 <mode>.* 參數並建立該模式的 Motion；設定錯誤時丟出例外
   std::shared_ptr<Motion> create_motion(const std::string & mode);
@@ -120,8 +135,33 @@ private:
   std::shared_ptr<Motion> create_plugin_motion(
     const std::string & mode, std::vector<double> max_steps);
 
-  // 切換模式並交給 planner 播放（non-RT）；未知模式或與目前模式相同時不做任何事
-  void apply_mode(const std::string & mode);
+  using OnSameMode = int8_t;  // SwitchModeAction::Goal::ON_SAME_MODE_*
+
+  struct ModeRequest {
+    enum class Outcome {
+      kSwitched,   // 已切換（或重播）
+      kUnchanged,  // 已在該模式，依 on_same_mode 不重新開始
+      kRejected,   // 目前的模式不可中斷
+      kUnknown,    // 未知的模式
+    };
+    Outcome outcome{Outcome::kUnknown};
+    uint64_t sequence{0};  // 目前播放的序號（kSwitched / kUnchanged 時有效）
+    std::string message;   // kRejected / kUnknown 的原因
+  };
+
+  // 切換模式並交給 planner 播放（non-RT）。已在該模式時依 on_same_mode 決定是否重新開始；
+  // 目前的模式不可中斷且還在播放時，除非目標模式是 preempt，否則拒絕
+  ModeRequest apply_mode(const std::string & mode, OnSameMode on_same_mode);
+
+  // 目前這次播放是否已經結束（完成或失敗）。呼叫端需持有 mode_mutex_
+  bool current_play_ended() const;
+
+  // 以目前的模式與 state 快照建立 action result
+  std::shared_ptr<SwitchModeAction::Result> make_switch_mode_result(
+    bool success, const std::string & message);
+
+  // 定時（executor thread）檢查等待中的 goal：播完、失敗、被取代、取消或 controller 停用時結束它
+  void poll_waiting_goals();
 
   // 以 state_interfaces_ 的目前值更新量測狀態（不配置記憶體，RT 可呼叫）
   void read_robot_state(RobotState & state) const;
@@ -160,11 +200,24 @@ private:
   // mode_names_[i] 對應 mode_motions_[i]，於 on_configure 建立，之後只有 planner thread 使用 Motion
   std::vector<std::string> mode_names_;
   std::vector<std::shared_ptr<Motion>> mode_motions_;
+  std::vector<ModePolicy> mode_policies_;  // 順序同 mode_names_
   std::string default_mode_;
 
   // ~/mode 與 action 可能在不同 executor thread 同時切換模式
   std::mutex mode_mutex_;
   std::string current_mode_;
+  // 目前模式在 planner 中的序號（mode_mutex_ 保護）；與等待中 goal 的序號不同表示已被取代
+  uint64_t mode_sequence_{0};
+
+  // wait_until_finished 的 goal，由 wait_timer_ 定時檢查。
+  // 鎖的順序：waiting_mutex_ → mode_mutex_ / state_snapshot_mutex_
+  struct WaitingGoal {
+    std::shared_ptr<SwitchModeGoalHandle> handle;
+    uint64_t sequence{0};
+  };
+  std::mutex waiting_mutex_;
+  std::vector<WaitingGoal> waiting_goals_;
+  rclcpp::TimerBase::SharedPtr wait_timer_{nullptr};
 
   std::string sensor_interface_name_;
   std::optional<size_t> sensor_index_;  // sensor 在 state_interfaces_ 中的 index

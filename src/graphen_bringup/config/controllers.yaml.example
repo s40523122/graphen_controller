@@ -24,6 +24,8 @@ switch_group_controller:
       leak_time_constant: 2.0   # s，線速度積分的衰減時間常數
     # ~/cmd_vel（geometry_msgs/Twist）的逾時（s）；超過時速度指令視為 0
     command_timeout: 0.5
+    # switch_mode action 以 wait_until_finished 等待模式播完時，檢查與 feedback 的頻率（Hz）
+    switch_mode_poll_rate: 20.0
     state_publish_rate: 50.0
     state_interfaces:
       - L_SHOULDER_P/position
@@ -182,7 +184,7 @@ switch_group_controller:
 
     # 模式以名稱識別（BT、action、~/mode topic 都用這些名稱），名稱同時是下面參數的前綴。
     # controller 不認得任何特定模式，行為完全由 type 與參數決定
-    modes: [forward, reverse, walk, stop, sine, home, rl_walk, rl_flat]
+    modes: [forward, reverse, walk, stop, sine, home, rl_walk, rl_flat, arm_demo, arm_demo_return]
     # 空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
     # 收到 BT / action / ~/mode 的命令後才開始移動
     default_mode: ""
@@ -218,6 +220,7 @@ switch_group_controller:
                   0.28, 0.13, 0.24, 0.67, 0.24, 0.44]         # right leg
 
     # type: hold，停在進入模式時的位置；BT 在 walk 與往返都關閉時切到這裡。
+    # hold 預設 preempt: true：即使目前的模式設了 interruptible: false，也一定能切到這裡。
     # 之後再切到 walk 會重新 approach 第 0 幀（重置 locomotion 狀態）
     stop:
       type: hold
@@ -233,6 +236,44 @@ switch_group_controller:
       amplitude: 0.2      # rad
       frequency: 0.25     # Hz
       log_period: 1.0     # s，0 表示不 log
+
+    # arm_demo / arm_demo_return：編舞（graphen_choreographer/ChoreographerAlgorithm），依腳本檔的多軌 keyframe
+    # 播放組合動作，各軌道（部位）獨立、時間可以重疊，播完後保持最後的姿態。
+    # 腳本格式見 graphen_choreographer/choreography.hpp，範例在 motions/*.choreo.yaml。
+    # 編舞是開環的，輸出不能被限速：max_steps 必須容得下腳本的峰值速度（configure 時會檢查），
+    # 用 `ros2 run graphen_choreographer choreo_check <腳本> --urdf <URDF>` 取得建議值。
+    # 這裡手臂放寬到 0.02（100 Hz 下 2 rad/s），其他部位維持預設。
+    # 要等播完再接下一段：SwitchMode action 的 wait_until_finished（BT 的 wait_finished）；
+    # 同一個模式要重播：on_same_mode（restart / restart_if_finished）。
+    # 播放途中被切到另一個編舞模式時，新模式的第一段會帶入當下的速度（entry_velocity），不會瞬間煞停。
+    #
+    # interruptible: false：播放中拒絕切換到其他模式（action 回報失敗、~/mode 印出 WARN），播完後恢復；
+    # preempt: true 的模式（type: hold 預設為 true，例如 stop）仍然可以切入，停止永遠有效
+    arm_demo:
+      type: plugin
+      plugin: graphen_choreographer/ChoreographerAlgorithm
+      file: package://graphen_bringup/motions/arm_demo.choreo.yaml
+      interruptible: false         # 播放中不可中斷（stop 除外）
+      start_tolerance: 0.05        # rad，腳本第一個 keyframe 在 t: 0 時，允許與目前位置的差距
+      velocity_limit_scale: 0.25   # 速度上限 = URDF velocity limit × 這個值
+      entry_velocity: true         # 從移動中切進來時，第一段帶入當下的速度
+      max_steps: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,     # left arm
+                  0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,     # right arm
+                  0.005, 0.005, 0.005,                          # waist
+                  0.005, 0.005, 0.005,                          # head
+                  0.005, 0.005, 0.005, 0.005, 0.005, 0.005,     # left leg
+                  0.005, 0.005, 0.005, 0.005, 0.005, 0.005]     # right leg
+    arm_demo_return:
+      type: plugin
+      plugin: graphen_choreographer/ChoreographerAlgorithm
+      file: package://graphen_bringup/motions/arm_demo_return.choreo.yaml
+      velocity_limit_scale: 0.25
+      max_steps: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,     # left arm
+                  0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,     # right arm
+                  0.005, 0.005, 0.005,                          # waist
+                  0.005, 0.005, 0.005,                          # head
+                  0.005, 0.005, 0.005, 0.005, 0.005, 0.005,     # left leg
+                  0.005, 0.005, 0.005, 0.005, 0.005, 0.005]     # right leg
 
     # home：FullBodyT70 policy 的預設姿態（手臂自然下垂的 A-pose，其他 0），以預設速度走過去。
     # （rl_walk 進入時會自己走到這個姿態，這個模式只是方便手動使用）

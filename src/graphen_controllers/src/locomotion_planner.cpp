@@ -23,7 +23,7 @@ LocomotionPlanner::~LocomotionPlanner() {
   stop();
 }
 
-void LocomotionPlanner::set_motion(std::shared_ptr<Motion> motion) {
+uint64_t LocomotionPlanner::set_motion(std::shared_ptr<Motion> motion) {
   if (!motion) {
     throw std::invalid_argument("LocomotionPlanner: motion must not be null");
   }
@@ -33,6 +33,13 @@ void LocomotionPlanner::set_motion(std::shared_ptr<Motion> motion) {
   }
   std::lock_guard<std::mutex> lock(motion_mutex_);
   pending_motion_ = std::move(motion);
+  pending_sequence_ = ++last_sequence_;
+  return pending_sequence_;
+}
+
+LocomotionPlanner::Progress LocomotionPlanner::progress() const {
+  std::lock_guard<std::mutex> lock(progress_mutex_);
+  return progress_;
 }
 
 void LocomotionPlanner::start(
@@ -58,11 +65,20 @@ void LocomotionPlanner::start(
   state_.measured_positions.assign(num_interfaces_, kNaN);
   state_.measured_velocities.assign(num_interfaces_, kNaN);
   state_.commanded_positions = initial_positions;
+  state_.commanded_velocities.assign(num_interfaces_, 0.0);
+  previous_positions_ = initial_positions;
+  command_velocity_.assign(num_interfaces_, 0.0);
   command_.positions.assign(num_interfaces_, kNaN);
   command_.velocities.assign(num_interfaces_, kNaN);
   command_.kp.assign(num_interfaces_, kNaN);
   command_.kd.assign(num_interfaces_, kNaN);
   motion_.reset();
+  active_sequence_ = 0;
+  elapsed_ = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(progress_mutex_);
+    progress_ = Progress{};
+  }
   sink_ = sink;
   read_state_ = std::move(read_state);
   // 先寫入起點，controller 在第一個規劃週期之前就有值可以輸出
@@ -94,12 +110,18 @@ void LocomotionPlanner::loop() {
       read_state_(state_);
     }
     state_.commanded_positions = output_.positions;
+    // read_state_ 會以 controller 的緩衝覆寫整個 RobotState（不含這個欄位的內容），所以每週期重新填入
+    state_.commanded_velocities.resize(num_interfaces_);
+    std::copy(command_velocity_.begin(), command_velocity_.end(),
+      state_.commanded_velocities.begin());
 
     {
       std::lock_guard<std::mutex> lock(motion_mutex_);
       if (pending_motion_) {
         motion_ = std::move(pending_motion_);
         pending_motion_.reset();
+        active_sequence_ = pending_sequence_;
+        elapsed_ = 0.0;
         motion_->on_enter(state_);
       }
     }
@@ -138,8 +160,22 @@ void LocomotionPlanner::loop() {
         output_.kd[i] = valid_gain(command_.kd[i]) ? command_.kd[i] : kNaN;
       }
       output_.sample_period = motion_->sample_period();
+
+      elapsed_ += dt;
+      std::lock_guard<std::mutex> lock(progress_mutex_);
+      progress_.sequence = active_sequence_;
+      progress_.status = motion_->status();
+      progress_.elapsed = elapsed_;
     }
     sink_->writeFromNonRT(output_);
+
+    // 這個週期的命令速度，下一個週期交給 Motion。dt 為 0（理論上不會發生）時保留上一次的值
+    if (dt > 0.0) {
+      for (size_t i = 0; i < num_interfaces_; ++i) {
+        command_velocity_[i] = (current[i] - previous_positions_[i]) / dt;
+        previous_positions_[i] = current[i];
+      }
+    }
 
     // 以絕對時間排程，維持固定頻率；落後超過一個週期時重新對齊，不連續補跑
     next_wakeup += period;

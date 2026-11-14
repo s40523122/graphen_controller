@@ -40,6 +40,7 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [graphen_mujoco](src/graphen_mujoco/) | hardware plugin | MuJoCo 模擬的 T170 本體 + IMU（`graphen_mujoco/MujocoSystem`）、MJCF 匯出與主機端 viewer（`tools/`） | — |
 | [t170a_description](src/robot_description/t170a/) | 資源（外部） | robolab 訓練用的 T170 A0 模型（URDF、MJCF、mesh），MuJoCo 驗證控制架構用，不代表實機 | — |
 | [ti5_t170_description](src/robot_description/ti5_t170_description/) | 資源（外部） | T170-V2.1-A0 模型（URDF xacro、MJCF、mesh），robolab `Ti5T170-Flat`（tc_new_025）的訓練模型 | — |
+| [graphen_choreographer](src/graphen_choreographer/) | locomotion plugin（不依賴 rclcpp） | 編舞（多軌 keyframe 的組合動作）：`ChoreographerAlgorithm`、腳本解析、`choreo_check` | graphen_locomotion |
 | [graphen_rl_policy](src/graphen_rl_policy/) | locomotion plugin | RL policy 共用基類 `PolicyRunner`（ONNX Runtime）與 policy plugin：`T170VelocityPolicy`（FullBodyT70）、`Ti5FlatPolicy`（robolab） | graphen_locomotion |
 
 ## 快速開始
@@ -144,6 +145,42 @@ xacro $(ros2 pkg prefix ti5_170a_graphen)/share/ti5_170a_graphen/urdf/ti5_170a_g
 ros2 run graphen_motion bvh_retarget_cli \
   $(ros2 pkg prefix graphen_bringup)/share/graphen_bringup/motions/t170wk_walk1_subject1.bvh /tmp/t170.urdf > /tmp/walk.csv
 ```
+
+### 編舞（組合動作）
+
+多個部位各自依自己的時間動作、時間可以重疊，寫成一份腳本（`graphen_bringup/motions/*.choreo.yaml`）、對應一個 `type: plugin` 的模式。腳本格式、檢查項目與限制見 [ARCHITECTURE §2.12](docs/ARCHITECTURE.md#212-編舞graphen_choreographer)。
+
+範例 `arm_demo`（右臂 0 ~ 3 s、左臂 1 ~ 5 s）與 `arm_demo_return`（回到下垂姿態）的模式設定在 `controllers.yaml.example`，要用時複製到本機的 `controllers.yaml`（`modes` 也要加上名稱）。
+
+上機前先離線檢查腳本（範圍、限位、峰值速度、建議的 `max_steps`；`--csv` 可輸出取樣後的整份編舞）：
+
+```bash
+xacro $(ros2 pkg prefix ti5_170a_graphen)/share/ti5_170a_graphen/urdf/ti5_170a_graphen.urdf.xacro > /tmp/t170.urdf
+ros2 run graphen_choreographer choreo_check \
+  $(ros2 pkg prefix graphen_bringup)/share/graphen_bringup/motions/arm_demo.choreo.yaml \
+  --urdf /tmp/t170.urdf --csv /tmp/arm_demo.csv
+```
+
+播放並等它播完（`wait_until_finished`；feedback 為進入模式後經過的秒數）。`arm_demo` 的第一個 keyframe 在 `t: 0`，必須從下垂姿態開始，否則不執行並 abort：
+
+```bash
+timeout 15 ros2 action send_goal --feedback /switch_group_controller/switch_mode \
+  graphen_interfaces/action/SwitchMode "{mode: arm_demo, wait_until_finished: true}"
+# 回到下垂姿態（從任何位置都可以）。on_same_mode：0 = ignore（預設）、1 = restart、2 = restart_if_finished
+timeout 15 ros2 action send_goal /switch_group_controller/switch_mode \
+  graphen_interfaces/action/SwitchMode "{mode: arm_demo_return, wait_until_finished: true, on_same_mode: 2}"
+```
+
+- 等待中被其他模式取代（action 或 `~/mode`）時 goal 會 abort（`Preempted by mode [ X ]`）；Ctrl-C（cancel）只是不再等待，**動作會繼續執行**，要停下來請切到 `stop`。
+- 已經在同一個模式時：`on_same_mode: 0` 不重新開始；`1` 一律重播；`2` 播完才重播（播放中重複送出的指令被吃掉）。
+- 範例的 `arm_demo` 設了 `interruptible: false`：播放中切到其他模式或重播都會被拒絕（`success: false`），只有 `stop`（hold，預設 `preempt`）可以切入。
+- 播放途中切到另一個編舞模式時，新模式會從當下的速度平順地接上（`entry_velocity`），不會頓一下。
+- 用 BT 依序播放兩段並重複：
+
+  ```bash
+  ros2 launch graphen_bt bt.launch.py \
+    tree_file:=$(ros2 pkg prefix graphen_bt)/share/graphen_bt/trees/choreo_demo.xml
+  ```
 
 ### 行為層
 

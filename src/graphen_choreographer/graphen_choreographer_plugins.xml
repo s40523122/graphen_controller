@@ -1,0 +1,10 @@
+<library path="graphen_choreographer_plugins">
+  <!-- 編舞：依腳本檔的多軌 keyframe 播放組合動作，各軌道獨立、時間可以重疊 -->
+  <class name="graphen_choreographer/ChoreographerAlgorithm"
+         type="graphen::choreographer::ChoreographerAlgorithm"
+         base_class_type="graphen::locomotion::LocomotionAlgorithm">
+    <description>
+      Plays a multi-track keyframe choreography (composed motion) loaded from a YAML script.
+    </description>
+  </class>
+</library>

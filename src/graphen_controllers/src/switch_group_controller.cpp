@@ -206,6 +206,7 @@ controller_interface::CallbackReturn SwitchGroupController::on_init() {
     auto_declare<std::string>("imu_sensor_name", std::string{});
     auto_declare<std::string>("base_estimator.plugin", std::string{});
     auto_declare<double>("command_timeout", 0.5);
+    auto_declare<double>("switch_mode_poll_rate", 20.0);
     auto_declare<std::string>("bvh.base_link", std::string{});
     auto_declare<double>("bvh.axis_tolerance", 1e-4);
     auto_declare<int>("bvh.max_iterations", 50);
@@ -380,6 +381,8 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
       num_commands, std::numeric_limits<double>::quiet_NaN());
     initial_state.commanded_positions.assign(
       num_commands, std::numeric_limits<double>::quiet_NaN());
+    // commanded_* 由 planner 填入；這裡配置好大小，planner 讀取時不必重新配置
+    initial_state.commanded_velocities.assign(num_commands, 0.0);
     state_buffer_.reset(std::move(initial_state));
   }
 
@@ -408,6 +411,7 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
   }
   mode_names_.clear();
   mode_motions_.clear();
+  mode_policies_.clear();
   for (const auto & mode : modes) {
     if (!is_valid_mode_name(mode)) {
       RCLCPP_ERROR(logger,
@@ -421,6 +425,23 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     }
     try {
       mode_motions_.push_back(create_motion(mode));
+      // create_motion 已宣告 <mode>.type。停止類（hold）預設可以切入不可中斷的模式：
+      // 忘了設定時，停止仍然有效
+      const auto node = get_node();
+      const auto type = node->get_parameter(mode + ".type").as_string();
+      ModePolicy policy;
+      policy.interruptible = get_or_declare<bool>(node, mode + ".interruptible", true);
+      policy.preempt = get_or_declare<bool>(node, mode + ".preempt", type == "hold");
+      if (!policy.interruptible) {
+        const bool never_ends = type == "bvh" && node->get_parameter(mode + ".loop").as_bool();
+        RCLCPP_INFO(logger, "Mode [ %s ] is not interruptible while it is playing.", mode.c_str());
+        if (never_ends) {
+          RCLCPP_WARN(logger,
+            "Mode [ %s ] loops forever and is not interruptible: only preempt modes can leave it.",
+            mode.c_str());
+        }
+      }
+      mode_policies_.push_back(policy);
     } catch (const std::exception & e) {
       RCLCPP_ERROR(logger, "Failed to configure mode [ %s ]: %s", mode.c_str(), e.what());
       return controller_interface::CallbackReturn::ERROR;
@@ -449,7 +470,15 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
   mode_subscriber_ = get_node()->create_subscription<std_msgs::msg::String>(
     "~/mode",
     sub_qos,
-    [this](const std_msgs::msg::String::SharedPtr msg) {apply_mode(msg->data);});
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      // topic 只有模式名稱，已在該模式時不重新開始
+      const auto request = apply_mode(msg->data, SwitchModeAction::Goal::ON_SAME_MODE_IGNORE);
+      if (request.outcome == ModeRequest::Outcome::kRejected ||
+      request.outcome == ModeRequest::Outcome::kUnknown)
+      {
+        RCLCPP_WARN(get_node()->get_logger(), "~/mode: %s", request.message.c_str());
+      }
+    });
 
   // 速度指令只取最新值，逾時由 planner 端判斷
   cmd_vel_subscriber_ = get_node()->create_subscription<geometry_msgs::msg::Twist>(
@@ -473,6 +502,19 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     std::bind(&SwitchGroupController::handle_switch_mode_goal, this, _1, _2),
     std::bind(&SwitchGroupController::handle_switch_mode_cancel, this, _1),
     std::bind(&SwitchGroupController::handle_switch_mode_accepted, this, _1));
+
+  // 等待模式播完的 goal 以 timer 在 executor thread 中檢查，不碰 RT 路徑
+  const double poll_rate = get_node()->get_parameter("switch_mode_poll_rate").as_double();
+  if (!(poll_rate > 0.0)) {
+    RCLCPP_ERROR(logger, "'switch_mode_poll_rate' must be greater than zero.");
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  {
+    std::lock_guard<std::mutex> lock(waiting_mutex_);
+    waiting_goals_.clear();
+  }
+  wait_timer_ = get_node()->create_wall_timer(
+    std::chrono::duration<double>(1.0 / poll_rate), [this]() {poll_waiting_goals();});
 
   // reconfigure 時回到預設模式，實際交給 planner 是在 activate 時
   {
@@ -519,13 +561,13 @@ controller_interface::CallbackReturn SwitchGroupController::on_activate(
         }
       }
       // 全部為 NaN 的目標：保持進入時的位置
-      planner_->set_motion(std::make_shared<TargetMotion>(
+      mode_sequence_ = planner_->set_motion(std::make_shared<TargetMotion>(
         std::vector<double>(initial_positions.size(), std::numeric_limits<double>::quiet_NaN()),
         default_max_steps_));
       RCLCPP_INFO(get_node()->get_logger(),
         "No mode selected, holding current positions until a mode command is received.");
     } else {
-      planner_->set_motion(motion_for_mode(current_mode_));
+      mode_sequence_ = planner_->set_motion(motion_for_mode(current_mode_));
     }
   }
   // 先寫入一次目前的狀態，planner 第一個週期（含 on_enter）就有量測值可用
@@ -573,6 +615,15 @@ std::shared_ptr<Motion> SwitchGroupController::motion_for_mode(const std::string
     return nullptr;
   }
   return mode_motions_[static_cast<size_t>(std::distance(mode_names_.begin(), it))];
+}
+
+const SwitchGroupController::ModePolicy * SwitchGroupController::policy_for_mode(
+  const std::string & mode) const {
+  const auto it = std::find(mode_names_.begin(), mode_names_.end(), mode);
+  if (it == mode_names_.end()) {
+    return nullptr;
+  }
+  return &mode_policies_[static_cast<size_t>(std::distance(mode_names_.begin(), it))];
 }
 
 std::shared_ptr<Motion> SwitchGroupController::create_motion(const std::string & mode) {
@@ -725,7 +776,8 @@ std::shared_ptr<Motion> SwitchGroupController::create_plugin_motion(
     node->has_parameter("robot_description") ?
     node->get_parameter("robot_description").as_string() : std::string{},
     params,
-    log};
+    log,
+    max_steps};
   algorithm->configure(context);
 
   RCLCPP_INFO(node->get_logger(), "Mode [ %s ]: plugin '%s'.", mode.c_str(), plugin.c_str());
@@ -797,21 +849,60 @@ void SwitchGroupController::fill_planner_state(RobotState & state) {
   }
 }
 
-void SwitchGroupController::apply_mode(const std::string & mode) {
+bool SwitchGroupController::current_play_ended() const {
+  const auto progress = planner_->progress();
+  // planner 還沒開始這一次播放時，progress 仍是上一個 Motion 的：視為還在播放
+  return progress.sequence == mode_sequence_ &&
+         (progress.status == MotionStatus::kFinished || progress.status == MotionStatus::kFailed);
+}
+
+SwitchGroupController::ModeRequest SwitchGroupController::apply_mode(
+  const std::string & mode, OnSameMode on_same_mode) {
+  using Goal = SwitchModeAction::Goal;
+  using Outcome = ModeRequest::Outcome;
+
   std::lock_guard<std::mutex> lock(mode_mutex_);
+  ModeRequest request;
   auto motion = motion_for_mode(mode);
   if (!motion) {
     // 32 軸含腿部，未知模式時不移動（不再歸零）
-    RCLCPP_WARN(get_node()->get_logger(), "Unknown mode [ %s ], ignored.", mode.c_str());
-    return;
+    request.outcome = Outcome::kUnknown;
+    request.message = "Unknown mode [ " + mode + " ], ignored.";
+    return request;
   }
-  // 已在該模式時不重新開始（例如 BVH 不會從頭播放）
+
+  // 已在該模式：依這一次指令的 on_same_mode 決定是否重新開始（例如 BVH 預設不從頭播放）
   if (current_mode_ == mode) {
-    return;
+    const bool restart = on_same_mode == Goal::ON_SAME_MODE_RESTART ||
+      (on_same_mode == Goal::ON_SAME_MODE_RESTART_IF_FINISHED && current_play_ended());
+    if (!restart) {
+      request.outcome = Outcome::kUnchanged;
+      request.sequence = mode_sequence_;
+      return request;
+    }
   }
+
+  // 目前的模式不可中斷、而且還在播放：只有 preempt 的模式（停止類）可以切入。
+  // 重播同一個模式也算中斷
+  const auto * current_policy = policy_for_mode(current_mode_);
+  const auto * target_policy = policy_for_mode(mode);
+  if (current_policy && !current_policy->interruptible && !target_policy->preempt &&
+    !current_play_ended())
+  {
+    request.outcome = Outcome::kRejected;
+    request.message = "Mode [ " + current_mode_ + " ] is not interruptible until it finishes; [ " +
+      mode + " ] rejected.";
+    return request;
+  }
+
+  const bool restarted = current_mode_ == mode;
   current_mode_ = mode;
-  planner_->set_motion(std::move(motion));
-  RCLCPP_INFO(get_node()->get_logger(), "Change mode to [ %s ]", mode.c_str());
+  mode_sequence_ = planner_->set_motion(std::move(motion));
+  RCLCPP_INFO(get_node()->get_logger(), "%s mode [ %s ]",
+    restarted ? "Restart" : "Change to", mode.c_str());
+  request.outcome = Outcome::kSwitched;
+  request.sequence = mode_sequence_;
+  return request;
 }
 
 rclcpp_action::GoalResponse SwitchGroupController::handle_switch_mode_goal(
@@ -828,30 +919,117 @@ rclcpp_action::GoalResponse SwitchGroupController::handle_switch_mode_goal(
       "Rejected switch_mode goal: unknown mode [ %s ].", goal->mode.c_str());
     return rclcpp_action::GoalResponse::REJECT;
   }
+  if (goal->on_same_mode < SwitchModeAction::Goal::ON_SAME_MODE_IGNORE ||
+    goal->on_same_mode > SwitchModeAction::Goal::ON_SAME_MODE_RESTART_IF_FINISHED)
+  {
+    RCLCPP_WARN(get_node()->get_logger(),
+      "Rejected switch_mode goal [ %s ]: invalid on_same_mode %d.", goal->mode.c_str(),
+      static_cast<int>(goal->on_same_mode));
+    return rclcpp_action::GoalResponse::REJECT;
+  }
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
 rclcpp_action::CancelResponse SwitchGroupController::handle_switch_mode_cancel(
   std::shared_ptr<SwitchModeGoalHandle> /*goal_handle*/) {
-  // goal 在 accepted 時就已完成，沒有可以取消的執行階段
-  return rclcpp_action::CancelResponse::REJECT;
+  // 只有 wait_until_finished 的 goal 會停留在執行階段（其他在 accepted 時就已完成）。
+  // cancel 只停止等待，由 poll_waiting_goals() 結束 goal；目前的動作不受影響
+  return rclcpp_action::CancelResponse::ACCEPT;
 }
 
-void SwitchGroupController::handle_switch_mode_accepted(
-  std::shared_ptr<SwitchModeGoalHandle> goal_handle) {
-  const std::string mode = goal_handle->get_goal()->mode;
-  apply_mode(mode);
-
+std::shared_ptr<SwitchGroupController::SwitchModeAction::Result>
+SwitchGroupController::make_switch_mode_result(bool success, const std::string & message) {
   auto result = std::make_shared<SwitchModeAction::Result>();
-  result->success = true;
-  result->message = "Mode switched";
-  result->mode = mode;
+  result->success = success;
+  result->message = message;
+  {
+    std::lock_guard<std::mutex> lock(mode_mutex_);
+    result->mode = current_mode_;
+  }
   result->interface_names = state_interface_names_;
   {
     std::lock_guard<std::mutex> lock(state_snapshot_mutex_);
     result->values = state_snapshot_;
   }
-  goal_handle->succeed(result);
+  return result;
+}
+
+void SwitchGroupController::handle_switch_mode_accepted(
+  std::shared_ptr<SwitchModeGoalHandle> goal_handle) {
+  const auto goal = goal_handle->get_goal();
+  const auto request = apply_mode(goal->mode, goal->on_same_mode);
+  if (request.outcome == ModeRequest::Outcome::kRejected ||
+    request.outcome == ModeRequest::Outcome::kUnknown)
+  {
+    // 不可中斷的判斷必須和切換在同一個 lock 中進行，所以在這裡（而不是 handle_goal）拒絕
+    RCLCPP_WARN(get_node()->get_logger(), "switch_mode: %s", request.message.c_str());
+    goal_handle->abort(make_switch_mode_result(false, request.message));
+    return;
+  }
+  if (!goal->wait_until_finished) {
+    goal_handle->succeed(make_switch_mode_result(true,
+      request.outcome == ModeRequest::Outcome::kUnchanged ?
+      "Already in this mode, not restarted" : "Mode switched"));
+    return;
+  }
+  // 等動作播完：交給 poll_waiting_goals()
+  std::lock_guard<std::mutex> lock(waiting_mutex_);
+  waiting_goals_.push_back({std::move(goal_handle), request.sequence});
+}
+
+void SwitchGroupController::poll_waiting_goals() {
+  std::lock_guard<std::mutex> lock(waiting_mutex_);
+  if (waiting_goals_.empty()) {
+    return;
+  }
+
+  const bool active = get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+  const auto progress = planner_->progress();
+  uint64_t current_sequence = 0;
+  std::string current_mode;
+  {
+    std::lock_guard<std::mutex> mode_lock(mode_mutex_);
+    current_sequence = mode_sequence_;
+    current_mode = current_mode_;
+  }
+
+  // 回傳 true 表示 goal 已結束，從清單移除
+  const auto finish = [&](const WaitingGoal & waiting) {
+      const auto & handle = waiting.handle;
+      const auto & mode = handle->get_goal()->mode;
+      if (handle->is_canceling()) {
+        handle->canceled(make_switch_mode_result(false, "Stopped waiting; the mode keeps running"));
+        return true;
+      }
+      if (!active) {
+        handle->abort(make_switch_mode_result(false, "Controller is not active"));
+        return true;
+      }
+      if (waiting.sequence != current_sequence) {
+        handle->abort(make_switch_mode_result(
+            false, "Preempted by mode [ " + current_mode + " ]"));
+        return true;
+      }
+      // planner 還沒切換到這一次播放時，progress 仍是上一個 Motion 的
+      const bool entered = progress.sequence == waiting.sequence;
+      if (entered && progress.status == MotionStatus::kFinished) {
+        RCLCPP_INFO(get_node()->get_logger(),
+          "Mode [ %s ] finished (%.2f s after it was entered)", mode.c_str(), progress.elapsed);
+        handle->succeed(make_switch_mode_result(true, "Mode finished"));
+        return true;
+      }
+      if (entered && progress.status == MotionStatus::kFailed) {
+        handle->abort(make_switch_mode_result(
+            false, "Mode [ " + mode + " ] failed, see the controller log"));
+        return true;
+      }
+      auto feedback = std::make_shared<SwitchModeAction::Feedback>();
+      feedback->elapsed = entered ? progress.elapsed : 0.0;
+      handle->publish_feedback(feedback);
+      return false;
+    };
+  waiting_goals_.erase(
+    std::remove_if(waiting_goals_.begin(), waiting_goals_.end(), finish), waiting_goals_.end());
 }
 
 void SwitchGroupController::read_robot_state(RobotState & state) const {

@@ -24,11 +24,13 @@ void TargetMotion::on_enter(const RobotState & state) {
   for (size_t i = 0; i < targets_.size(); ++i) {
     desired_[i] = std::isnan(targets_[i]) ? current[i] : targets_[i];
   }
+  reached_ = false;
 }
 
 void TargetMotion::update(
-  double /*dt*/, const RobotState & /*state*/, JointCommand & command) {
+  double /*dt*/, const RobotState & state, JointCommand & command) {
   command.positions = desired_;
+  reached_ = all_reached(state.commanded_positions, desired_);
 }
 
 }  // namespace graphen::control

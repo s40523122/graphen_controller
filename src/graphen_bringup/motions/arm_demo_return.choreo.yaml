@@ -1,0 +1,21 @@
+# 編舞腳本範例：兩隻手臂從目前的位置回到下垂姿態（arm_demo 的 A / C）。
+# 第一個 keyframe 不在 t: 0，所以從進入模式時的位置插值過去，t 就是走過去的時間；
+# 走不到（超過速度上限或 max_steps）時不執行。
+version: 1
+
+poses:
+  arms_down: {R_SHOULDER_P: 0.0, R_SHOULDER_R: 1.3, R_SHOULDER_Y: 0.0, R_ELBOW_Y: 0.3,
+              R_WRIST_P: 0.0, R_WRIST_Y: 0.0, R_WRIST_R: 0.0,
+              L_SHOULDER_P: 0.0, L_SHOULDER_R: -1.3, L_SHOULDER_Y: 0.0, L_ELBOW_Y: -0.3,
+              L_WRIST_P: 0.0, L_WRIST_Y: 0.0, L_WRIST_R: 0.0}
+
+tracks:
+  right_arm:
+    joints: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R]
+    keyframes:
+      - {t: 2.5, pose: arms_down}
+  left_arm:
+    joints: [L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R]
+    keyframes:
+      - {t: 0.5, hold: true}        # 左臂晚 0.5 s 出發
+      - {t: 3.0, pose: arms_down}

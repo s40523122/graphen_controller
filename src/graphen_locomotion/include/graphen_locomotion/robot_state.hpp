@@ -48,6 +48,10 @@ struct RobotState {
   std::vector<double> measured_velocities;
   // planner 上一次送出的命令位置（已經過 max_steps 限制），與量測值的差即為追蹤誤差
   std::vector<double> commanded_positions;
+  // planner 上一個規劃週期的命令速度（rad/s）：上一次與上上次輸出位置的差 ÷ 實際週期，
+  // 已包含 max_steps 的限制。切換模式時可以用來從當下的速度平順地接上，而不是瞬間停住。
+  // 注意：輸出逐幀跳動的動作（BVH 播放）在換幀的週期會出現尖峰
+  std::vector<double> commanded_velocities;
   // 原始 IMU 讀值（IMU 座標系）
   ImuState imu;
   // 估測器輸出的機身狀態（機身座標系）

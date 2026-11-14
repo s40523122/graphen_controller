@@ -36,6 +36,7 @@ void PluginMotion::fail(const char * stage, const char * what) {
 
 void PluginMotion::on_enter(const RobotState & state) {
   faulted_ = false;
+  finished_ = false;
   try {
     algorithm_->on_enter(state);
   } catch (const std::exception & e) {
@@ -52,6 +53,7 @@ void PluginMotion::update(double dt, const RobotState & state, JointCommand & co
   }
   try {
     algorithm_->update(dt, state, command);
+    finished_ = algorithm_->finished();
   } catch (const std::exception & e) {
     fail("update", e.what());
   } catch (...) {

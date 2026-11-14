@@ -18,6 +18,7 @@ namespace graphen::control {
 //   Play：依實際時間 × time_scale 前進（sample_period = frame_time / time_scale）；
 //         播完最後一幀時 loop 為 true 則回到 Approach（限速接回第 0 幀），否則保持最後一幀
 // 沒有 BVH 資料的介面保持進入此動作時的位置。
+// loop 為 false 時，播完並到達最後一幀後 status() 為 kFinished；循環播放永遠是 kRunning。
 class BvhMotion : public Motion {
 public:
   struct Options {
@@ -39,6 +40,9 @@ public:
   }
   // Play 時為 frame_time / time_scale，其餘為 0
   double sample_period() const override;
+  MotionStatus status() const override {
+    return finished_ ? MotionStatus::kFinished : MotionStatus::kRunning;
+  }
 
 private:
   enum class Phase {kApproach, kPlay, kHold};
@@ -57,6 +61,7 @@ private:
   size_t frame_{0};                  // 目前輸出的幀
   double time_in_frame_{0.0};        // 距離 frame_ 開始的時間（秒）
   std::vector<double> frame_q_;      // frame_ 的角度
+  bool finished_{false};             // 已停在最後一幀，且 planner 的輸出已到達
 };
 
 }  // namespace graphen::control

@@ -1,6 +1,7 @@
 #ifndef GRAPHEN_CONTROLLERS__MOTION_HPP_
 #define GRAPHEN_CONTROLLERS__MOTION_HPP_
 
+#include <cmath>
 #include <vector>
 
 #include "graphen_locomotion/robot_state.hpp"
@@ -9,6 +10,30 @@ namespace graphen::control {
 
 using locomotion::JointCommand;
 using locomotion::RobotState;
+
+// 動作的進度，planner 在每次 update() 之後讀取，供 controller 回報「模式播完了」
+enum class MotionStatus {
+  kRunning,   // 還在執行（持續性的動作永遠是這個狀態）
+  kFinished,  // 已到達終點，之後只是保持
+  kFailed,    // 發生錯誤，已改為保持
+};
+
+// 判斷「輸出已經到達期望位置」的容差（rad）：planner 以 current += clamp(desired - current) 前進，
+// 到達時只剩浮點誤差
+inline constexpr double kReachedTolerance = 1e-9;
+
+// current 的每個介面都已到達 desired（任一個為 NaN 時視為未到達）
+inline bool all_reached(const std::vector<double> & current, const std::vector<double> & desired) {
+  if (current.size() != desired.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < current.size(); ++i) {
+    if (!(std::abs(desired[i] - current[i]) <= kReachedTolerance)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // LocomotionPlanner 播放的動作（一個模式對應一個 Motion）。
 //
@@ -33,6 +58,9 @@ public:
   // 輸出點之間的時間間隔（秒），planner 在每次 update() 之後讀取並傳給下游插補；
   // 0 表示輸出已經是連續的，下游不插補
   virtual double sample_period() const {return 0.0;}
+
+  // 動作的進度；planner 在每次 update() 之後讀取。on_enter() 之後要回到 kRunning
+  virtual MotionStatus status() const {return MotionStatus::kRunning;}
 };
 
 }  // namespace graphen::control
