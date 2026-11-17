@@ -1,14 +1,8 @@
-# use_mock_imu:=false（hardware:=mock / real）：實機 FSS-IMU16460-C（imu16460_hardware）。
-
-controller_manager:
-  ros__parameters:
-    imu_sensor_broadcaster:
-      type: imu_sensor_broadcaster/IMUSensorBroadcaster
+# use_mock_imu:=false（hardware:=mock / real / real_pd）：實機 FSS-IMU16460-C（imu16460_hardware）。
+# broadcaster 的 type、sensor_name、frame_id 在 imu/common.yaml。
 
 imu_sensor_broadcaster:
   ros__parameters:
-    sensor_name: imu_sensor
-    frame_id: imu_link
     # 姿態定義（坐標系、Euler 順序）尚待實機驗證，第一項設 -1 表示不提供姿態
     static_covariance_orientation: [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     # 暫定值：對角線分別為角速度 (rad/s)² 與加速度 (m/s²)² 的變異數。

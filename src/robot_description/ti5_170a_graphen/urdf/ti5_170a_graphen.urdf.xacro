@@ -21,7 +21,7 @@
   <!-- MujocoSystem 的 fixed_base（吊掛）與 missing_joints（error / virtual） -->
   <xacro:arg name="mujoco_fixed_base" default="false"/>
   <xacro:arg name="mujoco_missing_joints" default="error"/>
-  <!-- 浮動基座的初始高度（m），依模型而定（腳底貼地），由 bringup 依 mujoco_robot 帶入 -->
+  <!-- 浮動基座的初始高度（m），依模型而定（腳底貼地），由 bringup 依 robot 帶入 -->
   <xacro:arg name="mujoco_initial_base_height" default="1.07"/>
 
   <!-- 靈巧手：預設不啟用；啟用時 hardware:=real / real_pd 才用實機，其他都是 mock -->
@@ -40,8 +40,37 @@
   <xacro:arg name="imu_xyz" default="0 0 0.1"/>
   <xacro:arg name="imu_rpy" default="0 0 0"/>
 
-  <!-- 1. 機器人本體（root 為 base_link，已含雙手模型） -->
-  <xacro:include filename="$(find ti5_170a_graphen)/urdf/robot.urdf.xacro"/>
+  <!-- 本體模型，與 bringup 的 robot:= 相同（MJCF 與 PD 增益也依它選擇）：
+       ti5_t170：ti5_t170_description 的 T170-V2.1-A0（與 ti5_t170 MJCF 同一份 CAD）+ dexterous_hand_description 的雙手
+       ti5_170a：本套件的 robot.urdf.xacro（含雙手；MJCF 由 scripts/make_mjcf.py 從它產生）
+       fb70：沒有自己的 URDF，同樣使用本套件的 robot.urdf.xacro
+       三者的 32 個本體 joint 名稱相同，ros2_control 區塊共用。
+       TODO(verify-on-hw): ti5_t170 與本套件的本體有 6 軸軸向相反（L/R_WRIST_R、L/R_WRIST_Y、NECK_P、R_SHOULDER_Y），
+       位置極限也不同（HIP_P ±3.14、KNEE_P、WRIST_R）。Ti5Hardware 以 URDF 的極限做安全限制，
+       實機上線前要逐軸確認馬達方向與極限 -->
+  <xacro:arg name="robot" default="ti5_170a"/>
+  <xacro:property name="robot_model" value="$(arg robot)"/>
+  <xacro:if value="${robot_model not in ['ti5_t170', 'ti5_170a', 'fb70']}">
+    ${xacro.fatal("robot must be one of ti5_t170, ti5_170a, fb70; got '" + robot_model + "'")}
+  </xacro:if>
+
+  <!-- 1. 機器人本體（root 為 base_link，含雙手模型） -->
+  <xacro:if value="${robot_model == 'ti5_t170'}">
+    <!-- T170-V2.1-A0.urdf.xacro 的 arg 預設會開啟 Gazebo 與它自己的 ros2_control；先宣告的 arg 預設優先，
+         所以在 include 之前關閉（ros2_control 由下方的 graphen 區塊提供）。pose 為機械零點（T-pose），與 MJCF 相同 -->
+    <xacro:arg name="use_ros2_control" default="false"/>
+    <xacro:arg name="use_gazebo" default="false"/>
+    <xacro:arg name="pose" default="t"/>
+    <xacro:include filename="$(find ti5_t170_description)/urdf/T170-V2.1-A0.urdf.xacro"/>
+    <!-- 雙手掛載位置沿用 ti5_t170_description/urdf/ti5_with_dexterous_hand_real.urdf.xacro -->
+    <xacro:include filename="$(find dexterous_hand_description)/urdf/right_hand.xacro"/>
+    <xacro:include filename="$(find dexterous_hand_description)/urdf/left_hand.xacro"/>
+    <xacro:right_hand parent="R_WRIST_R_S" xyz="-0.0065 -0.086 0.00" rpy="0 -1.5708 1.5708"/>
+    <xacro:left_hand parent="L_WRIST_R_S" xyz="-0.0065 0.086 -0.00" rpy="0 1.5708 1.5708"/>
+  </xacro:if>
+  <xacro:if value="${robot_model in ['ti5_170a', 'fb70']}">
+    <xacro:include filename="$(find ti5_170a_graphen)/urdf/robot.urdf.xacro"/>
+  </xacro:if>
 
   <link name="imu_link"/>
 

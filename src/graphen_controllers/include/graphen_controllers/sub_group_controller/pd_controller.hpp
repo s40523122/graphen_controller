@@ -14,13 +14,13 @@ namespace graphen::control {
 
 // PD 模式的子群組 chainable controller：以關節 PD 計算力矩，寫到硬體的 effort command。
 //
-//   τ = kp·(q* − q) + kd·(q̇* − q̇)，再限制在 ±effort_limits
+//   τ = kp·(q* − q) + kd·(q̇* − q̇)，再限制在 ±effort_limit
 //
 // 導出的 reference interface（全名為 <node_name>/<名稱>）：
 //   <joint>           期望角度 q*（rad），名稱與 PositionController 相同，上層不需要改接線
 //   <joint>/velocity  期望速度 q̇*（rad/s）；NaN 時為 0
-//   <joint>/kp        kp（Nm/rad）；NaN 或負值時用 default_kp
-//   <joint>/kd        kd（Nm·s/rad）；NaN 或負值時用 default_kd
+//   <joint>/kp        kp（Nm/rad）；NaN 或負值時用該關節的預設 kp
+//   <joint>/kd        kd（Nm·s/rad）；NaN 或負值時用該關節的預設 kd
 //   sample_period     上游輸出點的間隔（秒），q* 以 LinearInterpolator 插補
 //
 // 讀取 <joint>/position、<joint>/velocity state，寫入 <joint>/effort command。
@@ -29,9 +29,12 @@ namespace graphen::control {
 //
 // 參數：
 //   joints                  關節名稱
-//   default_kp / default_kd 與 joints 一一對應的預設增益（≥ 0）
-//   effort_limits           與 joints 一一對應的力矩上限（> 0）
+//   joint_gains.<joint>.kp / .kd       各關節的預設增益（≥ 0，必填）
+//   joint_gains.<joint>.effort_limit   各關節的力矩上限（> 0，必填）
 //   reference_publish_rate  ~/references 的發布頻率 (Hz)
+//
+// 增益以關節為 key，是為了讓模型套件提供一份與 controller 分組無關的增益檔
+// （以 /** 套到所有子群組，各自只讀自己的 joints）；子群組怎麼分組都不必改增益檔。
 //
 // TODO(verify-on-hw): 目前只用於 MuJoCo 模擬。實機（Ti5Hardware）沒有 effort 介面，
 // 需先驗證馬達電流模式、力矩常數與 CAN 上可達到的迴圈頻率

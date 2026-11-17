@@ -8,8 +8,8 @@ MujocoSystem（ros2_control_node 內）以 UDP 把 [time, qpos(nq), actuator_for
 按 End 鍵送出 "reset" 到 <port>+1，模擬回到初始姿態；Home 鍵切換文字，PageUp 鍵切換箭頭。
 
 需要 mujoco 與 glfw（主機的 ~/learnWalk_env），通常由 mujoco_viewer.sh 啟動：
-  bash mujoco_viewer.sh                         # 預設 models/t170_free.xml、port 9870
-  bash mujoco_viewer.sh --model ../models/t170_fixed.xml
+  bash mujoco_viewer.sh                         # 預設 fb70 的 t170_free.xml、port 9870
+  bash mujoco_viewer.sh --model ../../robot_description/fb70/mjcf/t170_fixed.xml
 """
 import argparse
 import socket
@@ -21,6 +21,8 @@ import mujoco.viewer
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+# 預設模型：fb70_description 套件（src/robot_description/fb70）的浮動基座 MJCF
+FB70_MJCF = HERE.parents[1] / "robot_description" / "fb70" / "mjcf"
 KEY_END = 269
 KEY_HOME = 268
 KEY_PAGE_UP = 266
@@ -108,7 +110,7 @@ def torque_text(labels, limits, forces, warn_ratio):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default=str(HERE.parent / "models" / "t170_free.xml"))
+    ap.add_argument("--model", default=str(FB70_MJCF / "t170_free.xml"))
     ap.add_argument("--port", type=int, default=9870)
     ap.add_argument("--no-torque", action="store_true", help="hide the joint torque overlay")
     ap.add_argument("--warn-ratio", type=float, default=0.9,

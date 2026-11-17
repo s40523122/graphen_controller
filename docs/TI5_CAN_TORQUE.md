@@ -38,7 +38,7 @@
 ## 每週期流程（200 Hz）
 
 1. `read()`：所有通道先丟棄殘留 frame，送出全部馬達的 `0x41`（加上一顆的 `0x0A`），再以共用的 deadline（`hw_read_timeout_ms`，real_pd 預設 2 ms）收齊回覆。各通道的傳輸互相重疊；每條通道 3~4 顆馬達，約 1 ms。
-2. `PdController::update()`：`τ = kp(q* − q) + kd(q̇* − q̇)`，限制在 `effort_limits`。
+2. `PdController::update()`：`τ = kp(q* − q) + kd(q̇* − q̇)`，限制在各關節的 `effort_limit`。
 3. `write()`：以 URDF `<limit effort>` 再限制一次，換算電流後送出 `0x1C`。
 
 PD 用的狀態只比 write 早約 1 ms（訓練的觀測沒有延遲）。
@@ -58,7 +58,7 @@ PD 用的狀態只比 write 早約 1 ms（訓練的觀測沒有延遲）。
 |---|---|---|---|
 | `hw_read_timeout_ms` | launch / xacro | real 20、real_pd 2 | 收回覆的 deadline；real_pd 要遠小於 5 ms |
 | `max_missed_cycles` | launch / xacro | 2 | 只用於 real_pd |
-| `default_kp` / `default_kd` / `effort_limits` | `hardware/real_pd.yaml` | 訓練值 | 與 `mujoco_pd_t170a.yaml` 相同 |
+| `joint_gains.<joint>.kp` / `.kd` / `.effort_limit` | `<robot 套件>/config/joint_pd_gains.yaml`（預設 `robot:=ti5_170a` → `ti5_170a_graphen/config/`） | 訓練值（`graphen_rl_policy/ref/env.yaml` 的 actuators） | 依 `robot` 取自模型套件；ti5_170a 與 ti5_t170 目前是同一組值 |
 
 ## 待驗證（`TODO(verify-on-hw)`）
 

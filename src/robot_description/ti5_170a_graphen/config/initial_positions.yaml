@@ -1,7 +1,7 @@
 # Default initial positions for ti5_170a_graphen's ros2_control fake system
 
 initial_positions:
-  # Left Arm（手臂下垂，與 t170a MJCF 的 keyframe home / rl_flat 的 default_joint_pos 相同）
+  # Left Arm（手臂下垂，與 rl_flat 的 default_joint_pos 相同）
   L_ELBOW_Y: -0.3
   L_SHOULDER_P: 0
   L_SHOULDER_R: -1.3

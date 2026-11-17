@@ -26,7 +26,7 @@
 
   <xacro:property
     name="mesh_dir"
-    value="package://meshes"/>
+    value="package://ti5_t170_description/meshes"/>
 
   <!-- Gazebo 時使用簡化碰撞（box）以提升 RTF；非 Gazebo 時保留 mesh 碰撞 -->
   <!-- origin_z 可設負值讓 box 下移，腳掌 link 用來對齊腳底與地面 -->

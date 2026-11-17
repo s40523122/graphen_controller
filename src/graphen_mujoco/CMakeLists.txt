@@ -100,7 +100,7 @@ install(FILES ${MUJOCO_REAL_LIBRARY} DESTINATION lib RENAME libmujoco.so.${MUJOC
 install(DIRECTORY include/
   DESTINATION include/${PROJECT_NAME}
 )
-install(DIRECTORY models tools
+install(DIRECTORY tools
   DESTINATION share/${PROJECT_NAME}
 )
 

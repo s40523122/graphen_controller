@@ -1,0 +1,38 @@
+# fb70（FullBodyT70 匯出的 MJCF）的 PD 預設增益與力矩上限，以關節為 key，不綁定 controller 名稱。
+# 取自 MJCF 位置致動器的增益（FullBodyT70 的訓練值）；hardware:=mujoco_pd 時行為與 hardware:=mujoco 相同。
+# 增益要配合模型的慣量：顯式 PD 的 kd·dt / I 約大於 2 時會振盪，不要套用到其他模型
+/**:
+  ros__parameters:
+    joint_gains:
+      L_HIP_P: {kp: 986.96, kd: 62.8319, effort_limit: 267.0}
+      L_HIP_R: {kp: 236.871, kd: 15.0796, effort_limit: 63.0}
+      L_HIP_Y: {kp: 473.741, kd: 30.1593, effort_limit: 121.0}
+      L_KNEE_P: {kp: 986.96, kd: 62.8319, effort_limit: 267.0}
+      L_ANKLE_P: {kp: 236.871, kd: 15.0796, effort_limit: 63.0}
+      L_ANKLE_R: {kp: 78.9568, kd: 5.02655, effort_limit: 23.0}
+      R_HIP_P: {kp: 986.96, kd: 62.8319, effort_limit: 267.0}
+      R_HIP_R: {kp: 236.871, kd: 15.0796, effort_limit: 63.0}
+      R_HIP_Y: {kp: 473.741, kd: 30.1593, effort_limit: 121.0}
+      R_KNEE_P: {kp: 986.96, kd: 62.8319, effort_limit: 267.0}
+      R_ANKLE_P: {kp: 236.871, kd: 15.0796, effort_limit: 63.0}
+      R_ANKLE_R: {kp: 78.9568, kd: 5.02655, effort_limit: 23.0}
+      WAIST_Y: {kp: 236.871, kd: 15.0796, effort_limit: 63.0}
+      WAIST_R: {kp: 236.871, kd: 15.0796, effort_limit: 63.0}
+      WAIST_P: {kp: 236.871, kd: 15.0796, effort_limit: 63.0}
+      L_SHOULDER_P: {kp: 78.9568, kd: 5.02655, effort_limit: 63.0}
+      L_SHOULDER_R: {kp: 78.9568, kd: 5.02655, effort_limit: 63.0}
+      L_SHOULDER_Y: {kp: 78.9568, kd: 5.02655, effort_limit: 42.0}
+      L_ELBOW_Y: {kp: 78.9568, kd: 5.02655, effort_limit: 42.0}
+      L_WRIST_P: {kp: 19.7392, kd: 1.25664, effort_limit: 23.0}
+      L_WRIST_Y: {kp: 19.7392, kd: 1.25664, effort_limit: 8.3}
+      L_WRIST_R: {kp: 19.7392, kd: 1.25664, effort_limit: 8.3}
+      R_SHOULDER_P: {kp: 78.9568, kd: 5.02655, effort_limit: 63.0}
+      R_SHOULDER_R: {kp: 78.9568, kd: 5.02655, effort_limit: 63.0}
+      R_SHOULDER_Y: {kp: 78.9568, kd: 5.02655, effort_limit: 42.0}
+      R_ELBOW_Y: {kp: 78.9568, kd: 5.02655, effort_limit: 42.0}
+      R_WRIST_P: {kp: 19.7392, kd: 1.25664, effort_limit: 23.0}
+      R_WRIST_Y: {kp: 19.7392, kd: 1.25664, effort_limit: 8.3}
+      R_WRIST_R: {kp: 19.7392, kd: 1.25664, effort_limit: 8.3}
+      NECK_Y: {kp: 39.4784, kd: 2.51327, effort_limit: 8.3}
+      NECK_P: {kp: 39.4784, kd: 2.51327, effort_limit: 2.3}
+      NECK_R: {kp: 39.4784, kd: 2.51327, effort_limit: 2.3}

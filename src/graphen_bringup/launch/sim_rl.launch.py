@@ -5,9 +5,8 @@
 情境參數：default_mode 設為 mode、該模式的 entry_speed 設為 0（不先插補到預設姿態，直接推論）。
 本機的 controllers.yaml 不需要修改，但 mode 必須已經定義在其中（modes 與該模式的參數）。
 
-  ros2 launch graphen_bringup sim_rl.launch.py                       # ti5_t170 + rl_flat
-  ros2 launch graphen_bringup sim_rl.launch.py mujoco_robot:=t170a   # t170a 訓練的 policy（Ti5-Flat）
-  ros2 launch graphen_bringup sim_rl.launch.py mode:=rl_walk mujoco_robot:=fb70
+  ros2 launch graphen_bringup sim_rl.launch.py                       # ti5_170a + rl_flat
+  ros2 launch graphen_bringup sim_rl.launch.py mode:=rl_walk robot:=fb70
 """
 import os
 import tempfile
@@ -25,7 +24,7 @@ def generate_launch_description():
 
     mode = LaunchConfiguration('mode')
     hardware = LaunchConfiguration('hardware')
-    mujoco_robot = LaunchConfiguration('mujoco_robot')
+    robot = LaunchConfiguration('robot')
     mujoco_viewer_port = LaunchConfiguration('mujoco_viewer_port')
 
     declare_args = [
@@ -36,9 +35,9 @@ def generate_launch_description():
             'hardware', default_value='mujoco_pd', choices=['mujoco', 'mujoco_pd'],
             description='MuJoCo control: position actuators or torque actuators + PdController'),
         DeclareLaunchArgument(
-            'mujoco_robot', default_value='ti5_t170', choices=['fb70', 't170a', 'ti5_t170'],
+            'robot', default_value='ti5_170a', choices=['ti5_170a', 'ti5_t170', 'fb70'],
             description='Simulated model; must match the model the policy was trained on '
-                        '(t170a / ti5_t170 need hardware:=mujoco_pd)'),
+                        '(ti5_t170 / ti5_170a need hardware:=mujoco_pd)'),
         DeclareLaunchArgument(
             'mujoco_viewer_port', default_value='9870',
             description='UDP port of graphen_mujoco/tools/mujoco_viewer.py (0 disables)'),
@@ -60,7 +59,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(bringup_launch),
             launch_arguments={
                 'hardware': hardware.perform(context),
-                'mujoco_robot': mujoco_robot.perform(context),
+                'robot': robot.perform(context),
                 'mujoco_fixed_base': 'false',
                 'mujoco_viewer_port': mujoco_viewer_port.perform(context),
                 'scenario_params': scenario.name,

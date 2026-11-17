@@ -1,10 +1,12 @@
 import os
+from collections import namedtuple
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument, LogInfo, OpaqueFunction, RegisterEventHandler,
     SetLaunchConfiguration)
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
@@ -16,7 +18,8 @@ def generate_launch_description():
 
     xacro_file = os.path.join(description_share, 'urdf', 'ti5_170a_graphen.urdf.xacro')
     config_dir = os.path.join(bringup_share, 'config')
-    # 與硬體無關的設定（模式、switch 接線）；硬體相關的設定依 hardware:= 疊加 hardware/*.yaml、imu/*.yaml
+    # 與硬體無關的設定（模式、switch 接線）；控制方式依 hardware:= 疊加 hardware/<position|pd>_common.yaml、
+    # IMU 疊加 imu/*.yaml，PD 增益依 robot:= 取自模型套件
     controllers_yaml_file = os.path.join(config_dir, 'controllers.yaml')
     # 實機本體（ti5_hardware）使用的 CAN 設定與初始位置
     can_config_file = os.path.join(bringup_share, 'config', 'can_driver_config.json')
@@ -37,9 +40,9 @@ def generate_launch_description():
     mujoco_fixed_base = LaunchConfiguration('mujoco_fixed_base')
     mujoco_model = LaunchConfiguration('mujoco_model')
     mujoco_viewer_port = LaunchConfiguration('mujoco_viewer_port')
-    mujoco_robot = LaunchConfiguration('mujoco_robot')
+    robot = LaunchConfiguration('robot')
     scenario_params = LaunchConfiguration('scenario_params')
-    # 由 resolve_mujoco_model 依 mujoco_robot 設定
+    # 由 resolve_mujoco_model 依 robot 設定
     mujoco_missing_joints = LaunchConfiguration('mujoco_missing_joints')
     mujoco_initial_base_height = LaunchConfiguration('mujoco_initial_base_height')
 
@@ -90,18 +93,19 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'mujoco_fixed_base', default_value='true',
             description='true: base fixed in the air (like hanging); false: free-standing. '
-                        'fb70 selects t170_fixed.xml; models with a free joint (t170a) are pinned'),
+                        'fb70 selects t170_fixed.xml; models with a free joint (ti5_t170) are pinned'),
         DeclareLaunchArgument(
-            'mujoco_robot', default_value='fb70',
-            choices=['fb70', 't170a', 'ti5_t170'],
-            description='hardware:=mujoco / mujoco_pd only. fb70: graphen_mujoco/models '
-                        '(FullBodyT70 export); t170a: t170a_description/mjcf/t170a.xml '
-                        '(motor actuators, hardware:=mujoco_pd only, no neck joints); '
-                        'ti5_t170: ti5_t170_description/mjcf/ti5_t170.xml '
-                        '(T170-V2.1-A0 T-pose, motor actuators, hardware:=mujoco_pd only)'),
+            'robot', default_value='ti5_170a',
+            choices=['ti5_170a', 'ti5_t170', 'fb70'],
+            description='Robot model, selects the URDF body, the MJCF (MuJoCo) and the PD gains '
+                        '(mujoco_pd / real_pd), for every hardware. ti5_t170: '
+                        'ti5_t170_description (T170-V2.1-A0, motor actuators); ti5_170a: '
+                        'ti5_170a_graphen (own URDF, generated MJCF with motor actuators); fb70: '
+                        'fb70_description (FullBodyT70 export, position servos, URDF body of '
+                        'ti5_170a_graphen). hardware:=mujoco needs fb70'),
         DeclareLaunchArgument(
             'mujoco_model', default_value='',
-            description='MJCF path; empty selects the model of mujoco_robot'),
+            description='MJCF path; empty selects the model of robot'),
         DeclareLaunchArgument(
             'scenario_params', default_value='',
             description='Parameter file loaded after all others; used by scenario launch files '
@@ -114,37 +118,35 @@ def generate_launch_description():
     def is_mujoco(context):
         return hardware.perform(context).startswith('mujoco')
 
-    # 依 mujoco_robot 選擇模型與 MujocoSystem 的設定。只在 MuJoCo 時查詢模型套件，
-    # 沒有建置 graphen_mujoco / 模型套件時其他硬體仍可使用
-    # 力矩馬達模型（只能用 PD）：(套件, MJCF 相對路徑, 缺少的 joint 處理, 浮動基座初始高度)。
-    # 初始高度為訓練初始姿態（微彎膝）下腳底貼地的高度
-    motor_models = {
-        # 模型沒有頸部，三軸改為虛擬關節
-        't170a': ('t170a_description', 'mjcf/t170a.xml', 'virtual', '0.894'),
+    # 各模型（robot:=）的資訊。模型套件提供 MJCF（MuJoCo）與 config/joint_pd_gains.yaml（PD 增益）；
+    # URDF 本體由 ti5_170a_graphen.urdf.xacro 依 robot 選擇。只在需要時查詢模型套件
+    #   mjcf：MJCF 相對路徑，None 時依 mujoco_fixed_base 選 mjcf/t170_fixed.xml / t170_free.xml
+    #   servo：True 為位置伺服（mujoco / mujoco_pd 都可用），False 為力矩馬達（只能 mujoco_pd）
+    #   missing_joints / base_height：MujocoSystem 的設定；初始高度為訓練初始姿態下腳底貼地的高度
+    Robot = namedtuple('Robot', 'package mjcf servo missing_joints base_height')
+    robots = {
         # 腳底貼地為 1.065 m（ti5_t170_description/scripts/make_mjcf.py），留 5 mm 落地
-        'ti5_t170': ('ti5_t170_description', 'mjcf/ti5_t170.xml', 'error', '1.07'),
+        'ti5_t170': Robot('ti5_t170_description', 'mjcf/ti5_t170.xml', False, 'error', '1.07'),
+        # ti5_170a_graphen/scripts/make_mjcf.py 印出的高度（直膝下腳底最低點 + 5 mm），重新產生 MJCF 後同步
+        'ti5_170a': Robot('ti5_170a_graphen', 'mjcf/ti5_170a.xml', False, 'error', '0.899'),
+        'fb70': Robot('fb70_description', None, True, 'error', '1.07'),
     }
 
     def resolve_mujoco_model(context):
-        actions = [SetLaunchConfiguration('mujoco_missing_joints', 'error'),
-                   SetLaunchConfiguration('mujoco_initial_base_height', '1.07')]
+        model = robots[robot.perform(context)]
+        actions = [SetLaunchConfiguration('mujoco_missing_joints', model.missing_joints),
+                   SetLaunchConfiguration('mujoco_initial_base_height', model.base_height)]
         if not is_mujoco(context):
             return actions
-        robot = mujoco_robot.perform(context)
-        if robot in motor_models:
-            if hardware.perform(context) != 'mujoco_pd':
-                raise RuntimeError(f'mujoco_robot:={robot} needs hardware:=mujoco_pd '
-                                   '(the model has motor actuators)')
-            package, relpath, missing_joints, base_height = motor_models[robot]
-            actions = [SetLaunchConfiguration('mujoco_missing_joints', missing_joints),
-                       SetLaunchConfiguration('mujoco_initial_base_height', base_height)]
-            path = os.path.join(get_package_share_directory(package), relpath)
-        else:
-            name = 't170_fixed.xml' if IfCondition(mujoco_fixed_base).evaluate(context) \
-                else 't170_free.xml'
-            path = os.path.join(get_package_share_directory('graphen_mujoco'), 'models', name)
+        if not model.servo and hardware.perform(context) != 'mujoco_pd':
+            raise RuntimeError(f'robot:={robot.perform(context)} needs hardware:=mujoco_pd '
+                               '(the model has motor actuators); use robot:=fb70 for hardware:=mujoco')
+        relpath = model.mjcf or os.path.join(
+            'mjcf', 't170_fixed.xml' if IfCondition(mujoco_fixed_base).evaluate(context)
+            else 't170_free.xml')
         if not mujoco_model.perform(context):
-            actions.append(SetLaunchConfiguration('mujoco_model', path))
+            actions.append(SetLaunchConfiguration(
+                'mujoco_model', os.path.join(get_package_share_directory(model.package), relpath)))
         return actions
 
     set_mujoco_model = OpaqueFunction(function=resolve_mujoco_model)
@@ -161,6 +163,7 @@ def generate_launch_description():
 
     robot_description_raw = Command([
         'xacro ', xacro_file,
+        ' robot:=', robot,
         ' hardware:=', hardware,
         ' can_config_path:=', can_config_file,
         ' real_initial_positions_file:=', real_initial_positions_file,
@@ -191,30 +194,33 @@ def generate_launch_description():
     )
 
     # 2. Controller Manager
-    #    共用設定 →（mujoco_pd / real_pd）hardware/pd_common.yaml → hardware/<hardware>.yaml
-    #    →（mujoco_pd）hardware/mujoco_pd_<mujoco_robot>.yaml →（mock / real / real_pd）imu/<mock|imu16460>.yaml
-    #    →（情境 launch）scenario_params，後載入的覆蓋先載入的。
-    #    參數檔無法用 condition 切換，所以在 OpaqueFunction 中組合
+    #    共用設定 → hardware/<position|pd>_common.yaml → imu/common.yaml → imu/<mujoco|mock|imu16460>.yaml
+    #    →（mujoco_pd / real_pd）<robot 套件>/config/joint_pd_gains.yaml →（情境 launch）scenario_params，
+    #    後載入的覆蓋先載入的。參數檔無法用 condition 切換，所以在 OpaqueFunction 中組合
     def create_controller_manager(context):
         hw = hardware.perform(context)
-        files = [controllers_yaml_file]
-        if hw in ('mujoco_pd', 'real_pd'):
-            # PD 子群組與 switch 的速度前饋 / kp / kd 接線，模擬與實機共用
-            files.append(os.path.join(config_dir, 'hardware', 'pd_common.yaml'))
-        files.append(os.path.join(config_dir, 'hardware', f'{hw}.yaml'))
-        if hw == 'mujoco_pd':
-            # 預設增益依模型：顯式 PD 的增益要配合模型的慣量，否則會振盪
-            files.append(os.path.join(
-                config_dir, 'hardware', f'mujoco_pd_{mujoco_robot.perform(context)}.yaml'))
-        if not is_mujoco(context):
+        robot_name = robot.perform(context)
+        pd = hw in ('mujoco_pd', 'real_pd')
+        # 子群組型別與接線只取決於控制方式（位置 / PD），與硬體、模型無關
+        files = [controllers_yaml_file, os.path.join(
+            config_dir, 'hardware', 'pd_common.yaml' if pd else 'position_common.yaml')]
+        if is_mujoco(context):
+            imu = 'mujoco'
+        else:
             imu = 'mock' if IfCondition(use_mock_imu).evaluate(context) else 'imu16460'
-            files.append(os.path.join(config_dir, 'imu', f'{imu}.yaml'))
+        files += [os.path.join(config_dir, 'imu', 'common.yaml'),
+                  os.path.join(config_dir, 'imu', f'{imu}.yaml')]
+        if pd:
+            # 預設增益屬於模型：顯式 PD 的增益要配合模型的慣量，否則會振盪
+            files.append(os.path.join(get_package_share_directory(robots[robot_name].package),
+                                      'config', 'joint_pd_gains.yaml'))
         # 情境 launch 的覆寫（例如一開始就進入 RL 模式），不改本機 controllers.yaml
         if scenario_params.perform(context):
             files.append(scenario_params.perform(context))
         def shown(path):
             return os.path.relpath(path, config_dir) if path.startswith(config_dir) else path
-        return [LogInfo(msg='controller parameter files: ' + ', '.join(
+        return [LogInfo(msg=f'robot: {robot_name} (URDF body, MJCF, PD gains)'),
+                LogInfo(msg='controller parameter files: ' + ', '.join(
             shown(f) for f in files)), Node(
             package='controller_manager',
             executable='ros2_control_node',
@@ -243,13 +249,13 @@ def generate_launch_description():
         condition=IfCondition(mock_imu_active)
     )
 
-    # 3-2. 實機或 MuJoCo 的 IMU 發布 sensor_msgs/Imu（/imu_sensor_broadcaster/imu）
+    # 3-2. IMU 發布 sensor_msgs/Imu（/imu_sensor_broadcaster/imu），所有 IMU 來源都啟動；
+    #       mock IMU 時與 sensor_forwarder 並存（forwarder 寫入、broadcaster 讀取 state）
     spawn_imu_sensor_broadcaster = Node(
         package='controller_manager',
         executable='spawner',
         arguments=['imu_sensor_broadcaster'],
-        output='screen',
-        condition=UnlessCondition(mock_imu_active)
+        output='screen'
     )
 
     # 4. 下游子群組（32 軸，依部位分組），依序啟動

@@ -38,8 +38,8 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [dexterous_hand_description](src/dexterous_hands/dexterous_hand_description/) | 資源（外部） | 靈巧手 ros2_control xacro macro | dexterous_hand_hardware（執行期） |
 | [dexterous_hand_hardware](src/dexterous_hands/dexterous_hand_hardware/) | hardware plugin（外部） | 靈巧手 `SystemInterface`（RS485） | — |
 | [graphen_mujoco](src/graphen_mujoco/) | hardware plugin | MuJoCo 模擬的 T170 本體 + IMU（`graphen_mujoco/MujocoSystem`）、MJCF 匯出與主機端 viewer（`tools/`） | — |
-| [t170a_description](src/robot_description/t170a/) | 資源（外部） | robolab 訓練用的 T170 A0 模型（URDF、MJCF、mesh），MuJoCo 驗證控制架構用，不代表實機 | — |
-| [ti5_t170_description](src/robot_description/ti5_t170_description/) | 資源（外部） | T170-V2.1-A0 模型（URDF xacro、MJCF、mesh），robolab `Ti5T170-Flat`（tc_new_025）的訓練模型 | — |
+| [fb70_description](src/robot_description/fb70/) | 資源 | FullBodyT70 訓練場景匯出的 MJCF（位置伺服）與依關節的 PD 增益；沒有自己的 URDF | — |
+| [ti5_t170_description](src/robot_description/ti5_t170_description/) | 資源（外部） | T170-V2.1-A0 模型（URDF xacro、MJCF、mesh、依關節的 PD 增益），robolab `Ti5T170-Flat`（tc_new_025）的訓練模型，實機 T170 對應的模型 | — |
 | [graphen_choreographer](src/graphen_choreographer/) | locomotion plugin（不依賴 rclcpp） | 編舞（多軌 keyframe 的組合動作）：`ChoreographerAlgorithm`、腳本解析、`choreo_check` | graphen_locomotion |
 | [graphen_rl_policy](src/graphen_rl_policy/) | locomotion plugin | RL policy 共用基類 `PolicyRunner`（ONNX Runtime）與 policy plugin：`T170VelocityPolicy`（FullBodyT70）、`Ti5FlatPolicy`（robolab） | graphen_locomotion |
 
@@ -66,15 +66,17 @@ ros2 launch graphen_bt bt.launch.py                 # 行為層（另開終端�
 
 ### 硬體設定
 
-bringup 以 `hardware:=` 選擇硬體（預設 `mock`）。controller 設定分成兩部分，launch 依序疊加：
+bringup 以 `hardware:=` 選擇硬體（預設 `mock`），以 `robot:=` 選擇模型（預設 `ti5_170a`，也就是一直以來實機用的 URDF；另有 `ti5_t170`、`fb70`），所有 hardware 的預設相同。
+`robot` 同時決定 URDF 本體、MuJoCo 的 MJCF 與 PD 預設增益。controller 設定由 launch 依序疊加：
 
-| 檔案（`graphen_bringup/config/`） | 內容 |
+| 檔案 | 內容 |
 |---|---|
-| `controllers.yaml`（本機檔，範本 `.example`） | 與硬體無關：模式、switch 接線、BVH；本機自訂（例如子群組的 `output_enabled`） |
-| `hardware/pd_common.yaml` | （`mujoco_pd` / `real_pd`）`update_rate` 200、`PdController` 子群組與 switch 的速度前饋 / kp / kd 接線 |
-| `hardware/<hardware>.yaml` | `update_rate`、6 個子群組的 type（`PositionController` / `PdController`）與介面接線；`real_pd` 為 PD 預設增益與力矩上限 |
-| `hardware/mujoco_pd_<mujoco_robot>.yaml` | （`mujoco_pd`）依模型的 PD 預設增益與力矩上限 |
-| `imu/mock.yaml` 或 `imu/imu16460.yaml` | （`mock` / `real` / `real_pd`）依 `use_mock_imu` 選擇 |
+| `config/controllers.yaml`（本機檔，範本 `.example`） | 與硬體無關：模式、switch 接線、BVH；本機自訂（例如子群組的 `output_enabled`） |
+| `config/hardware/position_common.yaml` | （`mock` / `mujoco` / `real`）`update_rate` 100、6 個 `PositionController` 子群組與介面接線 |
+| `config/hardware/pd_common.yaml` | （`mujoco_pd` / `real_pd`）`update_rate` 200、6 個 `PdController` 子群組與 switch 的速度前饋 / kp / kd 接線 |
+| `config/imu/common.yaml` | `imu_sensor_broadcaster`（所有硬體都啟動，發布 `/imu_sensor_broadcaster/imu`） |
+| `config/imu/<mujoco\|mock\|imu16460>.yaml` | 依 IMU 來源：MuJoCo、`use_mock_imu:=true` 的 mock（加上 `sensor_forwarder`）、實機 |
+| `<robot 套件>/config/joint_pd_gains.yaml` | （`mujoco_pd` / `real_pd`）模型的 PD 預設增益與力矩上限，以關節為 key（`joint_gains.<joint>.kp/kd/effort_limit`） |
 
 | `hardware` | 本體 | IMU |
 |---|---|---|
@@ -255,35 +257,33 @@ tar xzf mujoco-3.11.0-linux-${ARCH}.tar.gz -C ~/.local/mujoco-3.11.0 --strip-com
 colcon build --symlink-install --packages-select graphen_mujoco   # 裝在其他位置時加 --cmake-args -DMUJOCO_DIR=<路徑>
 ```
 
-控制方式由 `hardware` 決定，模型由 `mujoco_robot` 決定：
+控制方式由 `hardware` 決定，模型由 `robot` 決定：
 
 | `hardware` | 致動器 | 子群組 | 預設增益 |
 |---|---|---|---|
 | `mujoco` | MJCF 的位置伺服 | `PositionController` | MJCF 內的值，所有模式相同 |
-| `mujoco_pd` | 力矩馬達 | `PdController`（`update_rate` 200） | `hardware/mujoco_pd_<mujoco_robot>.yaml`；模式有設定 `kp` / `kd` 時（RL policy）改用模式的值 |
+| `mujoco_pd` | 力矩馬達 | `PdController`（`update_rate` 200） | `<robot 套件>/config/joint_pd_gains.yaml`；模式有設定 `kp` / `kd` 時（RL policy）改用模式的值 |
 
-| `mujoco_robot` | 模型 | 可用的 hardware | 說明 |
-|---|---|---|---|
-| `fb70`（預設） | `graphen_mujoco/models/t170_{free,fixed}.xml`（FullBodyT70 匯出，wtz 的訓練模型） | `mujoco`、`mujoco_pd` | mesh 指向 Orin 上的 `/devtest/FullBodyT70/...`，只能在 Orin 上載入 |
-| `t170a` | `t170a_description/mjcf/t170a.xml`（robolab，tc_flat 的訓練模型） | `mujoco_pd` | mesh 用相對路徑，WSL 也能跑；沒有頸部（三軸為虛擬關節） |
-| `ti5_t170` | `ti5_t170_description/mjcf/ti5_t170.xml`（T170-V2.1-A0 T-pose，tc_new_025 的訓練模型） | `mujoco_pd` | mesh 用相對路徑，WSL 也能跑；頸部是真正的關節；初始基座高度 1.07 m |
+| `robot` | URDF 本體 | MJCF | 可用的 hardware | 說明 |
+|---|---|---|---|---|
+| `ti5_t170` | `ti5_t170_description`（+ 靈巧手） | `ti5_t170_description/mjcf/ti5_t170.xml`（T170-V2.1-A0 T-pose，tc_new_025 的訓練模型） | 全部（MuJoCo 只有 `mujoco_pd`） | mesh 用相對路徑，WSL 也能跑；頸部是真正的關節；初始基座高度 1.07 m |
+| `ti5_170a`（預設） | `ti5_170a_graphen` 的 `robot.urdf.xacro` | `ti5_170a_graphen/mjcf/ti5_170a.xml`（由 URDF 產生，手固定、armature 借用 ti5_t170） | 全部（MuJoCo 只有 `mujoco_pd`） | 質量分布可疑（`WAIST_R_S` 49 kg、本體 93.7 kg），模擬不代表實機；初始基座高度 0.899 m |
+| `fb70` | `ti5_170a_graphen` 的 `robot.urdf.xacro` | `fb70_description/mjcf/t170_{free,fixed}.xml`（FullBodyT70 匯出，wtz 的訓練模型） | 全部 | mesh 指向 Orin 上的 `/devtest/FullBodyT70/...`，只能在 Orin 上載入 |
 
-policy 只在自己的訓練模型上才站得穩（例如 tc_new_025 在 t170a 上會倒），模型與 policy 要對應。各模型的浮動基座初始高度不同（訓練初始姿態下腳底貼地），由 launch 依 `mujoco_robot` 帶入 MujocoSystem 的 `initial_base_height`。
+policy 只在自己的訓練模型上才站得穩，模型與 policy 要對應（`rl_flat` / `tc_flat_policy*` 的訓練模型 t170a 已移出工作區，目前沒有對應的模擬模型）。各模型的浮動基座初始高度不同（訓練初始姿態下腳底貼地），由 launch 依 `robot` 帶入 MujocoSystem 的 `initial_base_height`。
 
-`mujoco_fixed_base:=true`（預設）時基座固定在空中，相當於吊掛：fb70 改用 `t170_fixed.xml`，t170a / ti5_t170 每步把基座重設回初始位姿。`false` 時為自由站立。
+`mujoco_fixed_base:=true`（預設）時基座固定在空中，相當於吊掛：fb70 改用 `t170_fixed.xml`，ti5_170a / ti5_t170 每步把基座重設回初始位姿。`false` 時為自由站立。
 
 ```bash
 # fb70（Orin 容器內）
-ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco mujoco_fixed_base:=false
-ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_fixed_base:=false
-# t170a / ti5_t170（任何機器）
-ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_robot:=t170a mujoco_fixed_base:=true
-ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_robot:=ti5_t170 mujoco_fixed_base:=true
+ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco robot:=fb70 mujoco_fixed_base:=false
+ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd robot:=fb70 mujoco_fixed_base:=false
+# ti5_t170（任何機器）
+ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_fixed_base:=true
 
 # 主機上另開視窗（只顯示，不需要 ROS；視窗內按 End 重置模擬）。模型要與 launch 一致
 bash src/graphen_mujoco/tools/mujoco_viewer.sh                                  # fb70 自由站立
-bash src/graphen_mujoco/tools/mujoco_viewer.sh --model ../models/t170_fixed.xml # fb70 吊掛
-bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/t170a/mjcf/t170a.xml"
+bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/fb70/mjcf/t170_fixed.xml" # fb70 吊掛
 bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/ti5_t170_description/mjcf/ti5_t170.xml"  # sim_rl 預設
 
 # 切到 policy：進入時會先以 entry_speed 走到 policy 的預設姿態，再開始推論
@@ -297,13 +297,14 @@ ros2 topic pub -r 20 /switch_group_controller/cmd_vel geometry_msgs/msg/Twist "{
 - **自由站立測 RL policy 要用 `sim_rl.launch.py`**：PD 只保持姿態、沒有平衡能力，`bringup.launch.py` 自由站立啟動後幾秒內就會倒下（姿態約 90°），之後才切到 RL 模式已經來不及。`sim_rl.launch.py` 會在最後疊加一份情境參數（`default_mode` 設為 `mode`、該模式的 `entry_speed` 設為 0），讓 policy 從模擬開始就接手；本機 `controllers.yaml` 不用改，但 `mode` 必須已經定義在其中：
 
   ```bash
-  ros2 launch graphen_bringup sim_rl.launch.py                        # ti5_t170 + rl_flat（預設）
-  ros2 launch graphen_bringup sim_rl.launch.py mujoco_robot:=t170a    # tc_flat_policy*（t170a 訓練）
-  ros2 launch graphen_bringup sim_rl.launch.py mode:=rl_walk mujoco_robot:=fb70   # Orin
+  ros2 launch graphen_bringup sim_rl.launch.py                        # ti5_170a + rl_flat（預設）
+  ros2 launch graphen_bringup sim_rl.launch.py mode:=rl_walk robot:=fb70   # Orin
   ```
 - `controllers.yaml.example` 有兩個 RL 模式（本機的 `controllers.yaml` 要使用時，從範本複製並加到 `modes`）：
   - `rl_walk`：`T170VelocityPolicy` + `policy/wtz_policy.onnx`，用 fb70 訓練。實測（fb70、position、自由站立）：能穩定站立；vx=0.5 時實際約 0.23 m/s，這是 policy 本身的表現（直接跑 `play_mujoco.py` 也約 0.25 m/s）。
-  - `rl_flat`：`Ti5FlatPolicy` + `policy/tc_flat_policy.onnx`，用 t170a 訓練。實測（t170a、`mujoco_pd`、自由站立、WSL）：能穩定站立（傾斜約 2.5°）；vx=0.5 時能邁步、不會倒下。關節順序與 obs 組法是推斷的，**仍待訓練端確認**。
+  - `rl_flat`：`Ti5FlatPolicy` + `policy/tc_flat_policy.onnx`，用 t170a 訓練（t170a 模型已移出工作區）。當時的實測（t170a、`mujoco_pd`、自由站立、WSL）：能穩定站立（傾斜約 2.5°）；vx=0.5 時能邁步、不會倒下。關節順序與 obs 組法是推斷的，**仍待訓練端確認**。
+- ti5_170a 的 MJCF 由 URDF 產生，URDF 或 mesh 更新後重新產生，並把印出的基座高度同步到 `bringup.launch.py` 的 `robots['ti5_170a']`：
+  `python3 src/robot_description/ti5_170a_graphen/scripts/make_mjcf.py`
 - ti5_t170 的 MJCF 由 CAD 匯出的 T-pose 檔產生（補上 timestep、armature、ctrlrange、IMU、碰撞設定與 keyframe）；原檔或 `param.csv` 更新後重新產生：
   `python3 src/robot_description/ti5_t170_description/scripts/make_mjcf.py --base-height 1.07`
 - fb70 的 MJCF 由 FullBodyT70 的訓練場景匯出，重新訓練或修改場景後要重新產生（需要主機的 `~/learnWalk_env`）：
@@ -324,7 +325,7 @@ ros2 launch graphen_bringup bringup.launch.py use_mock_imu:=false imu_port:=/dev
 ros2 topic echo /imu_sensor_broadcaster/imu         # 角速度 rad/s、加速度 m/s²
 ```
 
-實機時 `sensor_forwarder` 不啟動，改為 `imu_sensor_broadcaster`；`switch_group_controller` 的設定不需要改動（mock 與實機的 interface 名稱相同）。
+實機時 `sensor_forwarder` 不啟動（`imu_sensor_broadcaster` 在所有硬體都會啟動）；`switch_group_controller` 的設定不需要改動（mock 與實機的 interface 名稱相同）。
 協議、待實機驗證項目與 CLI 用法見 [docs/IMU16460.md](docs/IMU16460.md) 和 [imu16460_core/README.md](src/imu16460/imu16460_core/README.md)。
 
 > 會改變 IMU 設定的 CLI 指令（`set-*`、`save`、`reboot`）必須帶 `--yes`，未經確認不要對實機送出。

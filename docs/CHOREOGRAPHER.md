@@ -387,7 +387,7 @@ future = client.send_goal_async(goal, feedback_callback=lambda fb: print(fb.feed
 
 ### 6.4 安全
 
-- 新的腳本請依序在 mock → MuJoCo（`hardware:=mujoco_pd mujoco_robot:=ti5_t170 mujoco_fixed_base:=true`）上驗證，最後才上實機。
+- 新的腳本請依序在 mock → MuJoCo（`hardware:=mujoco_pd mujoco_fixed_base:=true`，`robot` 預設 ti5_170a）上驗證，最後才上實機。
 - 上實機前用 `velocity_limit_scale`（例如 0.25）壓低速度上限。
 - 姿態的方向與碰撞未經實機確認的腳本，加上 `TODO(verify-on-hw)` 註解。
 - 表演中不可以被打斷的段落設定 `interruptible: false`；`stop` 仍然可以隨時切入。

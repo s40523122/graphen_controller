@@ -18,15 +18,27 @@ double gain_or_default(double reference, double fallback) {
   return std::isfinite(reference) && reference >= 0.0 ? reference : fallback;
 }
 
+// 各關節的預設增益與力矩上限：joint_gains.<joint>.<key>
+constexpr const char * kJointGainKeys[] = {"kp", "kd", "effort_limit"};
+
+std::string joint_gain_parameter(const std::string & joint, const char * key) {
+  return "joint_gains." + joint + "." + key;
+}
+
 }  // namespace
 
 controller_interface::CallbackReturn PdController::on_init() {
   try {
     auto_declare<std::vector<std::string>>("joints", std::vector<std::string>{});
-    auto_declare<std::vector<double>>("default_kp", std::vector<double>{});
-    auto_declare<std::vector<double>>("default_kd", std::vector<double>{});
-    auto_declare<std::vector<double>>("effort_limits", std::vector<double>{});
     auto_declare<double>("reference_publish_rate", 50.0);
+    // 各關節的增益參數名稱依 joints 而定，所以先讀出 joints 再宣告；預設 NaN 表示未提供，
+    // on_configure 檢查。joints 在 configure 前被改掉時，on_configure 會補宣告新的關節
+    const auto joints = get_node()->get_parameter("joints").as_string_array();
+    for (const auto & joint : joints) {
+      for (const char * key : kJointGainKeys) {
+        auto_declare<double>(joint_gain_parameter(joint, key), kNaN);
+      }
+    }
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception caught during init: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -49,29 +61,29 @@ controller_interface::CallbackReturn PdController::on_configure(
     return controller_interface::CallbackReturn::ERROR;
   }
 
-  // 與 joints 一一對應的數值參數；valid 檢查每個值
-  const auto read_per_joint = [&](const char * name, std::vector<double> & values,
+  // 各關節的 joint_gains.<joint>.<key>，依 joints 的順序存成陣列；valid 檢查每個值。
+  // 未提供（NaN）也在這裡擋下，避免以 0 增益或 0 力矩上限啟動
+  const auto read_per_joint = [&](const char * key, std::vector<double> & values,
       bool (*valid)(double), const char * requirement) {
-      values = get_node()->get_parameter(name).as_double_array();
-      if (values.size() != joints_.size()) {
-        RCLCPP_ERROR(logger, "'%s' must contain %zu entries (one per joint), got %zu.",
-          name, joints_.size(), values.size());
-        return false;
-      }
-      for (size_t i = 0; i < values.size(); ++i) {
-        if (!valid(values[i])) {
-          RCLCPP_ERROR(logger, "'%s' of joint '%s' must be %s, got %f.",
-            name, joints_[i].c_str(), requirement, values[i]);
+      values.clear();
+      values.reserve(joints_.size());
+      for (const auto & joint : joints_) {
+        const auto name = joint_gain_parameter(joint, key);
+        const double value = auto_declare<double>(name, kNaN);
+        if (!valid(value)) {
+          RCLCPP_ERROR(logger, "'%s' must be %s, got %f (missing in the model's gain file?).",
+            name.c_str(), requirement, value);
           return false;
         }
+        values.push_back(value);
       }
       return true;
     };
   const auto non_negative = [](double v) {return std::isfinite(v) && v >= 0.0;};
   const auto positive = [](double v) {return std::isfinite(v) && v > 0.0;};
-  if (!read_per_joint("default_kp", default_kp_, non_negative, ">= 0") ||
-    !read_per_joint("default_kd", default_kd_, non_negative, ">= 0") ||
-    !read_per_joint("effort_limits", effort_limits_, positive, "> 0"))
+  if (!read_per_joint("kp", default_kp_, non_negative, ">= 0") ||
+    !read_per_joint("kd", default_kd_, non_negative, ">= 0") ||
+    !read_per_joint("effort_limit", effort_limits_, positive, "> 0"))
   {
     return controller_interface::CallbackReturn::ERROR;
   }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 在主機上顯示 graphen_mujoco 的模擬畫面（不需要網路，不需要 ROS）
 #   bash mujoco_viewer.sh                                    # 浮動基座模型、port 9870
-#   bash mujoco_viewer.sh --model ../models/t170_fixed.xml   # 固定基座（mujoco_fixed_base:=true）
+#   bash mujoco_viewer.sh --model ../../robot_description/fb70/mjcf/t170_fixed.xml   # 固定基座（mujoco_fixed_base:=true）
 # 視窗內按 End 重置模擬
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

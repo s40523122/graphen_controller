@@ -1,0 +1,89 @@
+# hardware:=mock / mujoco / real 共用：子群組使用 PositionController（reference 插補後寫入 <joint>/position）。
+# 位置迴圈在硬體端（mock 直接回寫、MuJoCo 的位置致動器、Ti5 馬達內部），controller 不需要增益。
+# launch 載入順序：controllers.yaml → position_common.yaml → imu/common.yaml → imu/<來源>.yaml → scenario_params
+
+controller_manager:
+  ros__parameters:
+    update_rate: 100   # 實機 CAN 讀取有 timeout，不使用過高的頻率；MuJoCo 物理 200 Hz，每個週期推進 2 步
+
+    # T170 本體 32 軸，依部位分成 6 個子群組（分組參考 ti5_170a_graphen.srdf）
+    left_arm_group_controller:
+      type: graphen_control/PositionController
+
+    right_arm_group_controller:
+      type: graphen_control/PositionController
+
+    waist_group_controller:
+      type: graphen_control/PositionController
+
+    head_group_controller:
+      type: graphen_control/PositionController
+
+    left_leg_group_controller:
+      type: graphen_control/PositionController
+
+    right_leg_group_controller:
+      type: graphen_control/PositionController
+
+# 位置模式：reference 插補後寫到硬體的 <joint>/position，input 與 output 1:1
+left_arm_group_controller:
+  ros__parameters:
+    input_interfaces: [L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R]
+    output_interfaces:
+      - L_SHOULDER_P/position
+      - L_SHOULDER_R/position
+      - L_SHOULDER_Y/position
+      - L_ELBOW_Y/position
+      - L_WRIST_P/position
+      - L_WRIST_Y/position
+      - L_WRIST_R/position
+
+right_arm_group_controller:
+  ros__parameters:
+    input_interfaces: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R]
+    output_interfaces:
+      - R_SHOULDER_P/position
+      - R_SHOULDER_R/position
+      - R_SHOULDER_Y/position
+      - R_ELBOW_Y/position
+      - R_WRIST_P/position
+      - R_WRIST_Y/position
+      - R_WRIST_R/position
+
+waist_group_controller:
+  ros__parameters:
+    input_interfaces: [WAIST_Y, WAIST_R, WAIST_P]
+    output_interfaces:
+      - WAIST_Y/position
+      - WAIST_R/position
+      - WAIST_P/position
+
+head_group_controller:
+  ros__parameters:
+    input_interfaces: [NECK_Y, NECK_P, NECK_R]
+    output_interfaces:
+      - NECK_Y/position
+      - NECK_P/position
+      - NECK_R/position
+
+left_leg_group_controller:
+  ros__parameters:
+    input_interfaces: [L_HIP_P, L_HIP_R, L_HIP_Y, L_KNEE_P, L_ANKLE_P, L_ANKLE_R]
+    output_interfaces:
+      - L_HIP_P/position
+      - L_HIP_R/position
+      - L_HIP_Y/position
+      - L_KNEE_P/position
+      - L_ANKLE_P/position
+      - L_ANKLE_R/position
+
+right_leg_group_controller:
+  ros__parameters:
+    input_interfaces: [R_HIP_P, R_HIP_R, R_HIP_Y, R_KNEE_P, R_ANKLE_P, R_ANKLE_R]
+    output_interfaces:
+      - R_HIP_P/position
+      - R_HIP_R/position
+      - R_HIP_Y/position
+      - R_KNEE_P/position
+      - R_ANKLE_P/position
+      - R_ANKLE_R/position

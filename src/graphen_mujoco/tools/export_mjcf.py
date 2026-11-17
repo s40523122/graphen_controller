@@ -7,9 +7,9 @@
   - 關閉 fusestatic（見 make_spec 的註解）
   - meshdir 改成絕對路徑（容器內掛載路徑相同），不複製 79 MB 的 STL
 
-輸出：
-  models/t170_free.xml   浮動基座（自由站立）
-  models/t170_fixed.xml  固定基座，懸在 BASE_HEIGHT（相當於吊掛）
+輸出（預設寫到 fb70_description 套件，src/robot_description/fb70/mjcf/）：
+  t170_free.xml   浮動基座（自由站立）
+  t170_fixed.xml  固定基座，懸在 BASE_HEIGHT（相當於吊掛）
 
 需要 mujoco（主機的 ~/learnWalk_env）：
   ~/learnWalk_env/bin/python tools/export_mjcf.py
@@ -23,6 +23,8 @@ from pathlib import Path
 import mujoco
 
 HERE = Path(__file__).resolve().parent
+# 模型屬於 fb70_description 套件（src/robot_description/fb70），工具留在 graphen_mujoco
+FB70_MJCF = HERE.parents[1] / "robot_description" / "fb70" / "mjcf"
 DEFAULT_PLAY = Path("/devtest/FullBodyT70/cpp_interface/play_mujoco.py")
 IMU_POS = (0.0, 0.0, 0.1)  # 與 ti5_170a_graphen.urdf.xacro 的 imu_xyz 相同
 RENAME = {"NECK_Y1": "NECK_Y"}
@@ -62,7 +64,7 @@ def make_spec(play, fixed_base):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--play", type=Path, default=DEFAULT_PLAY, help="play_mujoco.py 的路徑")
-    ap.add_argument("--out", type=Path, default=HERE.parent / "models")
+    ap.add_argument("--out", type=Path, default=FB70_MJCF)
     args = ap.parse_args()
 
     # play_mujoco 在模組層 import onnxruntime，匯出用不到：沒有安裝時放一個空模組

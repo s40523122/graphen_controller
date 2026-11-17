@@ -1,7 +1,8 @@
 controller_manager:
   ros__parameters:
-    # update_rate、6 個子群組（PositionController / PdController）與 IMU 相關 controller 依硬體設定，
-    # 放在 hardware/<hardware>.yaml、imu/*.yaml；launch 依 hardware:= 疊加在這個檔案之後
+    # update_rate、6 個子群組（PositionController / PdController）依控制方式放在
+    # hardware/<position|pd>_common.yaml，IMU 相關 controller 放在 imu/*.yaml；
+    # PD 增益依 robot:= 取自模型套件的 config/joint_pd_gains.yaml。launch 疊加在這個檔案之後
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
@@ -360,7 +361,7 @@ switch_group_controller:
     # 29 軸（頸部不在 policy 中，固定在 0）、10 幀 history、沒有步態相位。
     # 設定依 graphen_rl_policy/ref/env.yaml（2026-10-20_01-37-45_ft_std025）。
     # TODO(verify-with-training): joints 的順序是由 onnx 權重推斷的 Isaac Lab 廣度優先順序，
-    # history 的排法也是推斷的。在 t170a（hardware:=mujoco_pd mujoco_robot:=t170a）上能自由站立與邁步，
+    # history 的排法也是推斷的。在訓練模型 t170a（已移出工作區）的 MuJoCo 上能自由站立與邁步，
     # 但訓練端確認 robot.joint_names 與 obs 組法之前不要用於實機。
     # 訓練的 PD 增益（kp / kd）與 fb70 的 MJCF 差很多，要在 hardware:=mujoco_pd 下測試
     rl_flat:
@@ -409,7 +410,7 @@ switch_group_controller:
       damping: 1.0e-6
       residual_tolerance: 1.0e-3   # rad
 
-# 子群組 controller 與硬體無關的參數（type 與介面接線在 hardware/<hardware>.yaml）。
+# 子群組 controller 與硬體無關的參數（type 與介面接線在 hardware/<position|pd>_common.yaml）。
 # output_enabled（只有 PositionController 有）：false 時該群組不寫 command，關節維持最後的 command
 # （不斷電、不卸力），用來停用會碰撞或故障的部位；只在啟動時讀取。PdController 沒有這個參數。
 # 注意：forward / reverse 只動手腕，BT 的 joint_reciprocate 等 L_WRIST_P 越過門檻才換向，

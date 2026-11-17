@@ -1,0 +1,13 @@
+# IMU 共用設定（所有 hardware 都載入）：imu_sensor_broadcaster 把 imu_sensor/* 發布成
+# sensor_msgs/Imu（/imu_sensor_broadcaster/imu）。IMU 來源（mock / 實機 / MuJoCo）的介面名稱相同，
+# 只有 covariance 依來源放在 imu/<來源>.yaml（launch 疊加在這個檔案之後）。
+
+controller_manager:
+  ros__parameters:
+    imu_sensor_broadcaster:
+      type: imu_sensor_broadcaster/IMUSensorBroadcaster
+
+imu_sensor_broadcaster:
+  ros__parameters:
+    sensor_name: imu_sensor
+    frame_id: imu_link

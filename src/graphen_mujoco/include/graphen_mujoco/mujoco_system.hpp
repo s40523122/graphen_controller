@@ -40,7 +40,7 @@ namespace graphen_mujoco {
 //   initial_base_height  浮動基座的初始高度（m，預設 0.894）
 //   fixed_base           true 時每步把 free joint 重設回初始位姿與零速度，等效吊掛（預設 false）
 //   missing_joints       模型沒有的 joint：error（預設，載入失敗）或 virtual（照樣匯出介面，狀態固定在
-//                        初始值、忽略指令；用於只有部分關節的模型，例如沒有頸部的 t170a）
+//                        初始值、忽略指令；用於只有部分關節的模型，例如沒有頸部的模型）
 //   viewer_port / viewer_rate  見下
 //
 // viewer_port > 0 時，read() 以 UDP 把 [time, qpos, actuator_force] 送到 127.0.0.1:viewer_port

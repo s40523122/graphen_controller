@@ -8,7 +8,8 @@ entry_speed 控制先插補到 default_joint_pos 再讓 policy 接管的速度�
   ros2 launch graphen_bringup real_pd_tc_flat.launch.py entry_speed:=0.0
 
 注意：首次實機測試請先吊掛並執行 real_pd_test_hip_y.launch.py 確認電流方向正確，
-      再以此 launch 啟動；real_pd.yaml 的 TODO(verify-on-hw) 項目亦需逐一確認。
+      再以此 launch 啟動；robot（預設 ti5_170a）套件的 config/joint_pd_gains.yaml 與
+      ti5_170a_graphen.urdf.xacro 的 TODO(verify-on-hw) 項目亦需逐一確認。
 """
 import os
 import tempfile

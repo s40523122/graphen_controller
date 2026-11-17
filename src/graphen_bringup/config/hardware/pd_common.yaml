@@ -1,8 +1,9 @@
 # hardware:=mujoco_pd / real_pd 共用：子群組使用 PdController（τ = kp·(q* − q) + kd·(q̇* − q̇)，寫入 effort）。
 # switch_group_controller 額外寫出速度前饋與 kp / kd，讓 plugin 模式（RL policy）指定自己的增益；
 # 沒有指定增益的模式（target、bvh、hold）用預設增益。
-# 預設增益與力矩上限依硬體另外放：mujoco_pd 為 mujoco_pd_<mujoco_robot>.yaml，real_pd 為 real_pd.yaml。
-# launch 載入順序：controllers.yaml → pd_common.yaml → <hardware>.yaml → …
+# 預設增益與力矩上限屬於模型，以關節為 key 放在模型套件的 config/joint_pd_gains.yaml（依 robot:= 選擇）。
+# launch 載入順序：controllers.yaml → pd_common.yaml → imu/common.yaml → imu/<來源>.yaml
+#                 → <robot 套件>/config/joint_pd_gains.yaml → scenario_params
 
 controller_manager:
   ros__parameters:

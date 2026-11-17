@@ -16,7 +16,8 @@
   <depend>gazebo_ros</depend>
 
   <exec_depend>xacro</exec_depend>
-  <!-- ti5_170a_graphen.urdf.xacro 會引用的 ros2_control 元件 -->
+  <!-- ti5_170a_graphen.urdf.xacro 會引用的本體模型（robot:=ti5_t170）、雙手模型與 ros2_control 元件 -->
+  <exec_depend>ti5_t170_description</exec_depend>
   <exec_depend>dexterous_hand_description</exec_depend>
   <exec_depend>imu16460_hardware</exec_depend>
   <exec_depend>ti5_hardware</exec_depend>
