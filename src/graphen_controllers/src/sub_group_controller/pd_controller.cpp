@@ -31,6 +31,7 @@ controller_interface::CallbackReturn PdController::on_init() {
   try {
     auto_declare<std::vector<std::string>>("joints", std::vector<std::string>{});
     auto_declare<double>("reference_publish_rate", 50.0);
+    auto_declare<double>("tracking_publish_rate", 50.0);
     // 各關節的增益參數名稱依 joints 而定，所以先讀出 joints 再宣告；預設 NaN 表示未提供，
     // on_configure 檢查。joints 在 configure 前被改掉時，on_configure 會補宣告新的關節
     const auto joints = get_node()->get_parameter("joints").as_string_array();
@@ -107,6 +108,20 @@ controller_interface::CallbackReturn PdController::on_configure(
   reference_publisher_ = std::make_unique<StateInterfacePublisher>(
     get_node(), "~/references", reference_names,
     get_node()->get_parameter("reference_publish_rate").as_double());
+
+  // 通道名稱與 PositionController 一致（<joint>/position），兩種控制方式可以用同一套工具觀察
+  const double tracking_rate = get_node()->get_parameter("tracking_publish_rate").as_double();
+  if (tracking_rate > 0.0) {
+    std::vector<std::string> channels;
+    channels.reserve(joints_.size());
+    for (const auto & joint : joints_) {
+      channels.push_back(joint + "/" + hardware_interface::HW_IF_POSITION);
+    }
+    tracking_publisher_ = std::make_unique<TrackingPublisher>(
+      get_node(), "~/tracking", channels, tracking_rate);
+  } else {
+    tracking_publisher_.reset();
+  }
 
   RCLCPP_INFO(logger, "[%s] Configured with %zu joints.", get_node()->get_name(), joints_.size());
   return controller_interface::CallbackReturn::SUCCESS;
@@ -205,6 +220,9 @@ controller_interface::return_type PdController::update_and_write_commands(
       interpolators_[i].step(reference_interfaces_[position_ref(i)], sample_period, dt);
     const double position = state_interfaces_[i].get_value();
     const double velocity = state_interfaces_[num_joints + i].get_value();
+    if (tracking_publisher_) {
+      tracking_publisher_->set(i, target, position);
+    }
     if (!std::isfinite(target) || !std::isfinite(position) || !std::isfinite(velocity)) {
       // 沒有可信的量測值時不出力，避免以 NaN 或過時的誤差計算出大力矩
       command_interfaces_[i].set_value(0.0);
@@ -218,6 +236,10 @@ controller_interface::return_type PdController::update_and_write_commands(
 
     const double effort = kp * (target - position) + kd * (target_velocity - velocity);
     command_interfaces_[i].set_value(std::clamp(effort, -effort_limits_[i], effort_limits_[i]));
+  }
+
+  if (tracking_publisher_) {
+    tracking_publisher_->publish(time, period);
   }
 
   return controller_interface::return_type::OK;

@@ -1,4 +1,4 @@
-"""實機 PD 控制 + RL policy（Ti5FlatPolicy）：啟動時直接進入指定模式。
+"""實機 PD 控制 + RL policy（Ti5FlatPolicy）：啟動時直接執行指定的 policy（policy:=<名稱>，預設 rl_flat）。
 
 hardware:=real_pd（Ti5Hardware CAN 電流模式 + 主機端 PdController 200 Hz）。
 policy 以 ~/cmd_vel vx/vy/wz 為指令，無指令時原地站立。
@@ -25,7 +25,7 @@ def generate_launch_description():
     bringup_launch = os.path.join(
         get_package_share_directory('graphen_bringup'), 'launch', 'bringup.launch.py')
 
-    mode = LaunchConfiguration('mode')
+    policy = LaunchConfiguration('policy')
     entry_speed = LaunchConfiguration('entry_speed')
     use_mock_imu = LaunchConfiguration('use_mock_imu')
     imu_port = LaunchConfiguration('imu_port')
@@ -35,8 +35,9 @@ def generate_launch_description():
 
     declare_args = [
         DeclareLaunchArgument(
-            'mode', default_value='rl_flat',
-            description='Mode entered at startup (must be defined in controllers.yaml)'),
+            'policy', default_value='rl_flat',
+            description='Policy run from startup: <name>.policy.yaml in the policy library '
+                        '(policy.library_path, graphen_rl_policy/policy by default)'),
         DeclareLaunchArgument(
             'entry_speed', default_value='0.5',
             description='Speed [rad/s] to interpolate to default_joint_pos before policy starts '
@@ -62,15 +63,15 @@ def generate_launch_description():
     ]
 
     def include_bringup(context):
-        mode_name = mode.perform(context)
+        policy_name = policy.perform(context)
         entry_speed_val = entry_speed.perform(context)
         scenario = tempfile.NamedTemporaryFile(
             'w', prefix='real_pd_tc_flat_', suffix='.yaml', delete=False)
         scenario.write(
             'switch_group_controller:\n'
             '  ros__parameters:\n'
-            f'    default_mode: {mode_name}\n'
-            f'    {mode_name}:\n'
+            f'    default_policy: {policy_name}\n'
+            f'    {policy_name}:\n'
             f'      entry_speed: {entry_speed_val}\n')
         scenario.close()
         return [IncludeLaunchDescription(

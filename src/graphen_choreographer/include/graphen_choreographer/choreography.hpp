@@ -17,6 +17,7 @@ namespace graphen::choreographer {
 // 腳本格式（YAML）：
 //   version: 1
 //   default_interp: quintic            # （選填）linear / cubic / quintic，預設 quintic
+//   interruptible: false               # （選填）播放中不可被其他播放打斷（停止類的模式除外），預設 true
 //   poses:                             # （選填）命名姿態：joint → 角度（rad），可以跨多條軌道
 //     r_arm_up: {R_SHOULDER_P: -1.2, R_ELBOW_Y: 0.8, ...}
 //   tracks:
@@ -55,6 +56,12 @@ struct Track {
 
 struct Choreography {
   std::vector<Track> tracks;  // 腳本中的順序
+  // 播放中是否允許被其他播放打斷（頂層的 interruptible，預設 true）；停止類的模式一定能切入
+  bool interruptible{true};
+  // poses 中出現過的所有 joint 名稱（已排序、不重複），包含沒有被任何軌道使用的。
+  // 姿態可以涵蓋軌道以外的 joint（例如全身姿態只取手臂），這些名稱不會在解析時被檢查，
+  // 由使用端對照機器人的 joint 清單（見 unknown_pose_joints()）
+  std::vector<std::string> pose_joints;
 
   // 最長的軌道的長度
   double duration() const;
@@ -102,6 +109,10 @@ struct JointSummary {
 };
 
 std::vector<JointSummary> summarize(const Choreography & choreography);
+
+// pose_joints 中不在 known_joints 裡的名稱（打錯字的 joint）；全部都認得時回傳空的 vector
+std::vector<std::string> unknown_pose_joints(
+  const Choreography & choreography, const std::vector<std::string> & known_joints);
 
 // URDF 的關節限位；沒有該項限制時為 nullopt（例如 continuous joint 沒有位置限位）
 struct JointLimit {

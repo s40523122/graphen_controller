@@ -1,31 +1,8 @@
-# 要求 SwitchGroupController 切換到指定模式
+# 切換到 controllers.yaml 的 modes 列出的系統模式（target / hold / plugin）。
+# 表演內容與 policy 有各自的 action：PlayChoreo、PlayBvh、RunPolicy
 string mode
-
-# 已經在這個模式時的處理方式（只影響這一次指令，不會留給之後的指令）：
-#   ON_SAME_MODE_IGNORE              （預設）不重新開始
-#   ON_SAME_MODE_RESTART             從頭重播（等同打斷目前的播放，受 interruptible 限制）
-#   ON_SAME_MODE_RESTART_IF_FINISHED 目前這次播放已經結束（完成或失敗）時才重播，播放中則不重新開始；
-#                                    用來吃掉播放途中重複送出的指令
-# 不同名稱的模式一律切換（除非目前的模式不可中斷）。
-int8 ON_SAME_MODE_IGNORE=0
-int8 ON_SAME_MODE_RESTART=1
-int8 ON_SAME_MODE_RESTART_IF_FINISHED=2
-int8 on_same_mode 0
-
-# false（預設）：切換後立即回傳成功。
-# true：等到這個模式的動作播完才回傳成功（target 到達目標、bvh（loop: false）播完、plugin 的 finished()）；
-#       等待期間被其他模式取代、動作失敗或 controller 停用時 abort。持續性的模式（步行、policy）不會結束。
-#       cancel 只會停止等待，不會停止或改變目前的動作
-bool wait_until_finished false
+PlaybackOptions options
 ---
-# 目前的模式不可中斷而拒絕切換時，success 為 false（goal 為 aborted），message 說明原因
-bool success
-string message
-# 回傳當下實際生效的模式
-string mode
-# 回傳當下的 state interface 快照（名稱與數值一一對應）
-string[] interface_names
-float64[] values
+PlaybackResult result
 ---
-# 只在 wait_until_finished 時發布：進入這個模式之後經過的時間（秒）
-float64 elapsed
+PlaybackFeedback feedback

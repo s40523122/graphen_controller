@@ -7,6 +7,7 @@
 
 #include "controller_interface/chainable_controller_interface.hpp"
 #include "graphen_control_utils/state_interface_publisher.hpp"
+#include "graphen_control_utils/tracking_publisher.hpp"
 #include "graphen_controllers/sub_group_controller/linear_interpolator.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -32,6 +33,10 @@ namespace graphen::control {
 //   joint_gains.<joint>.kp / .kd       各關節的預設增益（≥ 0，必填）
 //   joint_gains.<joint>.effort_limit   各關節的力矩上限（> 0，必填）
 //   reference_publish_rate  ~/references 的發布頻率 (Hz)
+//   tracking_publish_rate   ~/tracking 的發布頻率 (Hz)；≤ 0 時關閉
+//
+// ~/tracking 的通道為 <joint>/position：expected 為插補後的期望角度 q*（PD 實際使用的目標），
+// actual 為量測角度 q，error = q* − q。
 //
 // 增益以關節為 key，是為了讓模型套件提供一份與 controller 分組無關的增益檔
 // （以 /** 套到所有子群組，各自只讀自己的 joints）；子群組怎麼分組都不必改增益檔。
@@ -78,6 +83,8 @@ private:
   std::vector<LinearInterpolator> interpolators_;  // 與 joints_ 對應
 
   std::unique_ptr<StateInterfacePublisher> reference_publisher_;
+  // 將各關節角度的預期 / 實際 / 誤差發布至 ~/tracking；關閉時為 nullptr
+  std::unique_ptr<TrackingPublisher> tracking_publisher_;
 };
 
 }  // namespace graphen::control

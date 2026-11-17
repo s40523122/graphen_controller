@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
-#include "graphen_rl_policy/sha256.hpp"
+#include "graphen_locomotion/sha256.hpp"
 #include "onnxruntime_cxx_api.h"
 
 namespace graphen::rl_policy {
@@ -59,7 +59,7 @@ OnnxModel::OnnxModel(
   }
   std::string actual_sha256;
   try {
-    actual_sha256 = Sha256::file_hex_digest(path);
+    actual_sha256 = locomotion::Sha256::file_hex_digest(path);
   } catch (const std::exception & e) {
     throw std::invalid_argument(std::string("cannot read model: ") + e.what());
   }

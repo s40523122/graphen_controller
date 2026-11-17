@@ -24,10 +24,10 @@ add_library(${PROJECT_NAME} SHARED
   src/get_state_value.cpp
   src/high_freq_control.cpp
   src/is_ok.cpp
+  src/playback_nodes.cpp
   src/rate_control.cpp
   src/register_nodes.cpp
   src/say_hello.cpp
-  src/switch_mode.cpp
   src/sys_count_nodes.cpp
   src/wait.cpp
 )

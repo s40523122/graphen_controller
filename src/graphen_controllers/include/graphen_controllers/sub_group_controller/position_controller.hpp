@@ -7,6 +7,7 @@
 
 #include "controller_interface/chainable_controller_interface.hpp"
 #include "graphen_control_utils/state_interface_publisher.hpp"
+#include "graphen_control_utils/tracking_publisher.hpp"
 #include "graphen_controllers/sub_group_controller/linear_interpolator.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -19,7 +20,8 @@ namespace graphen::control {
 //   input_interfaces        導出的 reference interface 名稱（全名為 <node_name>/<input>）
 //   output_interfaces       要寫入的硬體 command interface
 //   reference_publish_rate  ~/references 的發布頻率 (Hz)
-//   output_enabled          false 時不寫 command，硬體保留最後的 command，關節維持在最後狀態
+//   tracking_publish_rate   ~/tracking 的發布頻率 (Hz)；≤ 0 時關閉，也不讀取 state interface
+//   output_enabled         false 時不寫 command，硬體保留最後的 command，關節維持在最後狀態
 //                           （例如停用會碰撞或故障的部位）；只在 configure 時讀取
 //
 // input 只有 1 個時寫到所有 output（廣播）；否則 input 與 output 數量必須相同，第 i 個 reference
@@ -27,6 +29,11 @@ namespace graphen::control {
 //
 // 另外導出 <node_name>/sample_period：上游輸出點的間隔（秒），以 LinearInterpolator 插補。
 // activate 時 reference 以對應 output 目前的 command 值初始化，上層可據此保持位置。
+//
+// 追蹤誤差（tracking_publish_rate > 0 時）：讀取與各 output 同名的 state interface
+// （例如 output L_KNEE_P/position → state L_KNEE_P/position），發布到 ~/tracking：
+// expected 為插補後寫進硬體的 command，actual 為量測值，error = expected − actual。
+// output_enabled 為 false 時 expected 是硬體保留的最後 command。
 class PositionController : public controller_interface::ChainableControllerInterface {
 public:
   PositionController() = default;
@@ -60,6 +67,8 @@ private:
 
   // 將所有 reference 值發布至 ~/references
   std::unique_ptr<StateInterfacePublisher> reference_publisher_;
+  // 將各 output 的預期 / 實際 / 誤差發布至 ~/tracking；關閉時為 nullptr
+  std::unique_ptr<TrackingPublisher> tracking_publisher_;
 };
 
 }  // namespace graphen::control

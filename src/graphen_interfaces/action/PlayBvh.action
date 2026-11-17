@@ -1,0 +1,11 @@
+# 播放 BVH 目錄（controller 的 bvh.library_path）中的 <name>.bvh
+string name
+# 播放到結尾後是否循環；循環播放不會結束（wait_until_finished 不會回傳）
+bool loop false
+# 播放速度倍率，必須 >= 0；0 視為 1.0
+float64 time_scale 1.0
+PlaybackOptions options
+---
+PlaybackResult result
+---
+PlaybackFeedback feedback

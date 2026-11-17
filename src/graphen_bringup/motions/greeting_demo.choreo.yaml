@@ -1,0 +1,78 @@
+# 編舞腳本範例：打招呼（右手揮手、左手前伸、轉腰、轉頭點頭），四條軌道時間重疊。
+#   head       0 ~ 11.0 s：轉向右手 → 點頭 → 回正
+#   right_arm  0 ~ 11.0 s：舉起 → 揮手三次 → 停住 → 放下
+#   waist      0 ~ 10.5 s：2 s 後轉腰 → 停住 → 回正
+#   left_arm   0 ~ 11.5 s：1 s 後前伸 → 停住 → 放下
+# 每條軌道的第一個 keyframe 都不在 t: 0，所以從任何姿態都能開始播放
+# （mock 的手臂下垂、ti5_t170 MuJoCo 的 T-pose 都可以），不需要先播 arm_demo_return。
+# 播完回到 initial_positions.yaml 的手臂下垂姿態；腿不在任何軌道中，保持進入時的位置。
+#
+# 在 MuJoCo 上查看（吊掛，避免腿部 PD 無法平衡而倒下）：
+#   ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd robot:=ti5_t170 mujoco_fixed_base:=true
+#   bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/ti5_t170_description/mjcf/ti5_t170.xml"
+#   ros2 run graphen_bringup choreo_publish greeting_demo <這個檔案>
+#   timeout 30 ros2 action send_goal --feedback /switch_group_controller/play_choreo \
+#     graphen_interfaces/action/PlayChoreo "{name: greeting_demo, options: {on_same: 2, wait_until_finished: true}}"
+#
+# 速度預算（controllers.yaml 的 choreo 區塊）：手臂 max_steps 0.02 → 2.0 rad/s；
+# 腰與頭 max_steps 0.005 → 0.5 rad/s。每一段的峰值速度 = |Δ|/T × 係數（quintic 1.875、cubic 1.5），
+# 都留了餘裕，可用 choreo_check 確認。
+#
+# TODO(verify-on-hw): 揮手、轉腰、轉頭的方向只依 arm_demo 與 URDF 限位推得，
+# 只在 mock / MuJoCo 看過，實機上的方向與是否碰撞尚未確認
+version: 1
+default_interp: quintic     # 兩端速度與加速度為 0
+# interruptible 沒寫（預設 true）：播放中可以被其他播放取代，和 arm_demo 相反
+
+poses:
+  # 與 arm_demo_return 的 arms_down 相同（全身姿態，兩條手臂軌道各取自己的部分）
+  arms_down: {R_SHOULDER_P: 0.0, R_SHOULDER_R: 1.3, R_SHOULDER_Y: 0.0, R_ELBOW_Y: 0.3,
+              R_WRIST_P: 0.0, R_WRIST_Y: 0.0, R_WRIST_R: 0.0,
+              L_SHOULDER_P: 0.0, L_SHOULDER_R: -1.3, L_SHOULDER_Y: 0.0, L_ELBOW_Y: -0.3,
+              L_WRIST_P: 0.0, L_WRIST_Y: 0.0, L_WRIST_R: 0.0}
+  # 右臂側舉、略向前，手肘彎曲；揮手只改變手肘角度（up ↔ out）
+  r_wave_up:  {R_SHOULDER_P: -0.3, R_SHOULDER_R: 0.2, R_SHOULDER_Y: 0.0, R_ELBOW_Y: 1.4,
+               R_WRIST_P: 0.0, R_WRIST_Y: 0.0, R_WRIST_R: 0.0}
+  r_wave_out: {R_SHOULDER_P: -0.3, R_SHOULDER_R: 0.2, R_SHOULDER_Y: 0.0, R_ELBOW_Y: 0.8,
+               R_WRIST_P: 0.0, R_WRIST_Y: 0.0, R_WRIST_R: 0.0}
+  # 左臂向前伸（與 arm_demo 的 l_arm_d 同方向，幅度較小）
+  l_reach:    {L_SHOULDER_P: -0.5, L_SHOULDER_R: -1.1, L_SHOULDER_Y: 0.0, L_ELBOW_Y: -0.8,
+               L_WRIST_P: 0.0, L_WRIST_Y: 0.0, L_WRIST_R: 0.0}
+
+tracks:
+  right_arm:
+    joints: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R]
+    keyframes:
+      - {t: 2.5, pose: r_wave_up}                   # 從進入時的位置舉起來，花 2.5 s
+      # 揮手：cubic 讓來回之間速度連續但不必等加速度歸零，比 quintic 俐落
+      - {t: 3.3, pose: r_wave_out, interp: cubic}
+      - {t: 4.1, pose: r_wave_up,  interp: cubic}
+      - {t: 4.9, pose: r_wave_out, interp: cubic}
+      - {t: 5.7, pose: r_wave_up,  interp: cubic}
+      - {t: 6.5, pose: r_wave_out, interp: cubic}
+      - {t: 7.3, pose: r_wave_up,  interp: cubic}
+      - {t: 8.0, hold: true}                        # 停在舉手的姿態
+      - {t: 11.0, pose: arms_down}
+  left_arm:
+    joints: [L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R]
+    keyframes:
+      - {t: 1.0, hold: true}                        # 比右臂晚 1 s 出發
+      - {t: 3.5, pose: l_reach}
+      - {t: 9.0, hold: true}
+      - {t: 11.5, pose: arms_down}
+  waist:
+    joints: [WAIST_Y]                               # 軌道可以只有一個 joint
+    keyframes:
+      - {t: 2.0, hold: true}
+      - {t: 4.0, positions: {WAIST_Y: -0.2}}
+      - {t: 8.0, hold: true}
+      - {t: 10.5, positions: {WAIST_Y: 0.0}}
+  head:
+    joints: [NECK_Y, NECK_P]
+    keyframes:
+      - {t: 2.5, positions: {NECK_Y: -0.35, NECK_P: 0.0}}   # 轉向揮手的那一側
+      - {t: 3.5, hold: true}
+      - {t: 4.5, positions: {NECK_Y: -0.35, NECK_P: 0.15}}  # 點頭
+      - {t: 5.5, positions: {NECK_Y: -0.35, NECK_P: 0.0}}
+      - {t: 8.5, hold: true}
+      - {t: 11.0, positions: {NECK_Y: 0.0, NECK_P: 0.0}}

@@ -7,8 +7,12 @@ MujocoSystem（ros2_control_node 內）以 UDP 把 [time, qpos(nq), actuator_for
 箭頭的起點在關節中心、會被機身遮住，所以顯示箭頭時機身改為半透明（T 鍵可以再切換）。
 按 End 鍵送出 "reset" 到 <port>+1，模擬回到初始姿態；Home 鍵切換文字，PageUp 鍵切換箭頭。
 
+沒有指定 --model 時向 MujocoSystem 查詢它載入的 MJCF（送 "model?" 到 <port>+1，等到 bringup 啟動
+為止），所以模型會跟著 bringup 的 robot / mujoco_fixed_base。回覆的路徑在這台機器上不存在時
+（bringup 在容器內、viewer 在主機），改用預設的 fb70 t170_free.xml；這種情況要自己指定 --model。
+
 需要 mujoco 與 glfw（主機的 ~/learnWalk_env），通常由 mujoco_viewer.sh 啟動：
-  bash mujoco_viewer.sh                         # 預設 fb70 的 t170_free.xml、port 9870
+  bash mujoco_viewer.sh                         # 模型向 MujocoSystem 查詢、port 9870
   bash mujoco_viewer.sh --model ../../robot_description/fb70/mjcf/t170_fixed.xml
 """
 import argparse
@@ -21,8 +25,11 @@ import mujoco.viewer
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-# 預設模型：fb70_description 套件（src/robot_description/fb70）的浮動基座 MJCF
+# 查不到模型時的預設：fb70_description 套件（src/robot_description/fb70）的浮動基座 MJCF
 FB70_MJCF = HERE.parents[1] / "robot_description" / "fb70" / "mjcf"
+MODEL_QUERY = b"model?"
+MODEL_REPLY_PREFIX = b"model "
+MODEL_QUERY_PERIOD = 1.0   # 重新查詢的間隔（s）
 KEY_END = 269
 KEY_HOME = 268
 KEY_PAGE_UP = 266
@@ -108,9 +115,37 @@ def torque_text(labels, limits, forces, warn_ratio):
     return "\n".join(names), "\n".join(values)
 
 
+def query_model(sock, port):
+    """向 MujocoSystem 查詢載入的 MJCF 路徑；bringup 還沒啟動時一直等。
+
+    回覆和姿態封包走同一個 socket，以開頭的 MODEL_REPLY_PREFIX 分辨。
+    """
+    print(f"asking MujocoSystem on 127.0.0.1:{port + 1} for its model "
+          "(waiting for bringup; pass --model to skip)")
+    try:
+        while True:
+            sock.sendto(MODEL_QUERY, ("127.0.0.1", port + 1))
+            deadline = time.monotonic() + MODEL_QUERY_PERIOD
+            while (remaining := deadline - time.monotonic()) > 0:
+                sock.settimeout(remaining)
+                try:
+                    packet = sock.recv(65536)
+                except socket.timeout:
+                    break
+                except ConnectionError:
+                    # 對方的 port 還沒開（ICMP unreachable）：等到這一輪結束再問
+                    time.sleep(max(0.0, deadline - time.monotonic()))
+                    break
+                if packet.startswith(MODEL_REPLY_PREFIX):
+                    return packet[len(MODEL_REPLY_PREFIX):].decode()
+    finally:
+        sock.setblocking(False)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default=str(FB70_MJCF / "t170_free.xml"))
+    ap.add_argument("--model", default=None,
+                    help="MJCF path; by default ask MujocoSystem which model it loaded")
     ap.add_argument("--port", type=int, default=9870)
     ap.add_argument("--no-torque", action="store_true", help="hide the joint torque overlay")
     ap.add_argument("--warn-ratio", type=float, default=0.9,
@@ -123,13 +158,21 @@ def main():
     ap.add_argument("--arrow-width", type=float, default=0.02, help="arrow shaft width (m)")
     args = ap.parse_args()
 
-    m = mujoco.MjModel.from_xml_path(args.model)
-    d = mujoco.MjData(m)
-    mujoco.mj_forward(m, d)
-
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("127.0.0.1", args.port))
     sock.setblocking(False)
+
+    if args.model is None:
+        args.model = query_model(sock, args.port)
+        if not Path(args.model).is_file():
+            fallback = str(FB70_MJCF / "t170_free.xml")
+            print(f"model '{args.model}' reported by MujocoSystem is not on this machine, "
+                  f"using {fallback}; pass --model to choose another one")
+            args.model = fallback
+
+    m = mujoco.MjModel.from_xml_path(args.model)
+    d = mujoco.MjData(m)
+    mujoco.mj_forward(m, d)
     frame_bytes = 8 * (1 + m.nq + m.nu)
     labels, limits = actuator_labels(m), actuator_limits(m)
     hinges = actuator_hinges(m)

@@ -24,14 +24,22 @@ find_package(ament_cmake REQUIRED)
 find_package(graphen_control_utils REQUIRED)
 find_package(graphen_locomotion REQUIRED)
 find_package(graphen_motion REQUIRED)
+find_package(yaml-cpp REQUIRED)
 foreach(dep IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${dep} REQUIRED)
 endforeach()
 
 add_library(${PROJECT_NAME} SHARED
   src/bvh_motion.cpp
+  src/bvh_source.cpp
+  src/choreo_source.cpp
+  src/library_utils.cpp
   src/locomotion_planner.cpp
+  src/parameter_sources.cpp
+  src/playback_arbiter.cpp
+  src/plugin_factory.cpp
   src/plugin_motion.cpp
+  src/policy_source.cpp
   src/switch_group_controller.cpp
   src/sub_group_controller/pd_controller.cpp
   src/sub_group_controller/position_controller.cpp
@@ -46,6 +54,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   graphen_control_utils::graphen_control_utils
   graphen_locomotion::graphen_locomotion
   graphen_motion::graphen_motion
+  yaml-cpp
 )
 ament_target_dependencies(${PROJECT_NAME} PUBLIC ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
@@ -72,5 +81,5 @@ install(
 )
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(graphen_control_utils graphen_locomotion graphen_motion ${THIS_PACKAGE_INCLUDE_DEPENDS})
+ament_export_dependencies(graphen_control_utils graphen_locomotion graphen_motion yaml-cpp ${THIS_PACKAGE_INCLUDE_DEPENDS})
 ament_package()

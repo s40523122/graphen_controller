@@ -14,28 +14,56 @@
 #include "controller_interface/controller_interface.hpp"
 #include "graphen_control_utils/state_interface_publisher.hpp"
 #include "graphen_control_utils/try_lock_buffer.hpp"
+#include "graphen_controllers/bvh_source.hpp"
+#include "graphen_controllers/choreo_source.hpp"
 #include "graphen_controllers/locomotion_planner.hpp"
 #include "graphen_controllers/motion.hpp"
+#include "graphen_controllers/playback_arbiter.hpp"
+#include "graphen_controllers/playback_server.hpp"
+#include "graphen_controllers/plugin_factory.hpp"
+#include "graphen_controllers/policy_source.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "graphen_interfaces/action/play_bvh.hpp"
+#include "graphen_interfaces/action/play_choreo.hpp"
+#include "graphen_interfaces/action/run_policy.hpp"
 #include "graphen_interfaces/action/switch_mode.hpp"
+#include "graphen_interfaces/srv/get_choreo.hpp"
+#include "graphen_interfaces/srv/list_choreos.hpp"
+#include "graphen_interfaces/srv/preload.hpp"
+#include "graphen_interfaces/srv/publish_choreo.hpp"
 #include "graphen_locomotion/base_state_estimator.hpp"
-#include "graphen_locomotion/locomotion_algorithm.hpp"
 #include "pluginlib/class_loader.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "rclcpp_action/rclcpp_action.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 #include "std_msgs/msg/string.hpp"
 
 namespace graphen::control {
 
-// 頂層切換 controller：依目前模式，寫入下游子群組 controller（PositionController / PdController）
+// 頂層切換 controller：播放目前的動作，寫入下游子群組 controller（PositionController / PdController）
 // 的 reference interface。
 //
-// 每個模式對應一個 Motion（固定目標、BVH 動作或外部演算法 plugin），由 LocomotionPlanner 在 non-RT thread 中以
-// planner_rate 播放、每週期最多移動 max_steps，寫入 target_buffer_；update() 只讀取最新值輸出。
-// controller 本身只認得模式名稱，不包含任何特定模式的邏輯。
+// 同一時間只播放一個 Motion，由 LocomotionPlanner 在 non-RT thread 中以 planner_rate 播放、
+// 每週期最多移動 max_steps，寫入 target_buffer_；update() 只讀取最新值輸出。
 // update() 另外把量測的關節角度 / 速度與 IMU 寫入 state_buffer_。planner 每週期讀取後，
 // 補上 ~/cmd_vel 的速度指令、執行機身狀態估測器（base_estimator），再交給 Motion。
+//
+// 可以播放的東西依「模式」（類型）分成四種，各有自己的入口；controller 本身只做接線，
+// 不包含任何特定模式的邏輯：
+//   系統模式  controllers.yaml 的 modes 列出的具名模式（target / hold / plugin），啟動時就建立。
+//             ~/switch_mode action 或 ~/mode topic。停止（hold）走這條路：不需要載入任何東西
+//   choreo    編舞（ChoreoSource）：機器人端舞曲庫中已發佈的腳本，或直接帶內容試播。~/play_choreo
+//   bvh       BVH 動作（BvhSource）：BVH 目錄中的檔案。~/play_bvh
+//   policy    policy（PolicySource）：policy 庫中的設定檔。~/run_policy
+// 所有入口都把要求交給 PlaybackArbiter，由它以同一套規則（on_same、不可中斷、preempt）決定能不能
+// 取代目前在播的，所以四種入口可以互相取代。action 的共同行為在 PlaybackServer。
+//
+// Thread：
+//   RT（update()）          讀取 planner 的輸出、寫入介面、更新 state；不碰任何內容庫、不建立或釋放 Motion
+//   planner（non-RT）       Motion 的 on_enter() / update()
+//   播放用的 callback group 會載入內容的 action（編舞、BVH、policy）與所有 service：讀檔、解析、建立演算法實例，
+//                           然後送交 arbiter。載入完成才切換，載入期間（以及載入失敗時）機器人繼續原本的動作
+//   預設的 callback group   ~/switch_mode、~/mode、~/cmd_vel、等待播完的 timer：不做載入，所以不會被載入擋住
+//                           （停止不必排在別人的載入後面）
 //
 // 參數：
 //   command_interfaces       下游 reference interface（例如 left_arm_group_controller/L_SHOULDER_P）
@@ -57,47 +85,57 @@ namespace graphen::control {
 //                            linear_acceleration.z 共 10 個 state interface 交給 Motion，
 //                            會自動加入 state_interfaces
 //   planner_rate             planner 的規劃頻率 (Hz)
-//   planner_max_steps        每個 command interface 在每個規劃週期最多移動的量（各模式的預設值）
-//   modes                    可用的模式名稱，同時作為下面各模式參數的前綴（只允許 [A-Za-z0-9_]）
-//   <mode>.type              target（預設）、hold 或 bvh
-//   <mode>.max_steps         （選填）該模式的每週期最大移動量（bvh 為播放時），預設為 planner_max_steps
-//   <mode>.interruptible     （選填，預設 true）false 時，這個模式播放中（尚未結束）拒絕切換到其他模式
+//   planner_max_steps        每個 command interface 在每個規劃週期最多移動的量（預設值）
+//   base_estimator.plugin    （選填）graphen_locomotion::BaseStateEstimator 的 plugin 類別名稱；
+//                            其餘 base_estimator.* 參數由估測器自行讀取。空字串表示不估測（base.valid 為 false）
+//   command_timeout          ~/cmd_vel 的逾時（秒）；超過時速度指令視為 0（command.active 為 false）
+//   switch_mode_poll_rate    檢查「等待播完」的 goal 的頻率 (Hz)，也是 feedback 的頻率（所有播放類 action 共用）
+//   robot_description        （BVH 必要、編舞的限位檢查需要）URDF，由 launch 傳給 controller_manager
+//
+//   系統模式：
+//   modes                    系統模式的名稱，同時作為下面各模式參數的前綴（只允許 [A-Za-z0-9_]；
+//                            choreo / bvh / policy 是保留名稱）
+//   <mode>.type              target（預設）、hold 或 plugin
+//   <mode>.max_steps         （選填）該模式的每週期最大移動量，預設為 planner_max_steps
+//   <mode>.interruptible     （選填，預設 true）false 時，這個模式播放中（尚未結束）拒絕被其他播放取代
 //                            或重播，只有 preempt 的模式可以切入；播完或失敗之後恢復可切換
-//   <mode>.preempt           （選填，hold 預設 true，其他預設 false）true 時可以切入不可中斷的模式，
+//   <mode>.preempt           （選填，hold 預設 true，其他預設 false）true 時可以切入不可中斷的播放，
 //                            用於停止類的模式（安全底線）
 //   type: target
 //     <mode>.joints          （選填）要移動的 joint；省略時為全部，依 command_interfaces 順序
 //     <mode>.targets         對應 joints 的目標位置；沒有列出的 joint 保持進入模式時的位置
-//   base_estimator.plugin    （選填）graphen_locomotion::BaseStateEstimator 的 plugin 類別名稱；
-//                            其餘 base_estimator.* 參數由估測器自行讀取。空字串表示不估測（base.valid 為 false）
-//   command_timeout          ~/cmd_vel 的逾時（秒）；超過時速度指令視為 0（command.active 為 false）
 //   type: hold               保持進入模式時的位置（停止），沒有其他參數
 //   type: plugin
 //     <mode>.plugin          graphen_locomotion::LocomotionAlgorithm 的 plugin 類別名稱；
 //                            其餘 <mode>.* 參數由演算法自行讀取
-//   type: bvh
-//     <mode>.file            BVH 檔案路徑，支援 package://<pkg>/<path>
-//     <mode>.loop            播放到結尾後是否循環（預設 true）
-//     <mode>.time_scale      播放速度倍率（預設 1.0）
-//     <mode>.approach_max_steps  （選填）走向第 0 幀時的每週期最大移動量，預設為 planner_max_steps
-//   bvh.base_link            BVH 與 URDF 共同的基準 link（使用 bvh 模式時必填）
-//   bvh.axis_tolerance / bvh.max_iterations / bvh.damping / bvh.residual_tolerance
-//                            BvhRetargeter 的分組與求解設定
-//   default_mode             configure 時的初始模式名稱；空字串表示不進入任何模式，
-//                            activate 時保持目前位置，直到收到第一個模式命令
-//   switch_mode_poll_rate    檢查「等待模式播完」的 switch_mode goal 的頻率 (Hz)，也是 feedback 的頻率
-//   robot_description        （使用 bvh 模式時必要）URDF，由 launch 傳給 controller_manager
+//
+//   內容與 policy（各自的參數見 ChoreoSource / BvhSource / PolicySource）：
+//   choreo.plugin / choreo.library_path / choreo.max_steps / 其餘 choreo.*
+//   bvh.library_path / bvh.max_steps / bvh.approach_max_steps / bvh.interruptible / bvh.base_link …
+//   policy.library_path；<policy 名稱>.<鍵> 覆寫該 policy 設定檔中的同名鍵
+//
+//   啟動時的動作（兩者只能擇一；都是空字串時保持目前位置，直到收到第一個播放指令）：
+//   default_mode             系統模式名稱
+//   default_policy           policy 名稱；configure 時就載入，設定有誤會在啟動時發現
 //
 // 介面：
-//   ~/mode        (std_msgs/String, 訂閱)                切換模式；未知模式會被忽略
-//   ~/cmd_vel     (geometry_msgs/Twist, 訂閱)            機身速度指令（linear.x、linear.y、angular.z）
-//   ~/switch_mode (graphen_interfaces/action/SwitchMode) 切換模式，result 附 state 快照；
-//                                                         wait_until_finished 時等動作播完才回傳
-//   ~/states      (control_msgs/DynamicJointState)        發布所有 state interface
+//   ~/mode           (std_msgs/String, 訂閱)                 切換系統模式；未知模式會被忽略
+//   ~/cmd_vel        (geometry_msgs/Twist, 訂閱)             機身速度指令（linear.x、linear.y、angular.z）
+//   ~/switch_mode    (graphen_interfaces/action/SwitchMode)  切換系統模式
+//   ~/play_choreo    (graphen_interfaces/action/PlayChoreo)  播放編舞（choreo.plugin 有設定時）
+//   ~/play_bvh       (graphen_interfaces/action/PlayBvh)     播放 BVH（bvh.library_path 有設定時）
+//   ~/run_policy     (graphen_interfaces/action/RunPolicy)   執行 policy（policy.library_path 有設定時）
+//   ~/publish_choreo / ~/list_choreos / ~/get_choreo         舞曲庫的發佈、列出、讀回（service）
+//   ~/preload        (graphen_interfaces/srv/Preload)        事先載入 BVH / policy
+//   ~/states         (control_msgs/DynamicJointState)        發布所有 state interface
+// 四個 action 的 goal 都有 PlaybackOptions（on_same、wait_until_finished），result 附目前的模式、
+// 項目與 state 快照。
 class SwitchGroupController : public controller_interface::ControllerInterface {
 public:
   using SwitchModeAction = graphen_interfaces::action::SwitchMode;
-  using SwitchModeGoalHandle = rclcpp_action::ServerGoalHandle<SwitchModeAction>;
+  using PlayChoreoAction = graphen_interfaces::action::PlayChoreo;
+  using PlayBvhAction = graphen_interfaces::action::PlayBvh;
+  using RunPolicyAction = graphen_interfaces::action::RunPolicy;
 
   SwitchGroupController() = default;
 
@@ -117,51 +155,27 @@ public:
     const rclcpp::Duration & period) override;
 
 private:
-  // 模式的中斷設定（<mode>.interruptible / <mode>.preempt）
-  struct ModePolicy {
-    bool interruptible{true};
-    bool preempt{false};
+  // 系統模式：controllers.yaml 的 modes 列出的具名模式，configure 時建立
+  struct SystemMode {
+    std::string name;
+    std::shared_ptr<Motion> motion;
+    PlaybackPolicy policy;
   };
 
-  // 依模式名稱取得 Motion；未知模式回傳 nullptr
-  std::shared_ptr<Motion> motion_for_mode(const std::string & mode) const;
-  // 依模式名稱取得中斷設定；未知模式回傳 nullptr
-  const ModePolicy * policy_for_mode(const std::string & mode) const;
+  // 依名稱取得系統模式；未知時回傳 nullptr。表在 configure 後即唯讀，可在任何 thread 查詢
+  const SystemMode * find_mode(const std::string & name) const;
+  // 系統模式的播放要求
+  static PlaybackRequest request_for(const SystemMode & mode);
 
-  // 讀取 <mode>.* 參數並建立該模式的 Motion；設定錯誤時丟出例外
-  std::shared_ptr<Motion> create_motion(const std::string & mode);
+  // 讀取 <mode>.* 參數並建立該系統模式；設定錯誤時丟出例外
+  SystemMode create_mode(const std::string & mode);
 
-  // 讀取 <mode>.plugin 並建立、configure 外部演算法；設定錯誤時丟出例外
-  std::shared_ptr<Motion> create_plugin_motion(
-    const std::string & mode, std::vector<double> max_steps);
+  // 建立內容來源與各個 action / service（configure 的後半段）；設定錯誤時丟出例外
+  void create_playback_interfaces();
 
-  using OnSameMode = int8_t;  // SwitchModeAction::Goal::ON_SAME_MODE_*
-
-  struct ModeRequest {
-    enum class Outcome {
-      kSwitched,   // 已切換（或重播）
-      kUnchanged,  // 已在該模式，依 on_same_mode 不重新開始
-      kRejected,   // 目前的模式不可中斷
-      kUnknown,    // 未知的模式
-    };
-    Outcome outcome{Outcome::kUnknown};
-    uint64_t sequence{0};  // 目前播放的序號（kSwitched / kUnchanged 時有效）
-    std::string message;   // kRejected / kUnknown 的原因
-  };
-
-  // 切換模式並交給 planner 播放（non-RT）。已在該模式時依 on_same_mode 決定是否重新開始；
-  // 目前的模式不可中斷且還在播放時，除非目標模式是 preempt，否則拒絕
-  ModeRequest apply_mode(const std::string & mode, OnSameMode on_same_mode);
-
-  // 目前這次播放是否已經結束（完成或失敗）。呼叫端需持有 mode_mutex_
-  bool current_play_ended() const;
-
-  // 以目前的模式與 state 快照建立 action result
-  std::shared_ptr<SwitchModeAction::Result> make_switch_mode_result(
-    bool success, const std::string & message);
-
-  // 定時（executor thread）檢查等待中的 goal：播完、失敗、被取代、取消或 controller 停用時結束它
-  void poll_waiting_goals();
+  // 播放類 action 共用的 hooks（active、fill_state）
+  template<typename ActionT>
+  typename PlaybackServer<ActionT>::Hooks common_hooks();
 
   // 以 state_interfaces_ 的目前值更新量測狀態（不配置記憶體，RT 可呼叫）
   void read_robot_state(RobotState & state) const;
@@ -172,16 +186,10 @@ private:
   // 讀取 base_estimator.plugin 並建立、configure 估測器；未設定時回傳 nullptr，設定錯誤時丟出例外
   std::shared_ptr<locomotion::BaseStateEstimator> create_base_estimator();
 
-  // action server callback（皆在 executor thread 執行）
-  rclcpp_action::GoalResponse handle_switch_mode_goal(
-    const rclcpp_action::GoalUUID & uuid,
-    std::shared_ptr<const SwitchModeAction::Goal> goal);
-  rclcpp_action::CancelResponse handle_switch_mode_cancel(
-    std::shared_ptr<SwitchModeGoalHandle> goal_handle);
-  void handle_switch_mode_accepted(std::shared_ptr<SwitchModeGoalHandle> goal_handle);
-
-  // 外部演算法的 plugin loader：必須比 mode_motions_ 與 planner_ 中的演算法實例活得久，所以宣告在最前面
-  std::unique_ptr<pluginlib::ClassLoader<locomotion::LocomotionAlgorithm>> algorithm_loader_;
+  // 成員的宣告順序就是相依順序（解構時反過來）：
+  //   plugin_factory_（演算法的 loader）必須比所有 Motion 活得久：系統模式、planner 中的、各來源快取的；
+  //   planner_ 必須比 arbiter_ 活得久；arbiter_ 與各來源必須比 action server 活得久
+  PluginFactory plugin_factory_;
   std::unique_ptr<pluginlib::ClassLoader<locomotion::BaseStateEstimator>> estimator_loader_;
 
   std::vector<std::string> command_interface_names_;
@@ -197,27 +205,10 @@ private:
   std::vector<double> default_max_steps_;  // planner_max_steps
   double planner_rate_{0.0};
 
-  // mode_names_[i] 對應 mode_motions_[i]，於 on_configure 建立，之後只有 planner thread 使用 Motion
-  std::vector<std::string> mode_names_;
-  std::vector<std::shared_ptr<Motion>> mode_motions_;
-  std::vector<ModePolicy> mode_policies_;  // 順序同 mode_names_
-  std::string default_mode_;
-
-  // ~/mode 與 action 可能在不同 executor thread 同時切換模式
-  std::mutex mode_mutex_;
-  std::string current_mode_;
-  // 目前模式在 planner 中的序號（mode_mutex_ 保護）；與等待中 goal 的序號不同表示已被取代
-  uint64_t mode_sequence_{0};
-
-  // wait_until_finished 的 goal，由 wait_timer_ 定時檢查。
-  // 鎖的順序：waiting_mutex_ → mode_mutex_ / state_snapshot_mutex_
-  struct WaitingGoal {
-    std::shared_ptr<SwitchModeGoalHandle> handle;
-    uint64_t sequence{0};
-  };
-  std::mutex waiting_mutex_;
-  std::vector<WaitingGoal> waiting_goals_;
-  rclcpp::TimerBase::SharedPtr wait_timer_{nullptr};
+  // 於 on_configure 建立，之後唯讀；Motion 只有 planner thread 使用
+  std::vector<SystemMode> system_modes_;
+  // activate 時開始播放的要求（default_mode / default_policy）；沒有設定時為空，保持目前位置
+  std::optional<PlaybackRequest> default_request_;
 
   std::string sensor_interface_name_;
   std::optional<size_t> sensor_index_;  // sensor 在 state_interfaces_ 中的 index
@@ -263,9 +254,27 @@ private:
   // 將所有 state interface 發布至 ~/states
   std::unique_ptr<StateInterfacePublisher> state_publisher_;
 
+  // 切換規則；所有入口共用。planner_ 重建時一起重建
+  std::unique_ptr<PlaybackArbiter> arbiter_;
+
+  // 內容與 policy 的來源（各自的庫與快取）；沒有啟用的類型仍會建立，enabled() 為 false
+  std::unique_ptr<ChoreoSource> choreo_source_;
+  std::unique_ptr<BvhSource> bvh_source_;
+  std::unique_ptr<PolicySource> policy_source_;
+
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscriber_{nullptr};
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscriber_{nullptr};
-  rclcpp_action::Server<SwitchModeAction>::SharedPtr switch_mode_server_{nullptr};
+
+  // 會載入內容的 action（編舞、BVH、policy）與 service 專用的 callback group：載入在這裡進行，
+  // 不會擋住預設 group 中的 ~/switch_mode、~/cmd_vel、~/mode 與 wait_timer_
+  rclcpp::CallbackGroup::SharedPtr playback_group_{nullptr};
+  std::vector<std::unique_ptr<PlaybackServerBase>> playback_servers_;
+  rclcpp::Service<graphen_interfaces::srv::PublishChoreo>::SharedPtr publish_choreo_service_;
+  rclcpp::Service<graphen_interfaces::srv::ListChoreos>::SharedPtr list_choreos_service_;
+  rclcpp::Service<graphen_interfaces::srv::GetChoreo>::SharedPtr get_choreo_service_;
+  rclcpp::Service<graphen_interfaces::srv::Preload>::SharedPtr preload_service_;
+  // 定時呼叫各 server 的 poll()（等待播完的 goal）
+  rclcpp::TimerBase::SharedPtr wait_timer_{nullptr};
 };
 
 }  // namespace graphen::control

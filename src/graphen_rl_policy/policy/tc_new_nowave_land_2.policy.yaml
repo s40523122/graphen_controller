@@ -1,0 +1,47 @@
+# tc_new_nowave_land_2：與 rl_flat 同一個 policy 家族（graphen_rl_policy/Ti5FlatPolicy），
+# 換成 tc_new_nowave_land_2.onnx，PD 增益為 t170a 參數表（param.csv）的 KP / KD。
+# 由原本本機 controllers.yaml 的 rl_flat 模式搬過來。
+# TODO(verify-with-training): joints 的順序與 history 的排法是推斷的（見 rl_flat.policy.yaml）
+#
+# Policy 設定檔：由 controller 的 run_policy action（RunPolicy{name: tc_new_nowave_land_2}）載入，格式見
+# graphen_controllers/policy_source.hpp。plugin 以外的鍵由演算法讀取。
+# controller 的參數 tc_new_nowave_land_2.<鍵> 會覆寫這裡的同名鍵（情境 launch 用來調整 entry_speed 等）。
+# 常數必須與 onnx 來自同一次訓練：換 onnx 時一起更新，model_sha256 為 `sha256sum <onnx>` 的結果。
+# policy 每 20 ms 輸出一次絕對目標，閉迴路控制不能被限速：max_steps 設成 10 rad/週期，
+# 實際上不限制（必須 > 0）。
+
+plugin: graphen_rl_policy/Ti5FlatPolicy
+model_path: package://graphen_rl_policy/policy/tc_new_nowave_land_2.onnx
+model_sha256: 2b6b7067d0e0ff2a7690cdc02b5c393633dbb7ba0010d87e0833dadb1ed240a7
+policy_dt: 0.02     # s（sim dt 0.005 × decimation 4）
+entry_speed: 0.5    # rad/s
+log_period: 2.0
+action_scale: 0.25
+history_length: 10
+history_layout: frame_major
+history_oldest_first: true
+# obs_scales 全部為 1.0、clip 100（env.yaml normalization），使用預設值
+joints: [L_HIP_P, R_HIP_P, WAIST_Y, L_HIP_R, R_HIP_R, WAIST_R,
+         L_HIP_Y, R_HIP_Y, WAIST_P, L_KNEE_P, R_KNEE_P, L_SHOULDER_P,
+         R_SHOULDER_P, L_ANKLE_P, R_ANKLE_P, L_SHOULDER_R, R_SHOULDER_R, L_ANKLE_R,
+         R_ANKLE_R, L_SHOULDER_Y, R_SHOULDER_Y, L_ELBOW_Y, R_ELBOW_Y, L_WRIST_P,
+         R_WRIST_P, L_WRIST_Y, R_WRIST_Y, L_WRIST_R, R_WRIST_R]
+# env.yaml 的 init_state.joint_pos（微彎膝、手臂下垂），沒有列出的為 0
+default_joint_pos: [-0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4,
+                    -0.4, 0.0, 0.0, 0.2, -0.2, -1.3, 1.3, 0.0, 0.0, 0.0,
+                    0.0, -0.3, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# t170a 參數表（param.csv）的 KP / KD，依上方 joints 順序排列
+kp: [250.0, 250.0, 150.0, 80.0, 80.0, 120.0, 60.0, 60.0, 200.0, 240.0,
+     240.0, 60.0, 60.0, 80.0, 80.0, 60.0, 60.0, 50.0, 50.0, 40.0,
+     40.0, 40.0, 40.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]
+kd: [25.0, 25.0, 15.0, 8.0, 8.0, 12.0, 6.0, 6.0, 20.0, 24.0,
+     24.0, 2.0, 2.0, 8.0, 8.0, 2.0, 2.0, 5.0, 5.0, 1.5,
+     1.5, 1.5, 1.5, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5]
+fixed_joints: [NECK_Y, NECK_P, NECK_R]
+fixed_positions: [0.0, 0.0, 0.0]
+max_steps: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # left arm
+            10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # right arm
+            10.0, 10.0, 10.0,                           # waist
+            10.0, 10.0, 10.0,                           # head
+            10.0, 10.0, 10.0, 10.0, 10.0, 10.0,         # left leg
+            10.0, 10.0, 10.0, 10.0, 10.0, 10.0]         # right leg

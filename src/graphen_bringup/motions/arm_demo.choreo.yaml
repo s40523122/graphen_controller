@@ -1,7 +1,9 @@
 # 編舞腳本範例：兩隻手臂的動作在時間上重疊。
 #   右臂 0 ~ 3 s：A（下垂）→ B
 #   左臂 1 ~ 5 s：C（下垂）→ D
-# 格式見 graphen_choreographer/choreography.hpp；上機前先用
+# 用法：發佈到機器人的舞曲庫後以 play_choreo action（BT 的 PlayChoreo）依名稱播放：
+#   ros2 run graphen_bringup choreo_publish arm_demo <這個檔案>
+# 格式見 graphen_choreographer/choreography.hpp 與 docs/CHOREOGRAPHER.md；上機前先用
 #   ros2 run graphen_choreographer choreo_check <這個檔案> --urdf <展開後的 URDF>
 # 檢查範圍、峰值速度與建議的 max_steps。
 #
@@ -9,6 +11,7 @@
 # TODO(verify-on-hw): B / D 只在 mock 與 MuJoCo 看過，實機上的方向與是否會碰撞尚未確認
 version: 1
 default_interp: quintic     # 兩端速度與加速度為 0
+interruptible: false         # 播放中不可被其他播放打斷（stop 類的系統模式除外）；預設 true
 
 poses:
   r_arm_a: {R_SHOULDER_P: 0.0, R_SHOULDER_R: 1.3, R_SHOULDER_Y: 0.0, R_ELBOW_Y: 0.3,

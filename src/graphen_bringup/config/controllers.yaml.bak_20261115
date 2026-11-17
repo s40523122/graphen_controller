@@ -1,0 +1,317 @@
+controller_manager:
+  ros__parameters:
+    # update_rate、6 個子群組（PositionController / PdController）與 IMU 相關 controller 依硬體設定，
+    # 放在 hardware/<hardware>.yaml、imu/*.yaml；launch 依 hardware:= 疊加在這個檔案之後
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    switch_group_controller:
+      type: graphen_control/SwitchGroupController
+
+switch_group_controller:
+  ros__parameters:
+    # mock 與實機 IMU 的介面名稱相同
+    sensor: imu_sensor/angular_velocity.z
+    # 交給 Motion（含外部演算法 plugin）的 IMU：讀取 imu_sensor/orientation.x … linear_acceleration.z
+    imu_sensor_name: imu_sensor
+    # 機身狀態估測器（graphen_locomotion::BaseStateEstimator 的 plugin），在 planner thread 中、
+    # 演算法之前執行，結果放在 RobotState::base（機身座標系的線速度、角速度、重力投影）。
+    # ImuLeakyEstimator 只用 IMU：線速度為 leaky 積分，只反映短時間的變化（見 ARCHITECTURE §2.9）
+    base_estimator:
+      plugin: graphen_locomotion/ImuLeakyEstimator
+      base_frame: base_link
+      imu_frame: imu_link
+      leak_time_constant: 2.0   # s，線速度積分的衰減時間常數
+    # ~/cmd_vel（geometry_msgs/Twist）的逾時（s）；超過時速度指令視為 0
+    command_timeout: 0.5
+    state_publish_rate: 50.0
+    state_interfaces:
+      - L_SHOULDER_P/position
+      - L_SHOULDER_R/position
+      - L_SHOULDER_Y/position
+      - L_ELBOW_Y/position
+      - L_WRIST_P/position
+      - L_WRIST_Y/position
+      - L_WRIST_R/position
+      - R_SHOULDER_P/position
+      - R_SHOULDER_R/position
+      - R_SHOULDER_Y/position
+      - R_ELBOW_Y/position
+      - R_WRIST_P/position
+      - R_WRIST_Y/position
+      - R_WRIST_R/position
+      - WAIST_Y/position
+      - WAIST_R/position
+      - WAIST_P/position
+      - NECK_Y/position
+      - NECK_P/position
+      - NECK_R/position
+      - L_HIP_P/position
+      - L_HIP_R/position
+      - L_HIP_Y/position
+      - L_KNEE_P/position
+      - L_ANKLE_P/position
+      - L_ANKLE_R/position
+      - R_HIP_P/position
+      - R_HIP_R/position
+      - R_HIP_Y/position
+      - R_KNEE_P/position
+      - R_ANKLE_P/position
+      - R_ANKLE_R/position
+    # 下游 reference interface，順序對應 target_state_interfaces、planner_max_steps 與各模式的 max_steps
+    command_interfaces:
+      - left_arm_group_controller/L_SHOULDER_P
+      - left_arm_group_controller/L_SHOULDER_R
+      - left_arm_group_controller/L_SHOULDER_Y
+      - left_arm_group_controller/L_ELBOW_Y
+      - left_arm_group_controller/L_WRIST_P
+      - left_arm_group_controller/L_WRIST_Y
+      - left_arm_group_controller/L_WRIST_R
+      - right_arm_group_controller/R_SHOULDER_P
+      - right_arm_group_controller/R_SHOULDER_R
+      - right_arm_group_controller/R_SHOULDER_Y
+      - right_arm_group_controller/R_ELBOW_Y
+      - right_arm_group_controller/R_WRIST_P
+      - right_arm_group_controller/R_WRIST_Y
+      - right_arm_group_controller/R_WRIST_R
+      - waist_group_controller/WAIST_Y
+      - waist_group_controller/WAIST_R
+      - waist_group_controller/WAIST_P
+      - head_group_controller/NECK_Y
+      - head_group_controller/NECK_P
+      - head_group_controller/NECK_R
+      - left_leg_group_controller/L_HIP_P
+      - left_leg_group_controller/L_HIP_R
+      - left_leg_group_controller/L_HIP_Y
+      - left_leg_group_controller/L_KNEE_P
+      - left_leg_group_controller/L_ANKLE_P
+      - left_leg_group_controller/L_ANKLE_R
+      - right_leg_group_controller/R_HIP_P
+      - right_leg_group_controller/R_HIP_R
+      - right_leg_group_controller/R_HIP_Y
+      - right_leg_group_controller/R_KNEE_P
+      - right_leg_group_controller/R_ANKLE_P
+      - right_leg_group_controller/R_ANKLE_R
+    # 每週期寫入目前模式的輸出點間隔（BVH 播放時為 frame_time / time_scale，其他為 0），
+    # 子群組依此在 RT 迴圈中插補；只是接線設定，換 BVH 不需要修改
+    sample_period_interfaces:
+      - left_arm_group_controller/sample_period
+      - right_arm_group_controller/sample_period
+      - waist_group_controller/sample_period
+      - head_group_controller/sample_period
+      - left_leg_group_controller/sample_period
+      - right_leg_group_controller/sample_period
+    # activate 時以這些 state 作為 planner 起點；prefix 即為 joint 名稱（模式的 joints、BVH 對應都用它）
+    target_state_interfaces:
+      - L_SHOULDER_P/position
+      - L_SHOULDER_R/position
+      - L_SHOULDER_Y/position
+      - L_ELBOW_Y/position
+      - L_WRIST_P/position
+      - L_WRIST_Y/position
+      - L_WRIST_R/position
+      - R_SHOULDER_P/position
+      - R_SHOULDER_R/position
+      - R_SHOULDER_Y/position
+      - R_ELBOW_Y/position
+      - R_WRIST_P/position
+      - R_WRIST_Y/position
+      - R_WRIST_R/position
+      - WAIST_Y/position
+      - WAIST_R/position
+      - WAIST_P/position
+      - NECK_Y/position
+      - NECK_P/position
+      - NECK_R/position
+      - L_HIP_P/position
+      - L_HIP_R/position
+      - L_HIP_Y/position
+      - L_KNEE_P/position
+      - L_ANKLE_P/position
+      - L_ANKLE_R/position
+      - R_HIP_P/position
+      - R_HIP_R/position
+      - R_HIP_Y/position
+      - R_KNEE_P/position
+      - R_ANKLE_P/position
+      - R_ANKLE_R/position
+    # 交給 Motion 的量測速度，順序對應 command_interfaces；不在 state_interfaces 中的會自動加入
+    velocity_state_interfaces:
+      - L_SHOULDER_P/velocity
+      - L_SHOULDER_R/velocity
+      - L_SHOULDER_Y/velocity
+      - L_ELBOW_Y/velocity
+      - L_WRIST_P/velocity
+      - L_WRIST_Y/velocity
+      - L_WRIST_R/velocity
+      - R_SHOULDER_P/velocity
+      - R_SHOULDER_R/velocity
+      - R_SHOULDER_Y/velocity
+      - R_ELBOW_Y/velocity
+      - R_WRIST_P/velocity
+      - R_WRIST_Y/velocity
+      - R_WRIST_R/velocity
+      - WAIST_Y/velocity
+      - WAIST_R/velocity
+      - WAIST_P/velocity
+      - NECK_Y/velocity
+      - NECK_P/velocity
+      - NECK_R/velocity
+      - L_HIP_P/velocity
+      - L_HIP_R/velocity
+      - L_HIP_Y/velocity
+      - L_KNEE_P/velocity
+      - L_ANKLE_P/velocity
+      - L_ANKLE_R/velocity
+      - R_HIP_P/velocity
+      - R_HIP_R/velocity
+      - R_HIP_Y/velocity
+      - R_KNEE_P/velocity
+      - R_ANKLE_P/velocity
+      - R_ANKLE_R/velocity
+
+    # planner 以 planner_rate 播放目前模式，每週期最多移動 max_steps（各模式未指定時用 planner_max_steps）
+    planner_rate: 100.0
+    planner_max_steps: [0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005,   # left arm
+                        0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005,   # right arm
+                        0.005, 0.005, 0.005,                               # waist
+                        0.005, 0.005, 0.005,                               # head
+                        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,          # left leg
+                        0.005, 0.005, 0.005, 0.005, 0.005, 0.005]          # right leg
+    # 100 Hz 下約 0.5 rad/s
+
+    # 模式以名稱識別（BT、action、~/mode topic 都用這些名稱），名稱同時是下面參數的前綴。
+    # controller 不認得任何特定模式，行為完全由 type 與參數決定
+    modes: [forward, reverse, walk, stop, sine, rl_flat]
+    # 空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
+    # 收到 BT / action / ~/mode 的命令後才開始移動
+    default_mode: ""
+
+    # type: target，只列出要動的 joint，其餘保持進入模式時的位置。
+    # forward 往正方向、reverse 往負方向；BT（joint_reciprocate）以遲滯門檻換向時，
+    # 門檻必須落在兩個模式的 L_WRIST_P 目標之間（目前 BT 用 ±1.0）
+    forward:
+      type: target
+      joints: [L_HIP_Y, R_HIP_Y]
+      targets: [1.0, 1.0]
+    reverse:
+      type: target
+      joints: [L_HIP_Y, R_HIP_Y]
+      targets: [-1.0, -1.0]
+
+    # type: bvh，在 planner thread 中把 BVH 轉成 32 軸位置，依檔案頻率輸出原始幀，
+    # 幀間插補由子群組依 sample_period 進行（約晚一幀）。
+    # 先以 approach_max_steps（預設 planner_max_steps）走向第 0 幀，再以 max_steps 為上限播放。
+    # 一幀會一次跳到位，max_steps 要讓一個週期就能走完一幀：依 bvh_retarget_cli 的步行段最大速度
+    # × frame_time（1/24 s）× 1.2 設定；它同時擋下肩部 T-pose 奇異點附近的大跳動。
+    # 實機的 Ti5Hardware 另以 max_command_velocity 限速
+    walk:
+      type: bvh
+      file: package://graphen_bringup/motions/t170wk_walk1_subject1.bvh
+      loop: true
+      time_scale: 1.0
+      max_steps: [0.34, 0.15, 0.31, 0.34, 0.07, 0.38, 0.32,   # left arm
+                  0.34, 0.15, 0.31, 0.34, 0.07, 0.38, 0.32,   # right arm
+                  0.03, 0.03, 0.03,                           # waist
+                  0.21, 0.16, 0.25,                           # head
+                  0.28, 0.13, 0.24, 0.67, 0.24, 0.44,         # left leg
+                  0.28, 0.13, 0.24, 0.67, 0.24, 0.44]         # right leg
+
+    # type: hold，停在進入模式時的位置；BT 在 walk 與往返都關閉時切到這裡。
+    # 之後再切到 walk 會重新 approach 第 0 幀（重置 locomotion 狀態）
+    stop:
+      type: hold
+
+    # type: plugin，由外部演算法（graphen_locomotion::LocomotionAlgorithm 的 pluginlib plugin）產生
+    # 期望角度與速度前饋；其餘 <mode>.* 參數由演算法自行讀取，輸出仍受 max_steps 限制。
+    # sine 是範例演算法：讓頸部 yaw 以進入時的位置為中心擺動（最大速度 ≈ 0.31 rad/s），
+    # 並每秒 log 一次量測值與 IMU，用來確認資料通路
+    sine:
+      type: plugin
+      plugin: graphen_locomotion/SineWaveAlgorithm
+      joints: [NECK_Y]
+      amplitude: 0.2      # rad
+      frequency: 0.25     # Hz
+      log_period: 1.0     # s，0 表示不 log
+
+    # BVH 轉換：BVH 節點名稱 = URDF link 名稱，姿態以 base_link 為基準（BVH 的浮動基座會被忽略）
+    bvh:
+      base_link: BASE_S
+      axis_tolerance: 1.0e-4       # 判斷軸線交於一點的距離容差（m）
+      max_iterations: 50
+      damping: 1.0e-6
+      residual_tolerance: 1.0e-3   # rad
+
+    rl_flat:
+      type: plugin
+      plugin: graphen_rl_policy/Ti5FlatPolicy
+      model_path: package://graphen_rl_policy/policy/tc_new_nowave_land_2.onnx
+      model_sha256: 2b6b7067d0e0ff2a7690cdc02b5c393633dbb7ba0010d87e0833dadb1ed240a7
+      policy_dt: 0.02     # s（sim dt 0.005 × decimation 4）
+      entry_speed: 0.5    # rad/s
+      log_period: 2.0
+      action_scale: 0.25
+      history_length: 10
+      history_layout: frame_major
+      history_oldest_first: true
+      # obs_scales 全部為 1.0、clip 100（env.yaml normalization），使用預設值
+      joints: [L_HIP_P, R_HIP_P, WAIST_Y, L_HIP_R, R_HIP_R, WAIST_R,
+               L_HIP_Y, R_HIP_Y, WAIST_P, L_KNEE_P, R_KNEE_P, L_SHOULDER_P,
+               R_SHOULDER_P, L_ANKLE_P, R_ANKLE_P, L_SHOULDER_R, R_SHOULDER_R, L_ANKLE_R,
+               R_ANKLE_R, L_SHOULDER_Y, R_SHOULDER_Y, L_ELBOW_Y, R_ELBOW_Y, L_WRIST_P,
+               R_WRIST_P, L_WRIST_Y, R_WRIST_Y, L_WRIST_R, R_WRIST_R]
+      # env.yaml 的 init_state.joint_pos（微彎膝、手臂下垂），沒有列出的為 0
+      default_joint_pos: [-0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4,
+                          -0.4, 0.0, 0.0, 0.2, -0.2, -1.3, 1.3, 0.0, 0.0, 0.0,
+                          0.0, -0.3, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      # t170a 參數表（param.csv）的 KP / KD，依上方 joints 順序排列
+      kp: [250.0, 250.0, 150.0, 80.0, 80.0, 120.0, 60.0, 60.0, 200.0, 240.0,
+           240.0, 60.0, 60.0, 80.0, 80.0, 60.0, 60.0, 50.0, 50.0, 40.0,
+           40.0, 40.0, 40.0, 20.0, 20.0, 10.0, 10.0, 10.0, 10.0]
+      kd: [25.0, 25.0, 15.0, 8.0, 8.0, 12.0, 6.0, 6.0, 20.0, 24.0,
+           24.0, 2.0, 2.0, 8.0, 8.0, 2.0, 2.0, 5.0, 5.0, 1.5,
+           1.5, 1.5, 1.5, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5]
+      fixed_joints: [NECK_Y, NECK_P, NECK_R]
+      fixed_positions: [0.0, 0.0, 0.0]
+      max_steps: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # left arm
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # right arm
+                  10.0, 10.0, 10.0,                           # waist
+                  10.0, 10.0, 10.0,                           # head
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0,         # left leg
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0]         # right leg
+
+# 子群組 controller 與硬體無關的參數（type 與介面接線在 hardware/<hardware>.yaml）。
+# output_enabled（只有 PositionController 有）：false 時該群組不寫 command，關節維持最後的 command
+# （不斷電、不卸力），用來停用會碰撞或故障的部位；只在啟動時讀取。PdController 沒有這個參數。
+# 注意：forward / reverse 只動手腕，BT 的 joint_reciprocate 等 L_WRIST_P 越過門檻才換向，
+# 關閉手臂時 BT 會一直等待，所以手臂只在跑 walk 等模式時才關閉
+
+left_arm_group_controller:
+  ros__parameters:
+    reference_publish_rate: 50.0
+    output_enabled: false
+
+right_arm_group_controller:
+  ros__parameters:
+    reference_publish_rate: 50.0
+    output_enabled: false
+
+waist_group_controller:
+  ros__parameters:
+    reference_publish_rate: 50.0
+    output_enabled: true
+
+head_group_controller:
+  ros__parameters:
+    reference_publish_rate: 50.0
+    output_enabled: true
+
+left_leg_group_controller:
+  ros__parameters:
+    reference_publish_rate: 50.0
+    output_enabled: true
+
+right_leg_group_controller:
+  ros__parameters:
+    reference_publish_rate: 50.0
+    output_enabled: true

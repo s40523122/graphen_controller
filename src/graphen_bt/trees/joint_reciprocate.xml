@@ -3,18 +3,19 @@
   依 bt_runner 參數選擇模式（rqt_reconfigure / ros2 param set 可在執行中切換）：
     gp_enable_walk        → {enable_walk}
     gp_enable_reciprocate → {enable_reciprocate}
-  {mode} 記錄 BT 最後成功切換的模式（forward / reverse / walk / stop），未設定表示剛啟動。
+  {mode} 記錄 BT 最後成功切換的動作（forward / reverse / walk / stop），未設定表示剛啟動。
 
-  Walk         分支：{enable_walk} 為 true 時優先執行（兩個都 true 也是 walk）；
-                     已在 walk 時不再送 SwitchMode，避免 BVH 重新播放
+  Walk         分支：{enable_walk} 為 true 時優先執行（兩個都 true 也是 walk）：以 PlayBvh 循環播放
+                     步行的 BVH（controller 的 bvh.library_path 中的檔案）；已在 walk 時不再送出
   Reciprocate  分支：{enable_reciprocate} 為 true 時，L_WRIST_P 在 forward / reverse 之間往返
     Forward  分支：{mode} == forward，L_WRIST_P < 1.0 時維持正轉；到達 1.0 時走 TurnToReverse
     Reverse  分支：{mode} == reverse，L_WRIST_P > -1.0 時維持反轉；到達 -1.0 時走 TurnToForward
     Init     分支：{mode} 不是 forward / reverse（剛啟動、或從 walk / stop 切過來）時先切成 forward
   Stop         分支：兩個都 false 時切到 stop（controller 停在目前位置，再進 walk 會從頭開始）
 
-  模式名稱必須和 controllers.yaml 的 modes 一致。
-  切換時先 SwitchMode 再寫入 {mode}：action 失敗時 {mode} 不變，下一個 tick 會重試同一個分支。
+  forward / reverse / stop 是系統模式（SwitchMode），名稱必須和 controllers.yaml 的 modes 一致；
+  步行是內容（PlayBvh），第一次播放要載入檔案，timeout_ms 設得比較長。
+  切換時先送出 action 再寫入 {mode}：action 失敗時 {mode} 不變，下一個 tick 會重試同一個分支。
   使用 IfThenElse：已選定的分支失敗時直接回傳 FAILURE，不會落到優先順序較低的分支而送出別的模式。
   門檻必須落在 controllers.yaml 兩個模式的 L_WRIST_P 目標（±1.5）之間，否則 joint 會停在目標而不換向。
 -->
@@ -28,7 +29,7 @@
                     <AlwaysSuccess/>
                 </BlackboardCheckString>
                 <Sequence name="EnterWalk">
-                    <Action ID="SwitchMode" mode="walk"/>
+                    <Action ID="PlayBvh" bvh="t170wk_walk1_subject1" loop="true" timeout_ms="5000"/>
                     <SetBlackboard output_key="mode" value="walk"/>
                 </Sequence>
             </Fallback>
@@ -104,12 +105,22 @@
         <Condition ID="IsOk">
             <input_port name="is_ok_val" type="bool"/>
         </Condition>
+        <Action ID="PlayBvh">
+            <input_port name="action_name" type="std::string" default="/switch_group_controller/play_bvh">Action name</input_port>
+            <input_port name="bvh" type="std::string">BVH file name without the .bvh extension</input_port>
+            <input_port name="loop" type="bool" default="true">Loop when the end is reached</input_port>
+            <input_port name="time_scale" type="double" default="1.0">Playback speed factor</input_port>
+            <input_port name="timeout_ms" type="int" default="1000">Timeout for server discovery and the switch itself (including loading)</input_port>
+            <input_port name="wait_finished" type="bool" default="false">Return SUCCESS only after the motion has finished</input_port>
+            <input_port name="on_same" type="std::string" default="ignore">When this is already playing: ignore, restart or restart_if_finished</input_port>
+            <input_port name="finish_timeout_ms" type="int" default="0">With wait_finished: limit on waiting for the motion to finish, 0 = no limit</input_port>
+        </Action>
         <Action ID="SwitchMode">
-            <input_port name="action_name" type="std::string" default="/switch_group_controller/switch_mode">SwitchMode action name</input_port>
-            <input_port name="mode" type="std::string">Mode name to switch to</input_port>
-            <input_port name="timeout_ms" type="int" default="1000">Timeout for server discovery and the switch itself</input_port>
-            <input_port name="wait_finished" type="bool" default="false">Return SUCCESS only after the mode's motion has finished</input_port>
-            <input_port name="on_same_mode" type="std::string" default="ignore">When already in this mode: ignore, restart or restart_if_finished</input_port>
+            <input_port name="action_name" type="std::string" default="/switch_group_controller/switch_mode">Action name</input_port>
+            <input_port name="mode" type="std::string">System mode to switch to</input_port>
+            <input_port name="timeout_ms" type="int" default="1000">Timeout for server discovery and the switch itself (including loading)</input_port>
+            <input_port name="wait_finished" type="bool" default="false">Return SUCCESS only after the motion has finished</input_port>
+            <input_port name="on_same" type="std::string" default="ignore">When this is already playing: ignore, restart or restart_if_finished</input_port>
             <input_port name="finish_timeout_ms" type="int" default="0">With wait_finished: limit on waiting for the motion to finish, 0 = no limit</input_port>
         </Action>
     </TreeNodesModel>

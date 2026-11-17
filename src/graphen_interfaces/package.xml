@@ -3,7 +3,7 @@
 <package format="3">
   <name>graphen_interfaces</name>
   <version>0.0.0</version>
-  <description>Graphen ROS 2 interface definitions (actions shared by the control and behavior layers).</description>
+  <description>Graphen ROS 2 interface definitions: playback actions (SwitchMode, PlayChoreo, PlayBvh, RunPolicy) with their shared Playback* messages, and the choreography library / preload services.</description>
   <maintainer email="riverji@graphen.ai">jin</maintainer>
   <license>TODO: License declaration</license>
 

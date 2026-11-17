@@ -5,7 +5,6 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
-#include <functional>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -13,18 +12,19 @@
 #include <string>
 #include <utility>
 
-#include "ament_index_cpp/get_package_share_directory.hpp"
-#include "graphen_controllers/bvh_motion.hpp"
-#include "graphen_controllers/plugin_motion.hpp"
+#include "graphen_controllers/library_utils.hpp"
+#include "graphen_controllers/parameter_sources.hpp"
 #include "graphen_controllers/target_motion.hpp"
-#include "graphen_motion/bvh_clip.hpp"
-#include "graphen_motion/bvh_retargeter.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
 namespace graphen::control {
 
 namespace {
+
+// 類型的名稱（choreo / bvh / policy）不能拿來當系統模式的名稱：result 的 mode 欄位用它們表示類型
+constexpr std::array<const char *, 3> kReservedModeNames = {
+  ChoreoSource::kMode, BvhSource::kMode, PolicySource::kMode};
 
 // 模式名稱會當作參數前綴，只允許不含 '.' 等特殊字元的識別字
 bool is_valid_mode_name(const std::string & name) {
@@ -45,143 +45,12 @@ T get_or_declare(
   return node->get_parameter(name).get_value<T>();
 }
 
-// package://<pkg>/<path> 轉成安裝後的絕對路徑；其他字串原樣回傳
-std::string resolve_path(const std::string & path) {
-  const std::string scheme = "package://";
-  if (path.rfind(scheme, 0) != 0) {
-    return path;
-  }
-  const auto rest = path.substr(scheme.size());
-  const auto slash = rest.find('/');
-  if (slash == std::string::npos || slash == 0) {
-    throw std::invalid_argument("Invalid package path '" + path + "'");
-  }
-  return ament_index_cpp::get_package_share_directory(rest.substr(0, slash)) +
-         rest.substr(slash);
-}
-
 // IMU 的 10 個 state interface（<sensor>/<suffix>），順序對應 ImuState 的欄位；
 // 名稱與 imu_sensor_broadcaster / semantic_components::IMUSensor 的慣例相同
 constexpr std::array<const char *, 10> kImuInterfaceSuffixes = {
   "orientation.x", "orientation.y", "orientation.z", "orientation.w",
   "angular_velocity.x", "angular_velocity.y", "angular_velocity.z",
   "linear_acceleration.x", "linear_acceleration.y", "linear_acceleration.z"};
-
-// 以 controller node 的 <mode>.* 參數實作演算法的參數介面。
-// 只讀取已宣告的參數（YAML 有寫的會被 controller node 自動宣告），沒有的回傳 nullopt
-class NodeParameterSource : public locomotion::ParameterSource {
-public:
-  NodeParameterSource(
-    std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node, std::string prefix)
-  : node_(std::move(node)), prefix_(std::move(prefix)) {}
-
-  std::optional<bool> get_bool(const std::string & name) const override {
-    const auto param = find(name);
-    if (!param) {
-      return std::nullopt;
-    }
-    expect(*param, rclcpp::ParameterType::PARAMETER_BOOL);
-    return param->as_bool();
-  }
-
-  std::optional<int64_t> get_int(const std::string & name) const override {
-    const auto param = find(name);
-    if (!param) {
-      return std::nullopt;
-    }
-    expect(*param, rclcpp::ParameterType::PARAMETER_INTEGER);
-    return param->as_int();
-  }
-
-  std::optional<double> get_double(const std::string & name) const override {
-    const auto param = find(name);
-    if (!param) {
-      return std::nullopt;
-    }
-    // YAML 寫成 1 而不是 1.0 時會是整數
-    if (param->get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
-      return static_cast<double>(param->as_int());
-    }
-    expect(*param, rclcpp::ParameterType::PARAMETER_DOUBLE);
-    return param->as_double();
-  }
-
-  std::optional<std::string> get_string(const std::string & name) const override {
-    const auto param = find(name);
-    if (!param) {
-      return std::nullopt;
-    }
-    expect(*param, rclcpp::ParameterType::PARAMETER_STRING);
-    return param->as_string();
-  }
-
-  std::optional<std::vector<double>> get_double_array(const std::string & name) const override {
-    const auto param = find(name);
-    if (!param) {
-      return std::nullopt;
-    }
-    if (param->get_type() == rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY) {
-      const auto values = param->as_integer_array();
-      return std::vector<double>(values.begin(), values.end());
-    }
-    expect(*param, rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
-    return param->as_double_array();
-  }
-
-  std::optional<std::vector<std::string>> get_string_array(
-    const std::string & name) const override {
-    const auto param = find(name);
-    if (!param) {
-      return std::nullopt;
-    }
-    expect(*param, rclcpp::ParameterType::PARAMETER_STRING_ARRAY);
-    return param->as_string_array();
-  }
-
-private:
-  std::optional<rclcpp::Parameter> find(const std::string & name) const {
-    const auto full_name = prefix_ + name;
-    if (!node_->has_parameter(full_name)) {
-      return std::nullopt;
-    }
-    auto param = node_->get_parameter(full_name);
-    if (param.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) {
-      return std::nullopt;
-    }
-    return param;
-  }
-
-  static void expect(const rclcpp::Parameter & param, rclcpp::ParameterType type) {
-    if (param.get_type() != type) {
-      throw std::invalid_argument(
-        "parameter '" + param.get_name() + "' has type " +
-        rclcpp::to_string(param.get_type()) + ", expected " + rclcpp::to_string(type));
-    }
-  }
-
-  const std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
-  const std::string prefix_;
-};
-
-// 演算法的 log 輸出到 controller 的 logger（rclcpp 的 log 可在任何 thread 呼叫）
-locomotion::Logger make_algorithm_logger(const rclcpp::Logger & logger) {
-  return [logger](locomotion::LogLevel level, const std::string & message) {
-           switch (level) {
-             case locomotion::LogLevel::kDebug:
-               RCLCPP_DEBUG(logger, "%s", message.c_str());
-               break;
-             case locomotion::LogLevel::kInfo:
-               RCLCPP_INFO(logger, "%s", message.c_str());
-               break;
-             case locomotion::LogLevel::kWarn:
-               RCLCPP_WARN(logger, "%s", message.c_str());
-               break;
-             case locomotion::LogLevel::kError:
-               RCLCPP_ERROR(logger, "%s", message.c_str());
-               break;
-           }
-         };
-}
 
 }  // namespace
 
@@ -198,6 +67,7 @@ controller_interface::CallbackReturn SwitchGroupController::on_init() {
     auto_declare<double>("state_publish_rate", 50.0);
     auto_declare<std::vector<std::string>>("modes", std::vector<std::string>{});
     auto_declare<std::string>("default_mode", std::string{});
+    auto_declare<std::string>("default_policy", std::string{});
     auto_declare<double>("planner_rate", 100.0);
     auto_declare<std::vector<double>>("planner_max_steps", std::vector<double>{});
     auto_declare<std::vector<std::string>>("target_state_interfaces", std::vector<std::string>{});
@@ -207,6 +77,15 @@ controller_interface::CallbackReturn SwitchGroupController::on_init() {
     auto_declare<std::string>("base_estimator.plugin", std::string{});
     auto_declare<double>("command_timeout", 0.5);
     auto_declare<double>("switch_mode_poll_rate", 20.0);
+    // 內容與 policy 的來源：庫的路徑是空字串（編舞為 plugin 是空字串）時，該類型不啟用
+    auto_declare<std::string>("choreo.plugin", std::string{});
+    auto_declare<std::string>("choreo.library_path", std::string{"~/.local/share/graphen/choreo"});
+    auto_declare<std::vector<double>>("choreo.max_steps", std::vector<double>{});
+    auto_declare<std::string>("policy.library_path", std::string{});
+    auto_declare<std::string>("bvh.library_path", std::string{});
+    auto_declare<std::vector<double>>("bvh.max_steps", std::vector<double>{});
+    auto_declare<std::vector<double>>("bvh.approach_max_steps", std::vector<double>{});
+    auto_declare<bool>("bvh.interruptible", true);
     auto_declare<std::string>("bvh.base_link", std::string{});
     auto_declare<double>("bvh.axis_tolerance", 1e-4);
     auto_declare<int>("bvh.max_iterations", 50);
@@ -223,10 +102,22 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
   const rclcpp_lifecycle::State & /*previous_state*/) {
   const auto logger = get_node()->get_logger();
 
-  // reconfigure 時先釋放上一次的介面，避免舊 callback 存取即將被替換的 planner
+  // reconfigure 時先釋放上一次的介面，避免舊 callback 存取即將被替換的 planner；
+  // 釋放的順序與相依順序相反（server → arbiter / 來源 → planner）
+  wait_timer_.reset();
+  playback_servers_.clear();
+  publish_choreo_service_.reset();
+  list_choreos_service_.reset();
+  get_choreo_service_.reset();
+  preload_service_.reset();
   mode_subscriber_.reset();
   cmd_vel_subscriber_.reset();
-  switch_mode_server_.reset();
+  arbiter_.reset();
+  choreo_source_.reset();
+  bvh_source_.reset();
+  policy_source_.reset();
+  default_request_.reset();
+  system_modes_.clear();
   planner_.reset();
   base_estimator_.reset();
 
@@ -372,6 +263,19 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     return controller_interface::CallbackReturn::ERROR;
   }
   planner_ = std::make_unique<LocomotionPlanner>(planner_rate_, num_commands);
+  arbiter_ = std::make_unique<PlaybackArbiter>(planner_.get(), logger);
+
+  // 所有演算法 plugin 共用的設定。Humble 的 controller 沒有 robot_description API；
+  // launch 以參數檔傳給 controller_manager 的 robot_description 會套用到同一個 process 中的 controller node
+  {
+    PluginFactory::Setup setup;
+    setup.joint_names = joint_names_;
+    setup.rate_hz = planner_rate_;
+    setup.robot_description = get_node()->has_parameter("robot_description") ?
+      get_node()->get_parameter("robot_description").as_string() : std::string{};
+    setup.logger = logger;
+    plugin_factory_.configure(std::move(setup));
+  }
 
   // 量測狀態的緩衝，先配置好大小，update() 中只覆寫內容
   {
@@ -403,15 +307,12 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     return controller_interface::CallbackReturn::ERROR;
   }
 
-  // 模式以名稱識別，名稱同時是該模式參數的前綴（<mode>.*）
+  // 系統模式以名稱識別，名稱同時是該模式參數的前綴（<mode>.*）
   const auto modes = get_node()->get_parameter("modes").as_string_array();
   if (modes.empty()) {
     RCLCPP_ERROR(logger, "'modes' parameter is empty!");
     return controller_interface::CallbackReturn::ERROR;
   }
-  mode_names_.clear();
-  mode_motions_.clear();
-  mode_policies_.clear();
   for (const auto & mode : modes) {
     if (!is_valid_mode_name(mode)) {
       RCLCPP_ERROR(logger,
@@ -419,41 +320,24 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
         mode.c_str());
       return controller_interface::CallbackReturn::ERROR;
     }
-    if (std::find(mode_names_.begin(), mode_names_.end(), mode) != mode_names_.end()) {
+    if (std::find(kReservedModeNames.begin(), kReservedModeNames.end(), mode) !=
+      kReservedModeNames.end())
+    {
+      RCLCPP_ERROR(logger,
+        "Mode name [ %s ] is reserved (choreo / bvh / policy are played with their own actions).",
+        mode.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    if (find_mode(mode) != nullptr) {
       RCLCPP_ERROR(logger, "Duplicate mode [ %s ] in 'modes'.", mode.c_str());
       return controller_interface::CallbackReturn::ERROR;
     }
     try {
-      mode_motions_.push_back(create_motion(mode));
-      // create_motion 已宣告 <mode>.type。停止類（hold）預設可以切入不可中斷的模式：
-      // 忘了設定時，停止仍然有效
-      const auto node = get_node();
-      const auto type = node->get_parameter(mode + ".type").as_string();
-      ModePolicy policy;
-      policy.interruptible = get_or_declare<bool>(node, mode + ".interruptible", true);
-      policy.preempt = get_or_declare<bool>(node, mode + ".preempt", type == "hold");
-      if (!policy.interruptible) {
-        const bool never_ends = type == "bvh" && node->get_parameter(mode + ".loop").as_bool();
-        RCLCPP_INFO(logger, "Mode [ %s ] is not interruptible while it is playing.", mode.c_str());
-        if (never_ends) {
-          RCLCPP_WARN(logger,
-            "Mode [ %s ] loops forever and is not interruptible: only preempt modes can leave it.",
-            mode.c_str());
-        }
-      }
-      mode_policies_.push_back(policy);
+      system_modes_.push_back(create_mode(mode));
     } catch (const std::exception & e) {
       RCLCPP_ERROR(logger, "Failed to configure mode [ %s ]: %s", mode.c_str(), e.what());
       return controller_interface::CallbackReturn::ERROR;
     }
-    mode_names_.push_back(mode);
-  }
-
-  // 空字串表示啟動時不進入任何模式，保持目前位置，直到收到第一個模式命令
-  default_mode_ = get_node()->get_parameter("default_mode").as_string();
-  if (!default_mode_.empty() && motion_for_mode(default_mode_) == nullptr) {
-    RCLCPP_ERROR(logger, "'default_mode' [ %s ] is not listed in 'modes'.", default_mode_.c_str());
-    return controller_interface::CallbackReturn::ERROR;
   }
 
   state_snapshot_.assign(state_interface_names_.size(), std::numeric_limits<double>::quiet_NaN());
@@ -471,12 +355,17 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     "~/mode",
     sub_qos,
     [this](const std_msgs::msg::String::SharedPtr msg) {
-      // topic 只有模式名稱，已在該模式時不重新開始
-      const auto request = apply_mode(msg->data, SwitchModeAction::Goal::ON_SAME_MODE_IGNORE);
-      if (request.outcome == ModeRequest::Outcome::kRejected ||
-      request.outcome == ModeRequest::Outcome::kUnknown)
-      {
-        RCLCPP_WARN(get_node()->get_logger(), "~/mode: %s", request.message.c_str());
+      // topic 只有系統模式的名稱；已在該模式時不重新開始，沒有回應（被拒絕時只有 log）
+      const auto * mode = find_mode(msg->data);
+      if (mode == nullptr) {
+        // 32 軸含腿部，未知模式時不移動
+        RCLCPP_WARN(get_node()->get_logger(), "~/mode: unknown mode [ %s ], ignored.",
+          msg->data.c_str());
+        return;
+      }
+      const auto outcome = arbiter_->request(request_for(*mode), OnSame::kIgnore);
+      if (outcome.status == PlaybackOutcome::Status::kRejected) {
+        RCLCPP_WARN(get_node()->get_logger(), "~/mode: %s", outcome.message.c_str());
       }
     });
 
@@ -495,39 +384,61 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
       velocity_command_.received = true;
     });
 
-  using namespace std::placeholders;
-  switch_mode_server_ = rclcpp_action::create_server<SwitchModeAction>(
-    get_node(),
-    std::string(get_node()->get_name()) + "/switch_mode",
-    std::bind(&SwitchGroupController::handle_switch_mode_goal, this, _1, _2),
-    std::bind(&SwitchGroupController::handle_switch_mode_cancel, this, _1),
-    std::bind(&SwitchGroupController::handle_switch_mode_accepted, this, _1));
+  try {
+    create_playback_interfaces();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(logger, "Failed to configure playback: %s", e.what());
+    return controller_interface::CallbackReturn::ERROR;
+  }
 
-  // 等待模式播完的 goal 以 timer 在 executor thread 中檢查，不碰 RT 路徑
+  // 等待播完的 goal 以 timer 在 executor thread 中檢查，不碰 RT 路徑
   const double poll_rate = get_node()->get_parameter("switch_mode_poll_rate").as_double();
   if (!(poll_rate > 0.0)) {
     RCLCPP_ERROR(logger, "'switch_mode_poll_rate' must be greater than zero.");
     return controller_interface::CallbackReturn::ERROR;
   }
-  {
-    std::lock_guard<std::mutex> lock(waiting_mutex_);
-    waiting_goals_.clear();
-  }
   wait_timer_ = get_node()->create_wall_timer(
-    std::chrono::duration<double>(1.0 / poll_rate), [this]() {poll_waiting_goals();});
+    std::chrono::duration<double>(1.0 / poll_rate), [this]() {
+      for (const auto & server : playback_servers_) {
+        server->poll();
+      }
+    });
 
-  // reconfigure 時回到預設模式，實際交給 planner 是在 activate 時
-  {
-    std::lock_guard<std::mutex> lock(mode_mutex_);
-    current_mode_ = default_mode_;
+  // 啟動時的動作：實際交給 planner 是在 activate 時。空字串表示不進入任何模式，保持目前位置
+  const auto default_mode = get_node()->get_parameter("default_mode").as_string();
+  const auto default_policy = get_node()->get_parameter("default_policy").as_string();
+  if (!default_mode.empty() && !default_policy.empty()) {
+    RCLCPP_ERROR(logger, "Set only one of 'default_mode' and 'default_policy'.");
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  std::string default_label = "(hold)";
+  if (!default_mode.empty()) {
+    const auto * mode = find_mode(default_mode);
+    if (mode == nullptr) {
+      RCLCPP_ERROR(logger, "'default_mode' [ %s ] is not listed in 'modes'.",
+        default_mode.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    default_request_ = request_for(*mode);
+  } else if (!default_policy.empty()) {
+    // 在這裡就載入：啟動時的 policy 設定有誤時，controller 直接 configure 失敗
+    try {
+      default_request_ = policy_source_->prepare(default_policy);
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(logger, "Failed to load 'default_policy' [ %s ]: %s",
+        default_policy.c_str(), e.what());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+  }
+  if (default_request_) {
+    default_label = playback_label(default_request_->mode, default_request_->item);
   }
 
   RCLCPP_INFO(logger,
     "SwitchGroupController configured with %zu command interfaces, %zu state interfaces "
-    "and %zu modes (default mode [ %s ], planner %.1f Hz).",
-    num_commands, state_interface_names_.size(), mode_names_.size(),
-    default_mode_.empty() ? "(hold)" : default_mode_.c_str(),
-    planner_rate_);
+    "and %zu system modes (starts with [ %s ], planner %.1f Hz).",
+    num_commands, state_interface_names_.size(), system_modes_.size(),
+    default_label.c_str(), planner_rate_);
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -548,27 +459,28 @@ controller_interface::CallbackReturn SwitchGroupController::on_activate(
     initial_positions.push_back(value);
   }
 
-  // 尚未進入任何模式時保持位置。保持的目標優先取下游 reference 的值（下游 activate 時
-  // 以硬體目前的 command 初始化，也就是硬體正在前往的初始姿態）；無效時才用目前的 state。
-  // 若直接用 state，實機馬達還在走向初始姿態時會被停在半路
-  {
-    std::lock_guard<std::mutex> lock(mode_mutex_);
-    if (current_mode_.empty()) {
-      for (size_t i = 0; i < initial_positions.size(); ++i) {
-        const double reference = command_interfaces_[i].get_value();
-        if (std::isfinite(reference)) {
-          initial_positions[i] = reference;
-        }
+  if (default_request_) {
+    arbiter_->force(*default_request_);
+    RCLCPP_INFO(get_node()->get_logger(), "Starting with [ %s ].",
+      playback_label(default_request_->mode, default_request_->item).c_str());
+  } else {
+    // 尚未進入任何模式時保持位置。保持的目標優先取下游 reference 的值（下游 activate 時
+    // 以硬體目前的 command 初始化，也就是硬體正在前往的初始姿態）；無效時才用目前的 state。
+    // 若直接用 state，實機馬達還在走向初始姿態時會被停在半路
+    for (size_t i = 0; i < initial_positions.size(); ++i) {
+      const double reference = command_interfaces_[i].get_value();
+      if (std::isfinite(reference)) {
+        initial_positions[i] = reference;
       }
-      // 全部為 NaN 的目標：保持進入時的位置
-      mode_sequence_ = planner_->set_motion(std::make_shared<TargetMotion>(
-        std::vector<double>(initial_positions.size(), std::numeric_limits<double>::quiet_NaN()),
-        default_max_steps_));
-      RCLCPP_INFO(get_node()->get_logger(),
-        "No mode selected, holding current positions until a mode command is received.");
-    } else {
-      mode_sequence_ = planner_->set_motion(motion_for_mode(current_mode_));
     }
+    // mode 為空：只是保持，之後任何播放要求都能切入。全部為 NaN 的目標 = 保持進入時的位置
+    PlaybackRequest hold;
+    hold.motion = std::make_shared<TargetMotion>(
+      std::vector<double>(initial_positions.size(), std::numeric_limits<double>::quiet_NaN()),
+      default_max_steps_);
+    arbiter_->force(std::move(hold));
+    RCLCPP_INFO(get_node()->get_logger(),
+      "Nothing selected to play, holding current positions until a playback command is received.");
   }
   // 先寫入一次目前的狀態，planner 第一個週期（含 on_enter）就有量測值可用
   state_buffer_.try_write([this](RobotState & state) {read_robot_state(state);});
@@ -609,26 +521,25 @@ SwitchGroupController::state_interface_configuration() const {
   return config;
 }
 
-std::shared_ptr<Motion> SwitchGroupController::motion_for_mode(const std::string & mode) const {
-  const auto it = std::find(mode_names_.begin(), mode_names_.end(), mode);
-  if (it == mode_names_.end()) {
-    return nullptr;
-  }
-  return mode_motions_[static_cast<size_t>(std::distance(mode_names_.begin(), it))];
+const SwitchGroupController::SystemMode * SwitchGroupController::find_mode(
+  const std::string & name) const
+{
+  const auto it = std::find_if(system_modes_.begin(), system_modes_.end(),
+      [&name](const SystemMode & mode) {return mode.name == name;});
+  return it == system_modes_.end() ? nullptr : &*it;
 }
 
-const SwitchGroupController::ModePolicy * SwitchGroupController::policy_for_mode(
-  const std::string & mode) const {
-  const auto it = std::find(mode_names_.begin(), mode_names_.end(), mode);
-  if (it == mode_names_.end()) {
-    return nullptr;
-  }
-  return &mode_policies_[static_cast<size_t>(std::distance(mode_names_.begin(), it))];
+PlaybackRequest SwitchGroupController::request_for(const SystemMode & mode) {
+  PlaybackRequest request;
+  request.mode = mode.name;
+  request.identity = mode.name;
+  request.motion = mode.motion;
+  request.policy = mode.policy;
+  return request;
 }
 
-std::shared_ptr<Motion> SwitchGroupController::create_motion(const std::string & mode) {
+SwitchGroupController::SystemMode SwitchGroupController::create_mode(const std::string & mode) {
   const auto node = get_node();
-  const auto logger = node->get_logger();
   const size_t num_commands = joint_names_.size();
 
   auto max_steps = get_or_declare<std::vector<double>>(node, mode + ".max_steps", {});
@@ -638,6 +549,11 @@ std::shared_ptr<Motion> SwitchGroupController::create_motion(const std::string &
     throw std::invalid_argument(
       "'" + mode + ".max_steps' must contain " + std::to_string(num_commands) + " entries");
   }
+
+  SystemMode result;
+  result.name = mode;
+  // 演算法 plugin 自己回報的可否中斷（例如內容標示為不可中斷）；其他類型一律可以
+  bool motion_interruptible = true;
 
   const auto type = get_or_declare<std::string>(node, mode + ".type", "target");
   if (type == "target") {
@@ -665,123 +581,236 @@ std::shared_ptr<Motion> SwitchGroupController::create_motion(const std::string &
       }
       target = targets[i];
     }
-    return std::make_shared<TargetMotion>(std::move(full_targets), std::move(max_steps));
-  }
-
-  // 保持進入模式時的位置（全部 NaN）；用於停止動作，再切到其他模式時會重新 on_enter
-  if (type == "hold") {
-    return std::make_shared<TargetMotion>(
+    result.motion = std::make_shared<TargetMotion>(std::move(full_targets), std::move(max_steps));
+  } else if (type == "hold") {
+    // 保持進入模式時的位置（全部 NaN）；用於停止動作，再切到其他模式時會重新 on_enter
+    result.motion = std::make_shared<TargetMotion>(
       std::vector<double>(num_commands, std::numeric_limits<double>::quiet_NaN()),
       std::move(max_steps));
+  } else if (type == "plugin") {
+    const auto plugin = get_or_declare<std::string>(node, mode + ".plugin", "");
+    if (plugin.empty()) {
+      throw std::invalid_argument("'" + mode + ".plugin' is empty");
+    }
+    const NodeParameterSource params(node, mode + ".");
+    auto created = plugin_factory_.create(plugin, params, mode, std::move(max_steps));
+    motion_interruptible = created.algorithm->interruptible();
+    result.motion = std::move(created.motion);
+    RCLCPP_INFO(node->get_logger(), "Mode [ %s ]: plugin '%s'.", mode.c_str(), plugin.c_str());
+  } else if (type == "bvh") {
+    throw std::invalid_argument(
+      "type 'bvh' is no longer a system mode: remove this mode, put the file in "
+      "'bvh.library_path' and play it with the play_bvh action (see controllers.yaml.example)");
+  } else {
+    throw std::invalid_argument(
+      "unknown type '" + type + "' in '" + mode +
+      ".type' (expected 'target', 'hold' or 'plugin')");
   }
 
-  if (type == "bvh") {
-    const auto file = get_or_declare<std::string>(node, mode + ".file", "");
-    if (file.empty()) {
-      throw std::invalid_argument("'" + mode + ".file' is empty");
-    }
-    // 走向第 0 幀（含循環時接回起點）的速度，預設為 planner_max_steps
-    auto approach_max_steps =
-      get_or_declare<std::vector<double>>(node, mode + ".approach_max_steps", {});
-    if (approach_max_steps.empty()) {
-      approach_max_steps = default_max_steps_;
-    } else if (approach_max_steps.size() != num_commands) {
-      throw std::invalid_argument(
-        "'" + mode + ".approach_max_steps' must contain " + std::to_string(num_commands) +
-        " entries");
-    }
-
-    BvhMotion::Options motion_options;
-    motion_options.loop = get_or_declare<bool>(node, mode + ".loop", true);
-    motion_options.time_scale = get_or_declare<double>(node, mode + ".time_scale", 1.0);
-
-    motion::BvhRetargeter::Options retarget_options;
-    retarget_options.base_link = node->get_parameter("bvh.base_link").as_string();
-    retarget_options.axis_tolerance = node->get_parameter("bvh.axis_tolerance").as_double();
-    retarget_options.max_iterations =
-      static_cast<int>(node->get_parameter("bvh.max_iterations").as_int());
-    retarget_options.damping = node->get_parameter("bvh.damping").as_double();
-    retarget_options.residual_tolerance =
-      node->get_parameter("bvh.residual_tolerance").as_double();
-    if (retarget_options.base_link.empty()) {
-      throw std::invalid_argument("'bvh.base_link' is required for bvh modes");
-    }
-
-    // Humble 的 controller 沒有 robot_description API；launch 以參數檔傳給 controller_manager 的
-    // robot_description 會套用到同一個 process 中的 controller node
-    if (!node->has_parameter("robot_description")) {
-      throw std::invalid_argument("parameter 'robot_description' is not available");
-    }
-    const auto urdf = node->get_parameter("robot_description").as_string();
-
-    const auto path = resolve_path(file);
-    auto clip = std::make_shared<const motion::BvhClip>(motion::parse_bvh_file(path));
-    auto retargeter = std::make_shared<const motion::BvhRetargeter>(
-      clip, urdf, joint_names_, retarget_options);
-
-    RCLCPP_INFO(logger, "Mode [ %s ]: BVH '%s', %zu frames, frame time %.4f s, loop %s.",
-      mode.c_str(), path.c_str(), clip->num_frames(), clip->frame_time,
-      motion_options.loop ? "true" : "false");
-    for (const auto & group : retargeter->groups()) {
-      if (group.bvh_node.empty()) {
-        continue;
-      }
-      std::string joints;
-      for (const auto & joint : group.joints) {
-        joints += (joints.empty() ? "" : ", ") + joint;
-      }
-      RCLCPP_INFO(logger, "  [%s] <- BVH %s", joints.c_str(), group.bvh_node.c_str());
-    }
-    for (size_t i = 0; i < num_commands; ++i) {
-      if (!retargeter->covered()[i]) {
-        RCLCPP_WARN(logger, "  Joint [ %s ] has no BVH data, it holds its position.",
-          joint_names_[i].c_str());
-      }
-    }
-    return std::make_shared<BvhMotion>(
-      std::move(retargeter), motion_options, std::move(max_steps), std::move(approach_max_steps));
+  // 停止類（hold）預設可以切入不可中斷的播放：忘了設定時，停止仍然有效。
+  // 不可中斷取 YAML 與演算法兩者中較嚴格的
+  result.policy.interruptible =
+    get_or_declare<bool>(node, mode + ".interruptible", true) && motion_interruptible;
+  result.policy.preempt = get_or_declare<bool>(node, mode + ".preempt", type == "hold");
+  if (!result.policy.interruptible) {
+    RCLCPP_INFO(node->get_logger(), "Mode [ %s ] is not interruptible while it is playing.",
+      mode.c_str());
   }
-
-  if (type == "plugin") {
-    return create_plugin_motion(mode, std::move(max_steps));
-  }
-
-  throw std::invalid_argument(
-    "unknown type '" + type + "' in '" + mode +
-    ".type' (expected 'target', 'hold', 'bvh' or 'plugin')");
+  return result;
 }
 
-std::shared_ptr<Motion> SwitchGroupController::create_plugin_motion(
-  const std::string & mode, std::vector<double> max_steps) {
+template<typename ActionT>
+typename PlaybackServer<ActionT>::Hooks SwitchGroupController::common_hooks() {
+  typename PlaybackServer<ActionT>::Hooks hooks;
+  hooks.active = [this]() {
+      return get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+    };
+  hooks.fill_state = [this](graphen_interfaces::msg::PlaybackResult & result) {
+      result.interface_names = state_interface_names_;
+      std::lock_guard<std::mutex> lock(state_snapshot_mutex_);
+      result.values = state_snapshot_;
+    };
+  return hooks;
+}
+
+void SwitchGroupController::create_playback_interfaces() {
   const auto node = get_node();
-  const auto plugin = get_or_declare<std::string>(node, mode + ".plugin", "");
-  if (plugin.empty()) {
-    throw std::invalid_argument("'" + mode + ".plugin' is empty");
+  const auto logger = node->get_logger();
+
+  // 載入內容（讀檔、解析、建立演算法實例）在這個 group 的 thread 進行；一次只處理一個要求。
+  // 會載入的 action（編舞、BVH、policy）與所有 service 放在這裡
+  playback_group_ = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+  choreo_source_ = std::make_unique<ChoreoSource>(node, &plugin_factory_, default_max_steps_);
+  bvh_source_ = std::make_unique<BvhSource>(node, joint_names_, default_max_steps_);
+  policy_source_ = std::make_unique<PolicySource>(node, &plugin_factory_, default_max_steps_);
+
+  // --- 系統模式：不需要載入
+  {
+    auto hooks = common_hooks<SwitchModeAction>();
+    hooks.validate = [this](const SwitchModeAction::Goal & goal) {
+        return find_mode(goal.mode) != nullptr ? std::string{} : std::string{"unknown mode"};
+      };
+    hooks.start = [this](const SwitchModeAction::Goal & goal, OnSame on_same) {
+        return arbiter_->request(request_for(*find_mode(goal.mode)), on_same);
+      };
+    hooks.describe = [](const SwitchModeAction::Goal & goal) {return goal.mode;};
+    // 放在預設的 callback group（nullptr）：系統模式不需要載入，停止不能排在別人的載入後面
+    playback_servers_.push_back(std::make_unique<PlaybackServer<SwitchModeAction>>(
+        node, "switch_mode", nullptr, arbiter_.get(), std::move(hooks)));
   }
 
-  // loader 跨 reconfigure 保留：已建立的演算法實例需要它載入的 library
-  if (!algorithm_loader_) {
-    algorithm_loader_ =
-      std::make_unique<pluginlib::ClassLoader<locomotion::LocomotionAlgorithm>>(
-      "graphen_locomotion", "graphen::locomotion::LocomotionAlgorithm");
+  // --- 編舞：舞曲庫中的名稱，或直接帶內容試播
+  if (choreo_source_->enabled()) {
+    auto hooks = common_hooks<PlayChoreoAction>();
+    hooks.validate = [](const PlayChoreoAction::Goal & goal) -> std::string {
+        if (goal.name.empty() == goal.content.empty()) {
+          return "exactly one of 'name' and 'content' is required";
+        }
+        if (!goal.name.empty() && !is_valid_item_name(goal.name)) {
+          return "invalid name";
+        }
+        return {};
+      };
+    hooks.start = [this](const PlayChoreoAction::Goal & goal, OnSame on_same) {
+        return arbiter_->request(
+          goal.name.empty() ? choreo_source_->prepare_preview(goal.content) :
+          choreo_source_->prepare(goal.name), on_same);
+      };
+    hooks.describe = [](const PlayChoreoAction::Goal & goal) {
+        return playback_label(ChoreoSource::kMode, goal.name.empty() ? "(preview)" : goal.name);
+      };
+    playback_servers_.push_back(std::make_unique<PlaybackServer<PlayChoreoAction>>(
+        node, "play_choreo", playback_group_, arbiter_.get(), std::move(hooks)));
+
+    using Publish = graphen_interfaces::srv::PublishChoreo;
+    publish_choreo_service_ = node->create_service<Publish>(
+      "~/publish_choreo",
+      [this](const Publish::Request::SharedPtr request, Publish::Response::SharedPtr response) {
+        try {
+          response->sha256 = choreo_source_->publish(request->name, request->content);
+          response->success = true;
+          response->message = "Published";
+          RCLCPP_INFO(get_node()->get_logger(), "Published choreography [ %s ], sha256 %s.",
+            request->name.c_str(), short_hash(response->sha256).c_str());
+        } catch (const std::exception & e) {
+          response->success = false;
+          response->message = e.what();
+          RCLCPP_WARN(get_node()->get_logger(), "publish_choreo [ %s ]: %s",
+            request->name.c_str(), e.what());
+        }
+      },
+      rmw_qos_profile_services_default, playback_group_);
+
+    using List = graphen_interfaces::srv::ListChoreos;
+    list_choreos_service_ = node->create_service<List>(
+      "~/list_choreos",
+      [this](const List::Request::SharedPtr, List::Response::SharedPtr response) {
+        for (auto & entry : choreo_source_->list()) {
+          response->names.push_back(std::move(entry.name));
+          response->sha256.push_back(std::move(entry.sha256));
+        }
+      },
+      rmw_qos_profile_services_default, playback_group_);
+
+    using Get = graphen_interfaces::srv::GetChoreo;
+    get_choreo_service_ = node->create_service<Get>(
+      "~/get_choreo",
+      [this](const Get::Request::SharedPtr request, Get::Response::SharedPtr response) {
+        try {
+          response->content = choreo_source_->get(request->name, response->sha256);
+          response->success = true;
+        } catch (const std::exception & e) {
+          response->success = false;
+          response->message = e.what();
+        }
+      },
+      rmw_qos_profile_services_default, playback_group_);
+  } else {
+    RCLCPP_INFO(logger, "Choreographies are not enabled ('choreo.plugin' is empty).");
   }
-  std::shared_ptr<locomotion::LocomotionAlgorithm> algorithm =
-    algorithm_loader_->createSharedInstance(plugin);
 
-  const NodeParameterSource params(node, mode + ".");
-  const auto log = make_algorithm_logger(node->get_logger().get_child(mode));
-  locomotion::Context context{
-    joint_names_,
-    planner_rate_,
-    node->has_parameter("robot_description") ?
-    node->get_parameter("robot_description").as_string() : std::string{},
-    params,
-    log,
-    max_steps};
-  algorithm->configure(context);
+  // --- BVH
+  if (bvh_source_->enabled()) {
+    auto hooks = common_hooks<PlayBvhAction>();
+    hooks.validate = [](const PlayBvhAction::Goal & goal) -> std::string {
+        if (!is_valid_item_name(goal.name)) {
+          return "invalid name";
+        }
+        if (!(goal.time_scale >= 0.0) || !std::isfinite(goal.time_scale)) {
+          return "time_scale must be a finite number >= 0";
+        }
+        return {};
+      };
+    hooks.needs_loading = [this](const PlayBvhAction::Goal & goal) {
+        return !bvh_source_->is_loaded(goal.name);
+      };
+    hooks.start = [this](const PlayBvhAction::Goal & goal, OnSame on_same) {
+        // 0 視為 1.0：沒有填 time_scale 的 goal（欄位為 0）照原速播放
+        const double time_scale = goal.time_scale == 0.0 ? 1.0 : goal.time_scale;
+        return arbiter_->request(
+          bvh_source_->prepare(goal.name, goal.loop, time_scale), on_same);
+      };
+    hooks.describe = [](const PlayBvhAction::Goal & goal) {
+        return playback_label(BvhSource::kMode, goal.name);
+      };
+    playback_servers_.push_back(std::make_unique<PlaybackServer<PlayBvhAction>>(
+        node, "play_bvh", playback_group_, arbiter_.get(), std::move(hooks)));
+  } else {
+    RCLCPP_INFO(logger, "BVH playback is not enabled ('bvh.library_path' is empty).");
+  }
 
-  RCLCPP_INFO(node->get_logger(), "Mode [ %s ]: plugin '%s'.", mode.c_str(), plugin.c_str());
-  return std::make_shared<PluginMotion>(std::move(algorithm), std::move(max_steps), mode, log);
+  // --- policy
+  if (policy_source_->enabled()) {
+    auto hooks = common_hooks<RunPolicyAction>();
+    hooks.validate = [](const RunPolicyAction::Goal & goal) -> std::string {
+        return is_valid_item_name(goal.name) ? "" : "invalid name";
+      };
+    hooks.needs_loading = [this](const RunPolicyAction::Goal & goal) {
+        return !policy_source_->is_loaded(goal.name);
+      };
+    hooks.start = [this](const RunPolicyAction::Goal & goal, OnSame on_same) {
+        return arbiter_->request(policy_source_->prepare(goal.name), on_same);
+      };
+    hooks.describe = [](const RunPolicyAction::Goal & goal) {
+        return playback_label(PolicySource::kMode, goal.name);
+      };
+    playback_servers_.push_back(std::make_unique<PlaybackServer<RunPolicyAction>>(
+        node, "run_policy", playback_group_, arbiter_.get(), std::move(hooks)));
+  } else {
+    RCLCPP_INFO(logger, "Policies are not enabled ('policy.library_path' is empty).");
+  }
+
+  // --- 預載：只有需要載入時間的類型（BVH、policy）
+  if (bvh_source_->enabled() || policy_source_->enabled()) {
+    using Preload = graphen_interfaces::srv::Preload;
+    preload_service_ = node->create_service<Preload>(
+      "~/preload",
+      [this](const Preload::Request::SharedPtr request, Preload::Response::SharedPtr response) {
+        response->success = true;
+        for (const auto & item : request->items) {
+          std::string message;
+          try {
+            if (request->mode == BvhSource::kMode) {
+              bvh_source_->preload(item);
+            } else if (request->mode == PolicySource::kMode) {
+              policy_source_->preload(item);
+            } else {
+              message = "unknown mode '" + request->mode + "' (expected 'bvh' or 'policy')";
+            }
+          } catch (const std::exception & e) {
+            message = e.what();
+          }
+          if (!message.empty()) {
+            response->success = false;
+            RCLCPP_WARN(get_node()->get_logger(), "preload [ %s ]: %s",
+              playback_label(request->mode, item).c_str(), message.c_str());
+          }
+          response->messages.push_back(std::move(message));
+        }
+      },
+      rmw_qos_profile_services_default, playback_group_);
+  }
 }
 
 std::shared_ptr<locomotion::BaseStateEstimator> SwitchGroupController::create_base_estimator() {
@@ -847,189 +876,6 @@ void SwitchGroupController::fill_planner_state(RobotState & state) {
       "Base estimator threw: %s. Base state is invalid until the controller is reactivated.",
       e.what());
   }
-}
-
-bool SwitchGroupController::current_play_ended() const {
-  const auto progress = planner_->progress();
-  // planner 還沒開始這一次播放時，progress 仍是上一個 Motion 的：視為還在播放
-  return progress.sequence == mode_sequence_ &&
-         (progress.status == MotionStatus::kFinished || progress.status == MotionStatus::kFailed);
-}
-
-SwitchGroupController::ModeRequest SwitchGroupController::apply_mode(
-  const std::string & mode, OnSameMode on_same_mode) {
-  using Goal = SwitchModeAction::Goal;
-  using Outcome = ModeRequest::Outcome;
-
-  std::lock_guard<std::mutex> lock(mode_mutex_);
-  ModeRequest request;
-  auto motion = motion_for_mode(mode);
-  if (!motion) {
-    // 32 軸含腿部，未知模式時不移動（不再歸零）
-    request.outcome = Outcome::kUnknown;
-    request.message = "Unknown mode [ " + mode + " ], ignored.";
-    return request;
-  }
-
-  // 已在該模式：依這一次指令的 on_same_mode 決定是否重新開始（例如 BVH 預設不從頭播放）
-  if (current_mode_ == mode) {
-    const bool restart = on_same_mode == Goal::ON_SAME_MODE_RESTART ||
-      (on_same_mode == Goal::ON_SAME_MODE_RESTART_IF_FINISHED && current_play_ended());
-    if (!restart) {
-      request.outcome = Outcome::kUnchanged;
-      request.sequence = mode_sequence_;
-      return request;
-    }
-  }
-
-  // 目前的模式不可中斷、而且還在播放：只有 preempt 的模式（停止類）可以切入。
-  // 重播同一個模式也算中斷
-  const auto * current_policy = policy_for_mode(current_mode_);
-  const auto * target_policy = policy_for_mode(mode);
-  if (current_policy && !current_policy->interruptible && !target_policy->preempt &&
-    !current_play_ended())
-  {
-    request.outcome = Outcome::kRejected;
-    request.message = "Mode [ " + current_mode_ + " ] is not interruptible until it finishes; [ " +
-      mode + " ] rejected.";
-    return request;
-  }
-
-  const bool restarted = current_mode_ == mode;
-  current_mode_ = mode;
-  mode_sequence_ = planner_->set_motion(std::move(motion));
-  RCLCPP_INFO(get_node()->get_logger(), "%s mode [ %s ]",
-    restarted ? "Restart" : "Change to", mode.c_str());
-  request.outcome = Outcome::kSwitched;
-  request.sequence = mode_sequence_;
-  return request;
-}
-
-rclcpp_action::GoalResponse SwitchGroupController::handle_switch_mode_goal(
-  const rclcpp_action::GoalUUID & /*uuid*/,
-  std::shared_ptr<const SwitchModeAction::Goal> goal) {
-  if (get_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-    RCLCPP_WARN(get_node()->get_logger(),
-      "Rejected switch_mode goal [ %s ]: controller is not active.", goal->mode.c_str());
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-  // mode 表在 configure 後即唯讀，可在 executor thread 安全查詢
-  if (motion_for_mode(goal->mode) == nullptr) {
-    RCLCPP_WARN(get_node()->get_logger(),
-      "Rejected switch_mode goal: unknown mode [ %s ].", goal->mode.c_str());
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-  if (goal->on_same_mode < SwitchModeAction::Goal::ON_SAME_MODE_IGNORE ||
-    goal->on_same_mode > SwitchModeAction::Goal::ON_SAME_MODE_RESTART_IF_FINISHED)
-  {
-    RCLCPP_WARN(get_node()->get_logger(),
-      "Rejected switch_mode goal [ %s ]: invalid on_same_mode %d.", goal->mode.c_str(),
-      static_cast<int>(goal->on_same_mode));
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-}
-
-rclcpp_action::CancelResponse SwitchGroupController::handle_switch_mode_cancel(
-  std::shared_ptr<SwitchModeGoalHandle> /*goal_handle*/) {
-  // 只有 wait_until_finished 的 goal 會停留在執行階段（其他在 accepted 時就已完成）。
-  // cancel 只停止等待，由 poll_waiting_goals() 結束 goal；目前的動作不受影響
-  return rclcpp_action::CancelResponse::ACCEPT;
-}
-
-std::shared_ptr<SwitchGroupController::SwitchModeAction::Result>
-SwitchGroupController::make_switch_mode_result(bool success, const std::string & message) {
-  auto result = std::make_shared<SwitchModeAction::Result>();
-  result->success = success;
-  result->message = message;
-  {
-    std::lock_guard<std::mutex> lock(mode_mutex_);
-    result->mode = current_mode_;
-  }
-  result->interface_names = state_interface_names_;
-  {
-    std::lock_guard<std::mutex> lock(state_snapshot_mutex_);
-    result->values = state_snapshot_;
-  }
-  return result;
-}
-
-void SwitchGroupController::handle_switch_mode_accepted(
-  std::shared_ptr<SwitchModeGoalHandle> goal_handle) {
-  const auto goal = goal_handle->get_goal();
-  const auto request = apply_mode(goal->mode, goal->on_same_mode);
-  if (request.outcome == ModeRequest::Outcome::kRejected ||
-    request.outcome == ModeRequest::Outcome::kUnknown)
-  {
-    // 不可中斷的判斷必須和切換在同一個 lock 中進行，所以在這裡（而不是 handle_goal）拒絕
-    RCLCPP_WARN(get_node()->get_logger(), "switch_mode: %s", request.message.c_str());
-    goal_handle->abort(make_switch_mode_result(false, request.message));
-    return;
-  }
-  if (!goal->wait_until_finished) {
-    goal_handle->succeed(make_switch_mode_result(true,
-      request.outcome == ModeRequest::Outcome::kUnchanged ?
-      "Already in this mode, not restarted" : "Mode switched"));
-    return;
-  }
-  // 等動作播完：交給 poll_waiting_goals()
-  std::lock_guard<std::mutex> lock(waiting_mutex_);
-  waiting_goals_.push_back({std::move(goal_handle), request.sequence});
-}
-
-void SwitchGroupController::poll_waiting_goals() {
-  std::lock_guard<std::mutex> lock(waiting_mutex_);
-  if (waiting_goals_.empty()) {
-    return;
-  }
-
-  const bool active = get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
-  const auto progress = planner_->progress();
-  uint64_t current_sequence = 0;
-  std::string current_mode;
-  {
-    std::lock_guard<std::mutex> mode_lock(mode_mutex_);
-    current_sequence = mode_sequence_;
-    current_mode = current_mode_;
-  }
-
-  // 回傳 true 表示 goal 已結束，從清單移除
-  const auto finish = [&](const WaitingGoal & waiting) {
-      const auto & handle = waiting.handle;
-      const auto & mode = handle->get_goal()->mode;
-      if (handle->is_canceling()) {
-        handle->canceled(make_switch_mode_result(false, "Stopped waiting; the mode keeps running"));
-        return true;
-      }
-      if (!active) {
-        handle->abort(make_switch_mode_result(false, "Controller is not active"));
-        return true;
-      }
-      if (waiting.sequence != current_sequence) {
-        handle->abort(make_switch_mode_result(
-            false, "Preempted by mode [ " + current_mode + " ]"));
-        return true;
-      }
-      // planner 還沒切換到這一次播放時，progress 仍是上一個 Motion 的
-      const bool entered = progress.sequence == waiting.sequence;
-      if (entered && progress.status == MotionStatus::kFinished) {
-        RCLCPP_INFO(get_node()->get_logger(),
-          "Mode [ %s ] finished (%.2f s after it was entered)", mode.c_str(), progress.elapsed);
-        handle->succeed(make_switch_mode_result(true, "Mode finished"));
-        return true;
-      }
-      if (entered && progress.status == MotionStatus::kFailed) {
-        handle->abort(make_switch_mode_result(
-            false, "Mode [ " + mode + " ] failed, see the controller log"));
-        return true;
-      }
-      auto feedback = std::make_shared<SwitchModeAction::Feedback>();
-      feedback->elapsed = entered ? progress.elapsed : 0.0;
-      handle->publish_feedback(feedback);
-      return false;
-    };
-  waiting_goals_.erase(
-    std::remove_if(waiting_goals_.begin(), waiting_goals_.end(), finish), waiting_goals_.end());
 }
 
 void SwitchGroupController::read_robot_state(RobotState & state) const {

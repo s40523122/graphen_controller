@@ -59,7 +59,7 @@ std::string num(double value, int precision = 4) {
 //
 // 進入模式時，各軌道從當下的命令位置開始，依腳本的時間前進；各軌道獨立、時間可以重疊，
 // 不在任何軌道中的 joint 不寫入（保持）。輸出位置與解析微分的速度前饋。全部播完並到達最後的位置時
-// finished() 為 true，之後保持；要重播需重新進入模式（SwitchMode 的 on_same_mode）。
+// finished() 為 true，之後保持；要重播需重新進入（播放類 action 的 options.on_same）。
 //
 // 速度平滑化：播放途中從另一個動作切過來時，手臂可能還在移動。第一段（起點 → 第一個 keyframe）
 // 會帶入切換當下的命令速度（RobotState::commanded_velocities），沿著原本的方向自然減速再轉向，
@@ -70,8 +70,12 @@ std::string num(double value, int precision = 4) {
 // 時間是開環的：只依時鐘輸出，不等待實際位置。所以輸出不能被 planner 限速，否則時間會被拉長：
 // configure 時會確認每一段的峰值速度都在 <mode>.max_steps 之內。
 //
-// 參數（<mode>.*）：
-//   file                  腳本路徑（必填），可寫 package://<套件>/<相對路徑>
+// 腳本頂層的 interruptible: false 會讓這段編舞播放中不可被打斷（interruptible()）。
+//
+// 參數（<mode>.*，或由 controller 的 PlayChoreo 以 choreo.* 加上 content / label 提供）：
+//   file                  腳本路徑，可寫 package://<套件>/<相對路徑>；與 content 擇一
+//   content               腳本的 YAML 內容（不經過檔案，用於舞曲庫與試播）；與 file 擇一
+//   label                 （選填）log 與錯誤訊息中用來稱呼這份腳本的名稱，預設為 file 或 "(content)"
 //   start_tolerance       第一個 keyframe 在 t = 0（表示「必須已經在這個姿態」）時，
 //                         允許與進入時位置的最大差距（rad，預設 0.05）
 //   velocity_limit_scale  速度上限 = URDF 的 velocity limit × 這個值（預設 1.0，必須 > 0）
@@ -80,7 +84,8 @@ std::string num(double value, int precision = 4) {
 //                         可用 choreo_check 算出建議值
 //
 // 檢查（任何一項不通過，configure 就失敗）：
-//   - 腳本的 joint 都是受控的 joint
+//   - 腳本的 joint 都是受控的 joint；poses 中的 joint 名稱也都必須是受控的 joint，
+//     即使沒有被任何軌道使用（全身姿態只取一部分時，其餘名稱打錯也要報錯）
 //   - 有 robot_description 時：每個 keyframe 都在位置限位內、每一段的峰值速度不超過速度上限
 //   - 每一段的峰值速度不會被 max_steps 限速
 // 從進入時的位置到第一個姿態的那一段，在 on_enter 以同樣的條件（含位置限位，因為帶起點速度的曲線
@@ -89,9 +94,14 @@ class ChoreographerAlgorithm : public locomotion::LocomotionAlgorithm {
 public:
   void configure(const locomotion::Context & context) override {
     const auto file = context.params.get_string("file");
-    if (!file || file->empty()) {
-      throw std::invalid_argument("'file' is required");
+    const auto content = context.params.get_string("content");
+    const bool has_file = file && !file->empty();
+    const bool has_content = content && !content->empty();
+    if (has_file == has_content) {
+      throw std::invalid_argument("exactly one of 'file' and 'content' is required");
     }
+    const std::string label =
+      context.params.get_string("label").value_or(has_file ? *file : "(content)");
     start_tolerance_ = context.params.get_double("start_tolerance").value_or(0.05);
     if (!(start_tolerance_ >= 0.0)) {
       throw std::invalid_argument("'start_tolerance' must not be negative");
@@ -105,8 +115,24 @@ public:
       throw std::invalid_argument("the planner rate must be greater than zero");
     }
 
-    const auto choreography = load_choreography(resolve_package_path(*file));
+    const auto choreography = has_file ?
+      load_choreography(resolve_package_path(*file)) : parse_choreography(*content);
     const auto summaries = summarize(choreography);
+
+    // 姿態可以涵蓋軌道以外的 joint，但名稱必須存在：打錯字的 joint 不會被任何軌道取用，
+    // 不檢查的話永遠不會被發現
+    if (const auto unknown = unknown_pose_joints(choreography, context.joint_names);
+      !unknown.empty())
+    {
+      std::string names;
+      for (const auto & joint : unknown) {
+        names += (names.empty() ? "'" : ", '") + joint + "'";
+      }
+      throw std::invalid_argument(
+              "choreography '" + label + "': poses use " + names +
+              ", which " + (unknown.size() == 1 ? "is not a commanded joint" :
+              "are not commanded joints"));
+    }
 
     std::vector<std::string> problems;
 
@@ -188,7 +214,7 @@ public:
     }
 
     if (!problems.empty()) {
-      std::string message = "choreography '" + *file + "' cannot be played as written:";
+      std::string message = "choreography '" + label + "' cannot be played as written:";
       for (const auto & problem : problems) {
         message += "\n  - " + problem;
       }
@@ -199,9 +225,11 @@ public:
     rate_hz_ = context.rate_hz;
     time_ = 0.0;
     finished_ = false;
+    interruptible_ = choreography.interruptible;
     context.log(locomotion::LogLevel::kInfo,
-      "Choreography '" + *file + "': " + std::to_string(tracks_.size()) + " tracks, " +
-      std::to_string(num_joints_) + " joints, " + num(duration_, 2) + " s.");
+      "Choreography '" + label + "': " + std::to_string(tracks_.size()) + " tracks, " +
+      std::to_string(num_joints_) + " joints, " + num(duration_, 2) + " s" +
+      (interruptible_ ? "." : ", not interruptible."));
   }
 
   void on_enter(const locomotion::RobotState & state) override {
@@ -253,6 +281,8 @@ public:
   }
 
   bool finished() const override {return finished_;}
+
+  bool interruptible() const override {return interruptible_;}
 
 private:
   struct TrackState {
@@ -351,6 +381,7 @@ private:
   double rate_hz_{0.0};
   double start_tolerance_{0.05};
   bool entry_velocity_{true};
+  bool interruptible_{true};  // 腳本頂層的 interruptible
 
   double time_{0.0};  // 進入模式後經過的時間
   bool finished_{false};

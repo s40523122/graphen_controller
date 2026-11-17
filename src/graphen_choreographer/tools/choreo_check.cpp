@@ -1,5 +1,5 @@
 // 離線檢查編舞腳本：列出各軌道的時間範圍、各 joint 的範圍與峰值速度、建議的 max_steps，
-// 有 URDF 時檢查限位，並可以把整份編舞取樣成 CSV。
+// 有 URDF 時檢查限位與姿態中的 joint 名稱，並可以把整份編舞取樣成 CSV。
 //
 //   choreo_check <腳本> [--urdf <展開後的 URDF>] [--rate <Hz>] [--velocity-scale <倍率>] [--csv <輸出>]
 //
@@ -118,6 +118,7 @@ void print_report(
   std::printf("Choreography: %s\n", options.file.c_str());
   std::printf("Duration: %.2f s, %zu tracks, %zu joints\n",
     choreography.duration(), choreography.tracks.size(), num_joints);
+  std::printf("Interruptible while playing: %s\n", choreography.interruptible ? "yes" : "no");
 
   const auto limit_text = [](const std::optional<double> & value) {
       char buffer[32];
@@ -247,13 +248,23 @@ int main(int argc, char ** argv) {
           summary.joint.c_str());
       }
     }
-    const auto violations =
+    auto violations =
       graphen::choreographer::check_limits(summaries, limits, options->velocity_scale);
+    // 姿態中沒有被任何軌道使用的 joint 也要是機器人上的 joint（打錯字時不會有其他檢查發現）
+    std::vector<std::string> urdf_joints;
+    for (const auto & entry : limits) {
+      urdf_joints.push_back(entry.first);
+    }
+    for (const auto & joint :
+      graphen::choreographer::unknown_pose_joints(choreography, urdf_joints))
+    {
+      violations.push_back("poses use joint '" + joint + "', which is not a joint of the URDF");
+    }
     if (violations.empty()) {
       std::printf("\nOK: all keyframes are within the joint limits.\n");
       return 0;
     }
-    std::printf("\n%zu limit violation(s):\n", violations.size());
+    std::printf("\n%zu violation(s):\n", violations.size());
     for (const auto & violation : violations) {
       std::printf("  - %s\n", violation.c_str());
     }

@@ -2,10 +2,10 @@
 
 graphen 的 ROS 2 控制工作區，分成兩層：
 
-- **控制層（ros2_control）**：上層的 `SwitchGroupController` 依目前的模式設定目標位置，由內部的 `LocomotionPlanner` 以固定頻率漸進產生目標，再寫給下層各群組的子群組 controller（chainable 的 `PositionController`；MuJoCo effort 模式為 `PdController`），最後由下層寫到硬體 command interface。
+- **控制層（ros2_control）**：上層的 `SwitchGroupController` 播放目前的動作（系統模式、編舞、BVH 或 policy），由內部的 `LocomotionPlanner` 以固定頻率漸進產生目標，再寫給下層各群組的子群組 controller（chainable 的 `PositionController`；MuJoCo effort 模式為 `PdController`），最後由下層寫到硬體 command interface。
 - **行為層（BehaviorTree.CPP v3）**：`bt_runner` 載入 XML 行為樹，並以 plugin 的形式載入自訂節點。
 
-兩層透過 `SwitchMode` action（切換模式）和 `~/states` topic（joint 狀態）連動。詳細設計見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+兩層透過播放類 action（`SwitchMode` 切換系統模式、`PlayChoreo` 播放編舞、`PlayBvh` 播放 BVH、`RunPolicy` 執行 policy）和 `~/states` topic（joint 狀態）連動。詳細設計見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 環境
 
@@ -23,12 +23,12 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 
 | 套件 | 類型 | 職責 | 依賴（工作區內） |
 |---|---|---|---|
-| [graphen_interfaces](src/graphen_interfaces/) | 介面定義 | `SwitchMode` action | — |
+| [graphen_interfaces](src/graphen_interfaces/) | 介面定義 | 播放類 action（`SwitchMode` / `PlayChoreo` / `PlayBvh` / `RunPolicy`）與共用的 `Playback*` msg、舞曲庫與預載的 service | — |
 | [graphen_control_utils](src/graphen_control_utils/) | header-only lib | 共用元件 `StateInterfacePublisher` | — |
 | [graphen_motion](src/graphen_motion/) | C++ lib（不依賴 rclcpp） | BVH 解析、BVH → URDF 1-DOF joint 轉換（`BvhRetargeter`）、`bvh_retarget_cli` | — |
-| [graphen_controllers](src/graphen_controllers/) | controller plugin | `SwitchGroupController`（含 `LocomotionPlanner` 與 `TargetMotion` / `BvhMotion`）、子群組 `PositionController` / `PdController` | graphen_control_utils、graphen_interfaces、graphen_motion |
-| [graphen_bringup](src/graphen_bringup/) | 資源 | controller 設定檔、CAN 設定、BVH 動作檔（`motions/`）與 launch | graphen_controllers、ti5_170a_graphen |
-| [graphen_bt_nodes](src/graphen_bt_nodes/) | BT plugin | 自訂 BT 節點（RateControl、IsOk、SysCount、SwitchMode…） | graphen_interfaces |
+| [graphen_controllers](src/graphen_controllers/) | controller plugin | `SwitchGroupController`（含 `LocomotionPlanner`、切換規則 `PlaybackArbiter`、內容來源 `ChoreoSource` / `BvhSource` / `PolicySource`）、子群組 `PositionController` / `PdController` | graphen_control_utils、graphen_interfaces、graphen_motion |
+| [graphen_bringup](src/graphen_bringup/) | 資源 | controller 設定檔、CAN 設定、BVH 與範例編舞（`motions/`）、launch、工具腳本（`choreo_publish`、`playback_scenarios`） | graphen_controllers、ti5_170a_graphen |
+| [graphen_bt_nodes](src/graphen_bt_nodes/) | BT plugin | 自訂 BT 節點（RateControl、IsOk、SysCount、播放節點 SwitchMode / PlayChoreo / PlayBvh / RunPolicy…） | graphen_interfaces |
 | [graphen_bt](src/graphen_bt/) | 執行檔 | `bt_runner`、tree XML、設定檔與 launch | graphen_bt_nodes（執行期載入） |
 | [imu16460_core](src/imu16460/imu16460_core/) | C++ lib（純 CMake，無 ROS） | IMU 協議、parser、serial、`Driver`、`imu16460_cli` | — |
 | [imu16460_hardware](src/imu16460/imu16460_hardware/) | hardware plugin | ros2_control `SensorInterface`，xacro macro | imu16460_core |
@@ -71,7 +71,7 @@ bringup 以 `hardware:=` 選擇硬體（預設 `mock`），以 `robot:=` 選擇�
 
 | 檔案 | 內容 |
 |---|---|
-| `config/controllers.yaml`（本機檔，範本 `.example`） | 與硬體無關：模式、switch 接線、BVH；本機自訂（例如子群組的 `output_enabled`） |
+| `config/controllers.yaml`（本機檔，範本 `.example`） | 與硬體無關：系統模式、switch 接線、編舞 / BVH / policy 的庫位置與上限；本機自訂（例如子群組的 `output_enabled`）。表演內容與 policy 的設定不在這裡 |
 | `config/hardware/position_common.yaml` | （`mock` / `mujoco` / `real`）`update_rate` 100、6 個 `PositionController` 子群組與介面接線 |
 | `config/hardware/pd_common.yaml` | （`mujoco_pd` / `real_pd`）`update_rate` 200、6 個 `PdController` 子群組與 switch 的速度前饋 / kp / kd 接線 |
 | `config/imu/common.yaml` | `imu_sensor_broadcaster`（所有硬體都啟動，發布 `/imu_sensor_broadcaster/imu`） |
@@ -95,7 +95,7 @@ launch 會在 log 印出這次載入的參數檔清單（`controller parameter f
 # joint_state_broadcaster、sensor_forwarder、6 個子群組與 switch_group_controller 都應該是 active
 ros2 control list_controllers
 
-# 啟動後不進入任何模式，所有 joint 保持初始位置（default_mode: ""）。
+# 啟動後不進入任何模式，所有 joint 保持初始位置（default_mode 與 default_policy 都是 ""）。
 # states 含 32 軸的 position / velocity 與 mock IMU（imu_sensor/*，初始為靜止水平：orientation.w = 1、
 # linear_acceleration.z = 9.81）
 ros2 topic echo --once /switch_group_controller/states
@@ -105,24 +105,36 @@ ros2 topic echo --once /switch_group_controller/states
 ros2 topic pub -t 3 -w 1 /sensor_forwarder/commands std_msgs/msg/Float64MultiArray \
   "{data: [0, 0, 0, 1,  0, 0, 0.5,  0, 0, 9.81]}"
 
-# 用 action 切換到 reverse 模式：result 附上切換當下的 state 快照，之後兩個手腕（L/R_WRIST_P）往 -1.5 移動，
+# 用 action 切換到系統模式 reverse：result 附上目前的 mode / item 與切換當下的 state 快照，之後兩個手腕（L/R_WRIST_P）往 -1.5 移動，
 # 其他 30 軸保持
 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: reverse}"
+
+# 所有播放類 action 的 goal 都有 options：on_same（0 = ignore 預設、1 = restart、2 = restart_if_finished）
+# 與 wait_until_finished（等動作播完才回傳）。例如等 forward 到達目標：
+ros2 action send_goal --feedback /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode \
+  "{mode: forward, options: {wait_until_finished: true}}"
 
 # 不在 modes 中的名稱會被 reject（topic 收到時則忽略並 WARN）
 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: unknown}"
 
-# 也可以用 topic 切換（QoS 必須相容）
+# 系統模式也可以用 topic 切換（QoS 必須相容；沒有回應，被拒絕時只有 controller 的 log）
 ros2 topic pub --once /switch_group_controller/mode std_msgs/msg/String "{data: forward}" \
   --qos-durability transient_local --qos-reliability reliable
 ros2 topic echo --once /left_arm_group_controller/references
+# 各關節的追蹤誤差：expected（送進硬體的 command，PD 時為插補後的 q*）/ actual（量測）/ error（expected − actual）
+ros2 topic echo --once /left_leg_group_controller/tracking
 
-# 播放 BVH 步態（walk 模式）：先以約 0.5 rad/s 走向第 0 幀，再即時播放 32 軸，到結尾後接回起點循環。
+# 播放 BVH 步態（play_bvh：BVH 目錄 bvh.library_path 中的 <name>.bvh）：先以約 0.5 rad/s 走向第 0 幀，
+# 再即時播放 32 軸，loop 時到結尾後接回起點循環。第一次播放要載入檔案（feedback 的 stage 為 0），之後使用快取。
 # planner 依檔案頻率（24 fps）送出原始幀，幀間插補由子群組依 sample_period 進行（約晚一幀）。
-# 已在 walk 時再送 walk 不會從頭播放；要重播請先切到其他模式
-ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: walk}"
+# 同一個檔案、同樣的選項再送一次不會從頭播放；要重播用 options: {on_same: 1}
+ros2 action send_goal --feedback /switch_group_controller/play_bvh graphen_interfaces/action/PlayBvh \
+  "{name: t170wk_walk1_subject1, loop: true}"
 
-# 外部演算法 plugin 的範例（sine 模式，graphen_locomotion/SineWaveAlgorithm）：NECK_Y 以進入時的位置為中心
+# 停止：切到 hold 類的系統模式。不論目前在播什麼（包括不可中斷的編舞）都有效
+ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: stop}"
+
+# 外部演算法 plugin 的範例（系統模式 sine，graphen_locomotion/SineWaveAlgorithm）：NECK_Y 以進入時的位置為中心
 # 擺動（±0.2 rad、0.25 Hz），controller 的 log 每秒印出演算法收到的量測角度 / 速度與 IMU
 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: sine}"
 
@@ -136,11 +148,11 @@ ros2 topic pub -r 10 -w 1 /switch_group_controller/cmd_vel geometry_msgs/msg/Twi
   "{linear: {x: 0.3, y: 0.0}, angular: {z: 0.2}}"
 ```
 
-> walk 是開環播放，沒有平衡控制；實機上只能在吊掛等安全條件下使用。
+> BVH 步態是開環播放，沒有平衡控制；實機上只能在吊掛等安全條件下使用。
 
 ### BVH 轉換檢查
 
-`bvh_retarget_cli` 把整段 BVH 轉成 CSV（time + 各 joint 角度，rad），並在 stderr 印出分組、每組最大殘差、各 joint 的範圍 / 限位 / 最大速度，用來檢查新的 BVH 或設定 `<mode>.max_steps`：
+`bvh_retarget_cli` 把整段 BVH 轉成 CSV（time + 各 joint 角度，rad），並在 stderr 印出分組、每組最大殘差、各 joint 的範圍 / 限位 / 最大速度，用來檢查新的 BVH 或設定 `bvh.max_steps`：
 
 ```bash
 xacro $(ros2 pkg prefix ti5_170a_graphen)/share/ti5_170a_graphen/urdf/ti5_170a_graphen.urdf.xacro > /tmp/t170.urdf
@@ -150,11 +162,11 @@ ros2 run graphen_motion bvh_retarget_cli \
 
 ### 編舞（組合動作）
 
-多個部位各自依自己的時間動作、時間可以重疊，寫成一份腳本（`graphen_bringup/motions/*.choreo.yaml`）、對應一個 `type: plugin` 的模式。腳本格式、檢查項目與限制見 [ARCHITECTURE §2.12](docs/ARCHITECTURE.md#212-編舞graphen_choreographer)。
+多個部位各自依自己的時間動作、時間可以重疊，寫成一份腳本（`*.choreo.yaml`）。腳本不寫在 `controllers.yaml` 裡：編輯在外部工具進行，可以直接帶內容**試播**，確定之後**發佈**到機器人端的舞曲庫，表演（BT）依名稱播放。腳本格式與給 UI 開發的介面說明見 [docs/CHOREOGRAPHER.md](docs/CHOREOGRAPHER.md)，設計見 [ARCHITECTURE §2.12](docs/ARCHITECTURE.md#212-編舞graphen_choreographer)。
 
-範例 `arm_demo`（右臂 0 ~ 3 s、左臂 1 ~ 5 s）與 `arm_demo_return`（回到下垂姿態）的模式設定在 `controllers.yaml.example`，要用時複製到本機的 `controllers.yaml`（`modes` 也要加上名稱）。
+需要 `controllers.yaml` 有 `choreo` 區塊（見 `controllers.yaml.example`：plugin、舞曲庫位置、所有編舞共用的上限）。範例腳本在 `graphen_bringup/motions/`：`arm_demo`（右臂 0 ~ 3 s、左臂 1 ~ 5 s，標示為不可中斷）與 `arm_demo_return`（回到下垂姿態）、`greeting_demo`（揮手、前伸、轉腰、轉頭點頭四條軌道重疊，約 11.5 s；第一個 keyframe 都不在 `t: 0`，從任何姿態都能播，適合在 MuJoCo 上查看，用法見檔案開頭的註解）。
 
-上機前先離線檢查腳本（範圍、限位、峰值速度、建議的 `max_steps`；`--csv` 可輸出取樣後的整份編舞）：
+離線檢查腳本（範圍、限位、峰值速度、建議的 `max_steps`、姿態中的 joint 名稱；`--csv` 可輸出取樣後的整份編舞）：
 
 ```bash
 xacro $(ros2 pkg prefix ti5_170a_graphen)/share/ti5_170a_graphen/urdf/ti5_170a_graphen.urdf.xacro > /tmp/t170.urdf
@@ -163,26 +175,52 @@ ros2 run graphen_choreographer choreo_check \
   --urdf /tmp/t170.urdf --csv /tmp/arm_demo.csv
 ```
 
-播放並等它播完（`wait_until_finished`；feedback 為進入模式後經過的秒數）。`arm_demo` 的第一個 keyframe 在 `t: 0`，必須從下垂姿態開始，否則不執行並 abort：
+發佈到舞曲庫（bringup 啟動之後；controller 會做和播放前相同的完整檢查，不通過就不寫入）：
 
 ```bash
-timeout 15 ros2 action send_goal --feedback /switch_group_controller/switch_mode \
-  graphen_interfaces/action/SwitchMode "{mode: arm_demo, wait_until_finished: true}"
-# 回到下垂姿態（從任何位置都可以）。on_same_mode：0 = ignore（預設）、1 = restart、2 = restart_if_finished
-timeout 15 ros2 action send_goal /switch_group_controller/switch_mode \
-  graphen_interfaces/action/SwitchMode "{mode: arm_demo_return, wait_until_finished: true, on_same_mode: 2}"
+MOTIONS=$(ros2 pkg prefix graphen_bringup)/share/graphen_bringup/motions
+ros2 run graphen_bringup choreo_publish arm_demo $MOTIONS/arm_demo.choreo.yaml
+ros2 run graphen_bringup choreo_publish arm_demo_return $MOTIONS/arm_demo_return.choreo.yaml
+ros2 run graphen_bringup choreo_publish --list          # 已發佈的名稱與內容的 sha256
+ros2 run graphen_bringup choreo_publish --get arm_demo  # 讀回內容
 ```
 
-- 等待中被其他模式取代（action 或 `~/mode`）時 goal 會 abort（`Preempted by mode [ X ]`）；Ctrl-C（cancel）只是不再等待，**動作會繼續執行**，要停下來請切到 `stop`。
-- 已經在同一個模式時：`on_same_mode: 0` 不重新開始；`1` 一律重播；`2` 播完才重播（播放中重複送出的指令被吃掉）。
-- 範例的 `arm_demo` 設了 `interruptible: false`：播放中切到其他模式或重播都會被拒絕（`success: false`），只有 `stop`（hold，預設 `preempt`）可以切入。
-- 播放途中切到另一個編舞模式時，新模式會從當下的速度平順地接上（`entry_velocity`），不會頓一下。
-- 用 BT 依序播放兩段並重複：
+依名稱播放並等它播完（feedback 的 `elapsed` 為開始播放後經過的秒數）。`arm_demo` 的第一個 keyframe 在 `t: 0`，必須從下垂姿態開始，所以先播 `arm_demo_return`（從任何位置都可以）：
+
+```bash
+timeout 15 ros2 action send_goal --feedback /switch_group_controller/play_choreo \
+  graphen_interfaces/action/PlayChoreo "{name: arm_demo_return, options: {wait_until_finished: true, on_same: 2}}"
+timeout 15 ros2 action send_goal --feedback /switch_group_controller/play_choreo \
+  graphen_interfaces/action/PlayChoreo "{name: arm_demo, options: {wait_until_finished: true}}"
+```
+
+- **試播**：把 `name` 換成 `content`（腳本的 YAML 字串），不存檔直接播放；檢查與發佈相同。這是給編輯工具用的，BT 只能依名稱播放。
+- 內容有誤、名稱沒有發佈時 goal 為 aborted，`message` 說明原因，機器人繼續原本的動作。
+- 等待中被其他播放取代（任何一個 action 或 `~/mode`）時 goal 會 abort（`Preempted by [ X ]`）；Ctrl-C（cancel）只是不再等待，**動作會繼續執行**，要停下來請切到 `stop`。
+- 已經在播同一段時：`on_same: 0` 不重新開始；`1` 一律重播；`2` 播完才重播（播放中重複送出的指令被吃掉）。重新發佈後的同名舞曲視為不同的內容，會直接切換。
+- `arm_demo` 的腳本寫了 `interruptible: false`：播放中其他播放或重播都會被拒絕（`success: false`），只有 `stop`（hold，預設 `preempt`）可以切入。
+- 播放途中切到另一段編舞時，新的一段會從當下的速度平順地接上（`entry_velocity`），不會頓一下。
+- 用 BT 依序播放兩段並重複（先發佈上面兩段）：
 
   ```bash
   ros2 launch graphen_bt bt.launch.py \
     tree_file:=$(ros2 pkg prefix graphen_bt)/share/graphen_bt/trees/choreo_demo.xml
   ```
+
+### 播放介面的情境回歸
+
+`playback_scenarios` 對著已啟動的 bringup 送出一連串指令並比對回應，涵蓋四個播放入口、舞曲庫的 service 與切換規則（`on_same`、不可中斷、stop 搶占、互相取代），每一項印出 PASS / FAIL。**會讓機器人動作，只在 mock 或 MuJoCo 上執行。** 它會發佈名稱以 `scn_` 開頭的測試舞曲，建議用 `scenario_params` 把舞曲庫指到暫存目錄：
+
+```bash
+printf 'switch_group_controller:\n  ros__parameters:\n    choreo:\n      library_path: /tmp/choreo_test_library\n' \
+  > /tmp/playback_test.yaml
+ros2 launch graphen_bringup bringup.launch.py scenario_params:=/tmp/playback_test.yaml
+# 另一個終端機
+ros2 run graphen_bringup playback_scenarios                   # 全部；沒有啟用的類型自動略過
+ros2 run graphen_bringup playback_scenarios --only choreo     # switch_mode / choreo / bvh / policy / cross
+```
+
+修改腳本（`scripts/*.py`）之後要重新建置 `graphen_bringup` 才會生效。
 
 ### 行為層
 
@@ -212,7 +250,7 @@ ros2 launch graphen_bt bt.launch.py \
   tree_file:=$(ros2 pkg prefix graphen_bt)/share/graphen_bt/trees/joint_reciprocate.xml
 ```
 
-tree 依目前方向分成 `Forward` / `Reverse` 兩個分支，跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向。用 Groot v1 連線可以看到目前亮著的分支和換向的瞬間；log 會每隔約 4 秒交替印出 `SwitchMode: switched to mode [ forward ]` / `[ reverse ]`，`/switch_group_controller/states` 中的 L_WRIST_P 會在約 ±1.0 之間往返。門檻在 tree XML 中修改（必須落在兩個模式的目標 ±1.5 之間）。
+tree 依目前方向分成 `Forward` / `Reverse` 兩個分支，跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向。用 Groot v1 連線可以看到目前亮著的分支和換向的瞬間；log 會每隔約 4 秒交替印出 `SwitchMode: switched to [ forward ]` / `[ reverse ]`，`/switch_group_controller/states` 中的 L_WRIST_P 會在約 ±1.0 之間往返。門檻在 tree XML 中修改（必須落在兩個模式的目標 ±1.5 之間）。
 
 模式可在執行中用 rqt_reconfigure 或 `ros2 param set` 切換（walk 優先，兩個都 false 時切到 `stop` 停在目前位置）：
 
@@ -266,11 +304,11 @@ colcon build --symlink-install --packages-select graphen_mujoco   # 裝在其他
 
 | `robot` | URDF 本體 | MJCF | 可用的 hardware | 說明 |
 |---|---|---|---|---|
-| `ti5_t170` | `ti5_t170_description`（+ 靈巧手） | `ti5_t170_description/mjcf/ti5_t170.xml`（T170-V2.1-A0 T-pose，tc_new_025 的訓練模型） | 全部（MuJoCo 只有 `mujoco_pd`） | mesh 用相對路徑，WSL 也能跑；頸部是真正的關節；初始基座高度 1.07 m |
+| `ti5_t170` | `ti5_t170_description`（+ 靈巧手） | `ti5_t170_description/mjcf/ti5_t170.xml`（T170-V2.1-A0 T-pose，tc_new_025 的訓練模型） | 全部（MuJoCo 只有 `mujoco_pd`） | mesh 用相對路徑，WSL 也能跑；頸部是真正的關節；初始基座高度 1.000 m（直膝；MJCF 的 keyframe 為屈膝的 0.985 m） |
 | `ti5_170a`（預設） | `ti5_170a_graphen` 的 `robot.urdf.xacro` | `ti5_170a_graphen/mjcf/ti5_170a.xml`（由 URDF 產生，手固定、armature 借用 ti5_t170） | 全部（MuJoCo 只有 `mujoco_pd`） | 質量分布可疑（`WAIST_R_S` 49 kg、本體 93.7 kg），模擬不代表實機；初始基座高度 0.899 m |
 | `fb70` | `ti5_170a_graphen` 的 `robot.urdf.xacro` | `fb70_description/mjcf/t170_{free,fixed}.xml`（FullBodyT70 匯出，wtz 的訓練模型） | 全部 | mesh 指向 Orin 上的 `/devtest/FullBodyT70/...`，只能在 Orin 上載入 |
 
-policy 只在自己的訓練模型上才站得穩，模型與 policy 要對應（`rl_flat` / `tc_flat_policy*` 的訓練模型 t170a 已移出工作區，目前沒有對應的模擬模型）。各模型的浮動基座初始高度不同（訓練初始姿態下腳底貼地），由 launch 依 `robot` 帶入 MujocoSystem 的 `initial_base_height`。
+policy 只在自己的訓練模型上才站得穩，模型與 policy 要對應（`rl_flat` / `tc_flat_policy*` 的訓練模型 t170a 已移出工作區，目前沒有對應的模擬模型）。各模型的浮動基座初始高度不同（直膝下腳底離地 5 mm），由 launch 依 `robot` 帶入 MujocoSystem 的 `initial_base_height`。
 
 `mujoco_fixed_base:=true`（預設）時基座固定在空中，相當於吊掛：fb70 改用 `t170_fixed.xml`，ti5_170a / ti5_t170 每步把基座重設回初始位姿。`false` 時為自由站立。
 
@@ -281,36 +319,43 @@ ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd robot:=fb70 mu
 # ti5_t170（任何機器）
 ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_fixed_base:=true
 
-# 主機上另開視窗（只顯示，不需要 ROS；視窗內按 End 重置模擬）。模型要與 launch 一致
-bash src/graphen_mujoco/tools/mujoco_viewer.sh                                  # fb70 自由站立
+# 主機上另開視窗（只顯示，不需要 ROS；視窗內按 End 重置模擬）。不指定 --model 時向 MujocoSystem 查詢
+# 它載入的 MJCF（先開 viewer 會等到 bringup 啟動）；bringup 在容器內、路徑在主機上不存在時要自己指定
+bash src/graphen_mujoco/tools/mujoco_viewer.sh                                  # 模型跟著 bringup
 bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/fb70/mjcf/t170_fixed.xml" # fb70 吊掛
 bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/ti5_t170_description/mjcf/ti5_t170.xml"  # sim_rl 預設
 
-# 切到 policy：進入時會先以 entry_speed 走到 policy 的預設姿態，再開始推論
-ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: rl_walk}"
+# 執行 policy（run_policy：policy 庫中的 <name>.policy.yaml）：第一次要載入（建立 ONNX session），
+# 進入時會先以 entry_speed 走到 policy 的預設姿態，再開始推論
+ros2 action send_goal --feedback /switch_group_controller/run_policy graphen_interfaces/action/RunPolicy "{name: rl_walk}"
+
+# 表演前可以先把要用的 policy / BVH 載入快取，之後第一次播放就沒有載入延遲
+ros2 service call /switch_group_controller/preload graphen_interfaces/srv/Preload "{mode: policy, items: [rl_walk]}"
 
 # 速度指令（vx、vy m/s，wz rad/s）；停止發布 0.5 s 後回到原地站立
 ros2 topic pub -r 20 /switch_group_controller/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5}}"
 ```
 
 - `mujoco_pd` 下，所有子群組都啟動之前物理是暫停的，controller 啟動前不會倒下。
-- **自由站立測 RL policy 要用 `sim_rl.launch.py`**：PD 只保持姿態、沒有平衡能力，`bringup.launch.py` 自由站立啟動後幾秒內就會倒下（姿態約 90°），之後才切到 RL 模式已經來不及。`sim_rl.launch.py` 會在最後疊加一份情境參數（`default_mode` 設為 `mode`、該模式的 `entry_speed` 設為 0），讓 policy 從模擬開始就接手；本機 `controllers.yaml` 不用改，但 `mode` 必須已經定義在其中：
+- **自由站立測 RL policy 要用 `sim_rl.launch.py`**：PD 只保持姿態、沒有平衡能力，`bringup.launch.py` 自由站立啟動後幾秒內就會倒下（姿態約 90°），之後才切到 RL 模式已經來不及。`sim_rl.launch.py` 會在最後疊加一份情境參數（`default_policy` 設為 `policy`、以 `<policy>.entry_speed: 0` 覆寫設定檔的值），讓 policy 從模擬開始就接手；本機 `controllers.yaml` 不用改，policy 必須在 policy 庫中：
 
   ```bash
   ros2 launch graphen_bringup sim_rl.launch.py                        # ti5_170a + rl_flat（預設）
-  ros2 launch graphen_bringup sim_rl.launch.py mode:=rl_walk robot:=fb70   # Orin
+  ros2 launch graphen_bringup sim_rl.launch.py policy:=rl_walk robot:=fb70   # Orin
+  ros2 launch graphen_bringup sim_rl.launch.py policy:=tc_new_nowave_land_2        # 指定另一個 policy 設定檔
   ```
-- `controllers.yaml.example` 有兩個 RL 模式（本機的 `controllers.yaml` 要使用時，從範本複製並加到 `modes`）：
+- policy 的設定不在 `controllers.yaml`：每個 policy 是 policy 庫（`policy.library_path`，預設 `graphen_rl_policy/policy/`）中的一個 `<名稱>.policy.yaml`，和 onnx 放在一起，以檔名選擇。要調整某個 policy 的單一設定時，在 `controllers.yaml` 寫 `<policy 名稱>.<鍵>`（會覆寫檔案中的同名鍵）。目前有：
   - `rl_walk`：`T170VelocityPolicy` + `policy/wtz_policy.onnx`，用 fb70 訓練。實測（fb70、position、自由站立）：能穩定站立；vx=0.5 時實際約 0.23 m/s，這是 policy 本身的表現（直接跑 `play_mujoco.py` 也約 0.25 m/s）。
+  - `tc_new_nowave_land_2`：`Ti5FlatPolicy` + `policy/tc_new_nowave_land_2.onnx`，PD 增益為 t170a 參數表的值（由原本本機 `controllers.yaml` 的 `rl_flat` 搬過來）。
   - `rl_flat`：`Ti5FlatPolicy` + `policy/tc_flat_policy.onnx`，用 t170a 訓練（t170a 模型已移出工作區）。當時的實測（t170a、`mujoco_pd`、自由站立、WSL）：能穩定站立（傾斜約 2.5°）；vx=0.5 時能邁步、不會倒下。關節順序與 obs 組法是推斷的，**仍待訓練端確認**。
 - ti5_170a 的 MJCF 由 URDF 產生，URDF 或 mesh 更新後重新產生，並把印出的基座高度同步到 `bringup.launch.py` 的 `robots['ti5_170a']`：
   `python3 src/robot_description/ti5_170a_graphen/scripts/make_mjcf.py`
 - ti5_t170 的 MJCF 由 CAD 匯出的 T-pose 檔產生（補上 timestep、armature、ctrlrange、IMU、碰撞設定與 keyframe）；原檔或 `param.csv` 更新後重新產生：
-  `python3 src/robot_description/ti5_t170_description/scripts/make_mjcf.py --base-height 1.07`
+  `python3 src/robot_description/ti5_t170_description/scripts/make_mjcf.py --base-height 0.985`
 - fb70 的 MJCF 由 FullBodyT70 的訓練場景匯出，重新訓練或修改場景後要重新產生（需要主機的 `~/learnWalk_env`）：
   `~/learnWalk_env/bin/python src/graphen_mujoco/tools/export_mjcf.py`
-- **onnx 與設定綁定**：每個 RL 模式以 `model_sha256` 綁定 onnx，不符時 controller configure 失敗。
-  - **同一套訓練設定重新訓練**：放入新的 onnx，更新 `model_path`、`model_sha256`（`sha256sum <onnx>`）與改變的常數，不需要修改程式。
+- **onnx 與設定綁定**：每個 policy 設定檔以 `model_sha256` 綁定 onnx，不符時載入失敗（`run_policy` 的 goal 為 aborted；`default_policy` 則是 controller configure 失敗）。
+  - **同一套訓練設定重新訓練**：放入新的 onnx，複製一份 `<名稱>.policy.yaml`，更新 `model_path`、`model_sha256`（`sha256sum <onnx>`）與改變的常數，不需要修改程式。
   - **obs / action 組法不同**：要新增 policy plugin（見 [ARCHITECTURE §5](docs/ARCHITECTURE.md#5-擴充指引)）。
 - **ONNX Runtime**：`graphen_rl_policy` 需要 `third_party/onnxruntime`（1.31.0，不進版控）。Orin 使用 aarch64 版（取自 FullBodyT70/cpp_interface），x86_64 開發機使用 GitHub release 的 `onnxruntime-linux-x64-1.31.0.tgz`。
 - **RL policy 只在 MuJoCo 驗證過**，不要在實機上使用（見 [ARCHITECTURE §2.11](docs/ARCHITECTURE.md#211-rl-policy-plugingraphen_rl_policy)）。實機的對應是 `hardware:=real_pd`（尚未驗證）。

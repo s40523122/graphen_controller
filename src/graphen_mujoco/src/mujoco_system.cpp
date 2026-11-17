@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -40,6 +41,9 @@ constexpr std::array<const char *, 11> kImuStateNames{
 constexpr int kMaxStepsPerCycle = 20;
 constexpr int kWarnThrottleMs = 2000;
 constexpr const char * kResetCommand = "reset";
+// viewer 查詢載入的 MJCF：回覆 kModelReplyPrefix + 絕對路徑
+constexpr const char * kModelQuery = "model?";
+constexpr const char * kModelReplyPrefix = "model ";
 
 std::string get_param(
   const std::unordered_map<std::string, std::string> & params, const std::string & key,
@@ -131,6 +135,10 @@ CallbackReturn MujocoSystem::on_init(const hardware_interface::HardwareInfo & in
   if (!load_model(model_path)) {
     return CallbackReturn::ERROR;
   }
+  // 回覆 viewer 用的字串在這裡先組好，RT 的 read() 只送出、不配置記憶體
+  std::error_code ec;
+  const auto absolute_path = std::filesystem::absolute(model_path, ec);
+  model_reply_ = kModelReplyPrefix + (ec ? model_path : absolute_path.string());
 
   // joint：依名稱對應模型的 joint 與同名致動器
   joints_.resize(info_.joints.size());
@@ -531,12 +539,21 @@ void MujocoSystem::send_viewer_frame() {
 void MujocoSystem::poll_viewer_commands() {
   char buffer[64];
   ssize_t n;
-  while ((n = ::recv(socket_fd_, buffer, sizeof(buffer) - 1, 0)) > 0) {
+  sockaddr_in sender{};
+  socklen_t sender_size = sizeof(sender);
+  while ((n = ::recvfrom(socket_fd_, buffer, sizeof(buffer) - 1, 0,
+    reinterpret_cast<sockaddr *>(&sender), &sender_size)) > 0)
+  {
     buffer[n] = '\0';
     if (std::strncmp(buffer, kResetCommand, std::strlen(kResetCommand)) == 0) {
       RCLCPP_INFO(logger_, "Reset requested by viewer.");
       reset_simulation();
+    } else if (std::strncmp(buffer, kModelQuery, std::strlen(kModelQuery)) == 0) {
+      // 回給發問的位址；viewer 以此載入同一份 MJCF，不必另外指定。送出失敗時 viewer 會再問
+      ::sendto(socket_fd_, model_reply_.data(), model_reply_.size(), 0,
+        reinterpret_cast<sockaddr *>(&sender), sender_size);
     }
+    sender_size = sizeof(sender);
   }
 }
 

@@ -12,6 +12,7 @@ controller_interface::CallbackReturn PositionController::on_init() {
     auto_declare<std::vector<std::string>>("input_interfaces", std::vector<std::string>{});
     auto_declare<std::vector<std::string>>("output_interfaces", std::vector<std::string>{});
     auto_declare<double>("reference_publish_rate", 50.0);
+    auto_declare<double>("tracking_publish_rate", 50.0);
     auto_declare<bool>("output_enabled", true);
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception caught during init: %s", e.what());
@@ -78,6 +79,16 @@ controller_interface::CallbackReturn PositionController::on_configure(
     get_node(), "~/references", reference_names,
     get_node()->get_parameter("reference_publish_rate").as_double());
 
+  // 追蹤誤差：通道名稱即 output 全名（例如 L_KNEE_P/position），
+  // 同一關節有多個 output 時也不會重名。關閉時不建立，state_interface_configuration 也不讀取
+  const double tracking_rate = get_node()->get_parameter("tracking_publish_rate").as_double();
+  if (tracking_rate > 0.0) {
+    tracking_publisher_ = std::make_unique<TrackingPublisher>(
+      get_node(), "~/tracking", output_interfaces_, tracking_rate);
+  } else {
+    tracking_publisher_.reset();
+  }
+
   RCLCPP_INFO(get_node()->get_logger(), "[%s] Configured successfully.", get_node()->get_name());
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -108,11 +119,17 @@ PositionController::command_interface_configuration() const {
   return config;
 }
 
-// 不需要讀取任何 state interface
+// 只有追蹤誤差需要量測值：讀取與各 output 同名的 state interface，順序與 output 相同。
+// 控制本身不使用 state，關閉追蹤時不讀取，對沒有對應 state 的硬體也能啟動
 controller_interface::InterfaceConfiguration
 PositionController::state_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
-  config.type = controller_interface::interface_configuration_type::NONE;
+  if (tracking_publisher_) {
+    config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
+    config.names = output_interfaces_;
+  } else {
+    config.type = controller_interface::interface_configuration_type::NONE;
+  }
   return config;
 }
 
@@ -156,23 +173,30 @@ controller_interface::return_type PositionController::update_and_write_commands(
   reference_publisher_->publish(reference_interfaces_, time, period);
 
   // 停用輸出：reference 仍照常發布供觀察，但不寫 command，硬體保留最後的值
-  if (!output_enabled_) {
-    return controller_interface::return_type::OK;
+  if (output_enabled_) {
+    const size_t num_inputs = input_interfaces_.size();
+    const double sample_period =
+      LinearInterpolator::sanitize_sample_period(reference_interfaces_[num_inputs]);
+    const double dt = period.seconds();
+
+    for (size_t i = 0; i < command_interfaces_.size() && i < interpolators_.size(); ++i) {
+      // 1 個 input 時廣播，否則 1:1
+      const double reference = reference_interfaces_[num_inputs == 1 ? 0 : i];
+      // 上層尚未寫入（NaN）時不輸出，避免把 NaN 寫進硬體
+      if (std::isnan(reference)) {
+        continue;
+      }
+      command_interfaces_[i].set_value(interpolators_[i].step(reference, sample_period, dt));
+    }
   }
 
-  const size_t num_inputs = input_interfaces_.size();
-  const double sample_period =
-    LinearInterpolator::sanitize_sample_period(reference_interfaces_[num_inputs]);
-  const double dt = period.seconds();
-
-  for (size_t i = 0; i < command_interfaces_.size() && i < interpolators_.size(); ++i) {
-    // 1 個 input 時廣播，否則 1:1
-    const double reference = reference_interfaces_[num_inputs == 1 ? 0 : i];
-    // 上層尚未寫入（NaN）時不輸出，避免把 NaN 寫進硬體
-    if (std::isnan(reference)) {
-      continue;
+  // 預期值取寫入後的 command（插補後、硬體實際收到的值），與同一週期讀到的量測值比較
+  if (tracking_publisher_) {
+    for (size_t i = 0; i < command_interfaces_.size() && i < state_interfaces_.size(); ++i) {
+      tracking_publisher_->set(
+        i, command_interfaces_[i].get_value(), state_interfaces_[i].get_value());
     }
-    command_interfaces_[i].set_value(interpolators_[i].step(reference, sample_period, dt));
+    tracking_publisher_->publish(time, period);
   }
 
   return controller_interface::return_type::OK;

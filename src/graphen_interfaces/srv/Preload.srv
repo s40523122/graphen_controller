@@ -1,0 +1,7 @@
+# 事先載入內容到快取，避免第一次播放時的載入延遲（例如表演開始前）。
+# 編舞每次播放都會重新讀取與檢查（很快），不需要也不支援預載
+string mode      # bvh 或 policy
+string[] items   # 項目名稱
+---
+bool success          # 全部成功才為 true
+string[] messages     # 與 items 一一對應：空字串表示成功，否則為失敗原因

@@ -2,11 +2,13 @@
 
 自由站立時，PD 只保持姿態、沒有平衡能力，啟動後幾秒內就會倒下，之後才切到 RL 模式已經來不及
 （policy 沒有學過從倒地起身）。這個 launch 以 bringup.launch.py 啟動 MuJoCo，並在最後疊加一份
-情境參數：default_mode 設為 mode、該模式的 entry_speed 設為 0（不先插補到預設姿態，直接推論）。
-本機的 controllers.yaml 不需要修改，但 mode 必須已經定義在其中（modes 與該模式的參數）。
+情境參數：default_policy 設為 policy（configure 時就載入，activate 時直接進入）、
+該 policy 的 entry_speed 覆寫為 0（不先插補到預設姿態，直接推論）。
+本機的 controllers.yaml 不需要修改；policy 必須在 policy 庫中（<名稱>.policy.yaml，
+預設為 graphen_rl_policy/policy），而且 controllers.yaml 要設定 policy.library_path。
 
   ros2 launch graphen_bringup sim_rl.launch.py                       # ti5_170a + rl_flat
-  ros2 launch graphen_bringup sim_rl.launch.py mode:=rl_walk robot:=fb70
+  ros2 launch graphen_bringup sim_rl.launch.py policy:=rl_walk robot:=fb70
 """
 import os
 import tempfile
@@ -22,15 +24,16 @@ def generate_launch_description():
     bringup_launch = os.path.join(
         get_package_share_directory('graphen_bringup'), 'launch', 'bringup.launch.py')
 
-    mode = LaunchConfiguration('mode')
+    policy = LaunchConfiguration('policy')
     hardware = LaunchConfiguration('hardware')
     robot = LaunchConfiguration('robot')
     mujoco_viewer_port = LaunchConfiguration('mujoco_viewer_port')
 
     declare_args = [
         DeclareLaunchArgument(
-            'mode', default_value='rl_flat',
-            description='Mode entered at startup (must be defined in controllers.yaml)'),
+            'policy', default_value='rl_flat',
+            description='Policy run from startup: <name>.policy.yaml in the policy library '
+                        '(policy.library_path, graphen_rl_policy/policy by default)'),
         DeclareLaunchArgument(
             'hardware', default_value='mujoco_pd', choices=['mujoco', 'mujoco_pd'],
             description='MuJoCo control: position actuators or torque actuators + PdController'),
@@ -44,15 +47,15 @@ def generate_launch_description():
     ]
 
     def include_bringup(context):
-        mode_name = mode.perform(context)
-        # 情境參數：一開始就進入 mode，且不先插補到預設姿態（entry_speed 只有 RL policy 模式會讀取）
+        policy_name = policy.perform(context)
+        # 情境參數：一開始就執行 policy，且不先插補到預設姿態（<policy>.entry_speed 覆寫設定檔的值）
         scenario = tempfile.NamedTemporaryFile(
             'w', prefix='sim_rl_', suffix='.yaml', delete=False)
         scenario.write(
             'switch_group_controller:\n'
             '  ros__parameters:\n'
-            f'    default_mode: {mode_name}\n'
-            f'    {mode_name}:\n'
+            f'    default_policy: {policy_name}\n'
+            f'    {policy_name}:\n'
             '      entry_speed: 0.0\n')
         scenario.close()
         return [IncludeLaunchDescription(

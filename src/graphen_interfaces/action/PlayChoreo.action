@@ -1,0 +1,12 @@
+# 播放一段編舞（graphen_choreographer 的腳本）。name 與 content 擇一：
+#   name     機器人端舞曲庫中已發佈的名稱（PublishChoreo），表演與 BT 使用
+#   content  腳本的 YAML 內容，直接試播、不存檔，給編輯工具使用
+# 播放前會完整檢查（格式、限位、速度、max_steps），不通過時不切換、result.message 說明原因。
+# 不可中斷由腳本頂層的 interruptible 決定
+string name
+string content
+PlaybackOptions options
+---
+PlaybackResult result
+---
+PlaybackFeedback feedback

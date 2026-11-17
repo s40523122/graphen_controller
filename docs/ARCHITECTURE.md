@@ -60,7 +60,7 @@ graph LR
   bt -.->|runtime 載入| btnodes
 ```
 
-實線為編譯期依賴，虛線為執行期依賴。兩層在執行期透過 `switch_group_controller` 的 `~/switch_mode` action 與 `~/states` topic 連動（見 [§3.5](#35-與控制層的連動)）。
+實線為編譯期依賴，虛線為執行期依賴。兩層在執行期透過 `switch_group_controller` 的播放類 action（`~/switch_mode`、`~/play_choreo`、`~/play_bvh`、`~/run_policy`）與 `~/states` topic 連動（見 [§3.5](#35-與控制層的連動)）。
 
 ### 1.2 模組化原則
 
@@ -88,11 +88,11 @@ graph LR
 
 ```mermaid
 graph LR
-  bt[bt_runner] -->|"~/switch_mode (action)"| sw[switch_group_controller<br/>SwitchGroupController]
+  bt[bt_runner] -->|"~/switch_mode、~/play_choreo、<br/>~/play_bvh、~/run_policy (action)"| sw[switch_group_controller<br/>SwitchGroupController]
   mode[/"~/mode (String)"/] --> sw
-  sw <-->|模式的 Motion / 量測狀態 / 最新位置目標| planner[LocomotionPlanner<br/>non-RT thread<br/>TargetMotion / BvhMotion / PluginMotion]
-  algo[/外部演算法 plugin<br/>LocomotionAlgorithm/] -.->|on_configure 載入| planner
-  bvh[/BVH 檔 + robot_description/] -.->|on_configure 解析| planner
+  sw <-->|目前的 Motion / 量測狀態 / 最新位置目標| planner[LocomotionPlanner<br/>non-RT thread<br/>TargetMotion / BvhMotion / PluginMotion]
+  algo[/演算法 plugin（LocomotionAlgorithm）<br/>系統模式 / 編舞 / policy/] -.->|configure 或播放時建立| planner
+  lib[/舞曲庫、BVH 目錄、policy 庫/] -.->|播放時載入（non-RT）| planner
   sw -->|"~/states"| bt
   sw -->|"&lt;group&gt;_group_controller/&lt;joint&gt;（32 個）<br/>+ &lt;group&gt;_group_controller/sample_period"| subs[6 個子群組 controller<br/>PositionController（或 PdController）<br/>left/right_arm、waist、head、left/right_leg]
   subs -->|"&lt;joint&gt;/position（32 個）"| hw[(T170 本體 UpperBody<br/>mock 或 Ti5Hardware)]
@@ -135,71 +135,161 @@ graph LR
 3. 把量測的關節角度（`target_state_interfaces`）、速度（`velocity_state_interfaces`）、IMU（`imu_sensor_name`）以 `TryLockBuffer<RobotState>` 交給 planner（拿不到 lock 就跳過這一次，不阻塞）。planner thread 讀取後補上 `~/cmd_vel` 的速度指令，並執行機身狀態估測器（見 [§2.9](#29-外部演算法介面graphen_locomotion)）。
 4. 從 `target_buffer_` 讀取 `LocomotionPlanner` 的最新輸出，位置寫到 `command_interfaces`，`sample_period` 寫到 `sample_period_interfaces`。
 
-模式（來自 `~/mode` topic 或 `~/switch_mode` action）只決定 planner 要播放哪一個 **Motion**；實際輸出由 planner 在 non-RT thread 中產生（見 [§2.4](#24-locomotionplanner)）。controller 本身不包含任何特定模式（例如 forward/reverse）的邏輯。
+同一時間 planner 只播放一個 **Motion**；實際輸出由 planner 在 non-RT thread 中產生（見 [§2.4](#24-locomotionplanner)）。controller 本身只做接線，不包含任何特定動作的邏輯。
 
-**模式對照表**
-- 模式以**名稱**識別。`modes` 列出可用的名稱，每個名稱同時是該模式參數的前綴。`<mode>.type` 決定 Motion 的種類：
+**四種入口：模式 = 類型**
+
+「播什麼」依類型分成四種，各有自己的 action 和 BT 節點。不再有 `walk`、`arm_demo` 這種把內容寫死的具名模式：類型決定入口，內容由指令指定的項目（檔案）決定。
+
+| 模式（類型） | 入口 | 播放的東西 | 來源元件 | 何時載入 |
+|---|---|---|---|---|
+| 系統模式 | `~/switch_mode`、`~/mode` topic | `modes` 列出的具名模式：`target` / `hold` / `plugin` | controller 本身 | configure |
+| `choreo` | `~/play_choreo` | 編舞腳本：舞曲庫中已發佈的名稱，或直接帶內容試播 | `ChoreoSource` | 每次播放 |
+| `bvh` | `~/play_bvh` | BVH 目錄中的 `<name>.bvh` | `BvhSource` | 第一次播放或預載（之後快取） |
+| `policy` | `~/run_policy` | policy 庫中的 `<name>.policy.yaml` | `PolicySource` | 第一次執行或預載（之後快取） |
+
+- 系統模式留給「機器人本身的狀態」：停止（`hold`）、固定姿態（`target`）、通用的演算法 plugin（例如範例 `sine`）。停止走這條路，因為它不需要載入任何東西、不會因為內容有誤而失敗。
+- `choreo`、`bvh`、`policy` 是保留名稱，系統模式不能使用。
+- 四個 action 的 goal 都有 `PlaybackOptions options`（`on_same`、`wait_until_finished`），result 都是 `PlaybackResult`（`success`、`message`、目前的 `mode` / `item`、state 快照），feedback 都是 `PlaybackFeedback`（`stage`、`elapsed`）。共通的語意只定義一次（`graphen_interfaces/msg/Playback*.msg`），各 action 只加自己的 goal 欄位。
+
+**角色分工：設定、能力、內容分開**
+
+| 性質 | 內容 | 放在哪裡 | 由誰管理 |
+|---|---|---|---|
+| 硬體與安全 | 介面接線、`planner_max_steps`、各類型的上限（`choreo.*`、`bvh.*`） | `controllers.yaml`、`hardware/*.yaml` | 控制工程師 |
+| 系統模式 | `target`、`hold`、通用 plugin | `controllers.yaml` 的 `modes` | 控制工程師 |
+| 機器人能力 | RL policy（onnx + 訓練常數 + sha） | policy 庫（`graphen_rl_policy/policy/*.policy.yaml`），跟著程式碼版控，唯讀 | 控制 / 訓練 |
+| 表演內容 | 編舞 | 舞曲庫（機器人端的資料目錄），以 service 發佈 | 編輯工具（UI） |
+| 表演內容 | BVH | BVH 目錄，手動放檔案 | 內容製作者 |
+
+- **安全上限分層**：UI 管理的內容（編舞、BVH）不能放寬機器人端的上限。`max_steps`、`velocity_limit_scale`、`start_tolerance`、`entry_velocity` 只從 controller 的 `choreo.*` / `bvh.*` 讀取，腳本和 goal 裡沒有對應的欄位。policy 庫由控制端管理、跟著程式碼版控，檔案裡的 `max_steps`、PD 增益直接採用。
+- **播放紀錄**：每次切換都 log 一行類型、項目與內容的版本，例如 `Change to [ choreo:show_1 ], published, sha256 5e32a6b4e584`，事後可以對出播的是哪個版本。
+
+**元件**
+
+| 元件 | 原始碼 | 職責 |
+|---|---|---|
+| `PlaybackArbiter` | [playback_arbiter.hpp](../src/graphen_controllers/include/graphen_controllers/playback_arbiter.hpp) | 切換規則：`on_same`、不可中斷、`preempt`、序號。所有入口都把 `PlaybackRequest` 交給它 |
+| `PlaybackServer<ActionT>` | [playback_server.hpp](../src/graphen_controllers/include/graphen_controllers/playback_server.hpp) | 播放類 action 的共同行為：接受 / 拒絕、載入中的 feedback、等待播完、cancel。四個 action 各一個實例 |
+| `ChoreoSource` | [choreo_source.hpp](../src/graphen_controllers/include/graphen_controllers/choreo_source.hpp) | 舞曲庫（讀、發佈、列出）與編舞的 Motion |
+| `BvhSource` | [bvh_source.hpp](../src/graphen_controllers/include/graphen_controllers/bvh_source.hpp) | BVH 目錄、clip / retargeter 的快取、`BvhMotion` |
+| `PolicySource` | [policy_source.hpp](../src/graphen_controllers/include/graphen_controllers/policy_source.hpp) | policy 庫、已載入 policy 的快取 |
+| `PluginFactory` | [plugin_factory.hpp](../src/graphen_controllers/include/graphen_controllers/plugin_factory.hpp) | 建立並 configure `LocomotionAlgorithm` plugin（系統模式、編舞、policy 共用），持有 pluginlib 的 loader |
+| 參數來源 | [parameter_sources.hpp](../src/graphen_controllers/include/graphen_controllers/parameter_sources.hpp) | `ParameterSource` 的實作：controller 參數、YAML 檔、多層疊加 |
+
+三個來源的形式相同：`prepare(...)` 回傳 `PlaybackRequest`（Motion、`mode`、`item`、判斷「同一個」的 `identity`、是否可中斷），失敗時丟出帶訊息的例外，訊息直接成為 action result 的 `message`。新增一種類型時，加一個來源、一個 action 定義和一個 `PlaybackServer` 的實例，切換規則不用改。
+
+**Thread 歸屬**
+
+| Thread | 做什麼 | 不做什麼 |
+|---|---|---|
+| RT（`update()`） | 讀取 planner 的最新輸出、寫入介面、更新 state | 不碰任何內容庫、不建立或釋放 Motion |
+| planner（non-RT，`planner_rate`） | Motion 的 `on_enter` / `update`、進入時的檢查 | 不讀檔、不建立 plugin |
+| 播放用的 callback group（executor，non-RT） | 會載入內容的 action（`~/play_choreo`、`~/play_bvh`、`~/run_policy`）與所有 service：讀檔、解析、建立 plugin 與 ONNX session，然後送交 arbiter | — |
+| 預設的 callback group（executor，non-RT） | `~/switch_mode`、`~/mode`、`~/cmd_vel`、等待播完的 timer | 不做載入，所以不會被載入擋住：停止不必排在別人的載入後面 |
+
+- **先載入、通過才切換**：載入期間機器人繼續原本的動作；載入或檢查失敗時 goal 為 aborted，原本的動作不受影響。需要載入時先發布一次 `STAGE_LOADING` 的 feedback。
+- 播放用的 callback group 是 MutuallyExclusive：一次只載入一個內容或處理一個 service。
+- 被換掉的 Motion 在 non-RT thread 釋放。`plugin_factory_` 宣告在所有持有 Motion 的成員之前，確保演算法的 library 最後才卸載。
+
+**系統模式**
+- 以**名稱**識別。`modes` 列出名稱，每個名稱同時是該模式參數的前綴。`<mode>.type` 決定 Motion 的種類：
   ```yaml
-  modes: [forward, reverse, walk, stop]
-  default_mode: ""          # 空字串：啟動時保持位置，收到命令才移動
+  modes: [forward, reverse, stop, sine]
   forward:
     type: target            # 往固定目標移動
     joints: [L_WRIST_P, R_WRIST_P]   # 只列出要動的 joint，其餘保持進入模式時的位置；省略時為全部
     targets: [1.5, 1.5]
-  walk:
-    type: bvh               # 播放 BVH
-    file: package://graphen_bringup/motions/t170wk_walk1_subject1.bvh
-    loop: true
-    max_steps: [...]        # 32 個，播放時的每週期上限
   stop:
     type: hold              # 停在進入模式時的位置
+  sine:
+    type: plugin            # graphen_locomotion::LocomotionAlgorithm plugin
+    plugin: graphen_locomotion/SineWaveAlgorithm
   ```
-- joint 名稱取自 `target_state_interfaces` 的 prefix（`L_WRIST_P/position` → `L_WRIST_P`），`<mode>.joints` 與 BVH 對應都使用它。
-- BT、action、`~/mode` topic 都使用同一組名稱，不需要額外的數字對照。
+- joint 名稱取自 `target_state_interfaces` 的 prefix（`L_WRIST_P/position` → `L_WRIST_P`）。
 - 名稱只允許 `[A-Za-z0-9_]`（要當作參數前綴），不可為空、不可重複。`<mode>.*` 參數無法在 `on_init` 預先宣告：YAML 有寫的會被 controller node 自動宣告，沒寫的在 `on_configure` 以預設值補宣告。
-- 各模式的 Motion 在 `on_configure` 中預先建好（`mode_names_` / `mode_motions_`）。bvh 模式在此解析 BVH、建立 `BvhRetargeter`（只做分組與驗證，並以 INFO 印出分組），任何錯誤都回傳 ERROR。
-- 模式切換統一由 `apply_mode(mode, on_same_mode)`（non-RT，mutex 保護）處理：查表後呼叫 `planner_->set_motion()`，並記下回傳的序號（`mode_sequence_`）。
-- **已在該模式時**，依**這一次指令**的 `on_same_mode` 決定（策略不會留給之後的指令）：
+- 各系統模式的 Motion 在 `on_configure` 中預先建好，任何錯誤都回傳 ERROR。舊設定的 `type: bvh` 會在這裡報錯，訊息指出要改用 `play_bvh`。
+- 從 `~/mode` 收到未知的 mode 時忽略並印出 WARN（32 軸含腿部，不做任何移動）；action 則直接 reject。`~/mode` 只接受系統模式，沒有回應，固定是 `ON_SAME_IGNORE`。
 
-  | `on_same_mode` | 播放中 | 已結束（完成或失敗） |
+**切換規則（`PlaybackArbiter`，所有入口共用）**
+- **「同一個」的判斷**（`identity`）：
+
+  | 類型 | 視為同一個的條件 |
+  |---|---|
+  | 系統模式 | 模式名稱相同 |
+  | 編舞 | 名稱相同且內容的 sha256 相同：重新發佈後的同名舞曲是不同的內容；試播以內容的 sha256 判斷 |
+  | BVH | 名稱、`loop`、`time_scale` 都相同 |
+  | policy | 名稱相同且設定檔的 sha256 相同 |
+
+- **目前在播的就是同一個時**，依**這一次指令**的 `on_same` 決定（策略不會留給之後的指令）：
+
+  | `on_same` | 播放中 | 已結束（完成或失敗） |
   |---|---|---|
-  | `IGNORE`（預設；`~/mode` topic 一律是這個） | 不重新開始 | 不重新開始 |
-  | `RESTART` | 從頭重播 | 重播 |
-  | `RESTART_IF_FINISHED` | 不重新開始 | 重播 |
+  | `ON_SAME_IGNORE`（預設；`~/mode` topic 一律是這個） | 不重新開始 | 不重新開始 |
+  | `ON_SAME_RESTART` | 從頭重播 | 重播 |
+  | `ON_SAME_RESTART_IF_FINISHED` | 不重新開始 | 重播 |
 
-  「已結束」以 planner 的進度判斷：序號相同且 `kFinished` / `kFailed`；planner 還沒開始這一次播放時視為播放中。永遠不會結束的模式（循環 BVH、policy）在 `RESTART_IF_FINISHED` 下等同 `IGNORE`。
-- **不可中斷**：模式設定 `interruptible: false` 時，它播放中（尚未結束）拒絕切換到其他模式，也拒絕 `RESTART` 重播；播完或失敗之後恢復。`preempt: true` 的模式不受限制，`type: hold` 預設為 true，確保停止永遠有效。被拒絕時 action 為 aborted（`success: false`，message 說明原因），`~/mode` 印出 WARN。判斷和切換在同一個 lock 中進行，所以在 `handle_accepted` 拒絕，而不是 `handle_goal`。
-- 從 `~/mode` 收到未知的 mode 時忽略並印出 WARN（原本會把所有目標設為 0；32 軸含腿部時太危險，因此改掉）；action 則直接 reject。
-- bvh 模式需要 URDF：Humble 的 controller 沒有 robot_description API，改讀 controller node 的 `robot_description` 參數。launch 以 dict 傳給 controller_manager 的參數會寫成 `/**` 的參數檔，同一個 process 中的 controller node 會自動宣告它。
+  「已結束」以 planner 的進度判斷：序號相同且 `kFinished` / `kFailed`；planner 還沒開始這一次播放時視為播放中。永遠不會結束的動作（循環 BVH、policy）在 `RESTART_IF_FINISHED` 下等同 `IGNORE`。
+- **不是同一個時一律切換**，四種入口可以互相取代。
+- **不可中斷**：目前在播的不可中斷、而且尚未結束時，拒絕其他播放，也拒絕 `RESTART` 重播；播完或失敗之後恢復。`preempt: true` 的系統模式不受限制，`type: hold` 預設為 true，確保停止永遠有效。不可中斷的來源：
 
-**`~/switch_mode` action**（`graphen_interfaces/action/SwitchMode`）
-- goal：`mode`、`on_same_mode`（`ON_SAME_MODE_IGNORE` = 0（預設）/ `RESTART` = 1 / `RESTART_IF_FINISHED` = 2，見上）、`wait_until_finished`（預設 false）。
-- `handle_goal`：controller 不是 active、mode 不在 `modes` 中，或 `on_same_mode` 不是上面的值時 REJECT。
-- `handle_accepted`：`apply_mode()`；目前的模式不可中斷時 abort。之後：
-  - `wait_until_finished: false`：立即 `succeed`（原本的行為）。已在該模式而沒有重新開始時，message 為 `Already in this mode, not restarted`。
-  - `wait_until_finished: true`：把 goal 和這次播放的序號放進等待清單，由 wall timer（`switch_mode_poll_rate`，executor thread，不碰 RT 路徑）比對 `planner_->progress()`：
+  | 類型 | 由哪裡決定 |
+  |---|---|
+  | 系統模式 | `<mode>.interruptible`；plugin 另外可以用 `interruptible()` 回報，兩者取較嚴格的 |
+  | 編舞 | 腳本頂層的 `interruptible: false` |
+  | BVH | `bvh.interruptible`（所有 BVH 一致） |
+  | policy | 設定檔的 `interruptible` |
+
+  被拒絕時 action 為 aborted（`success: false`，message 說明原因），`~/mode` 印出 WARN。判斷和切換在同一個 lock 中進行，所以在 `handle_accepted` 拒絕，而不是 `handle_goal`。
+
+**播放類 action 的共同行為（`PlaybackServer`）**
+- `handle_goal`：controller 不是 active、`on_same` 不是合法的值，或專用欄位的基本檢查不通過（未知的系統模式、不合規則的名稱、`name` 與 `content` 沒有擇一…）時 REJECT。
+- `handle_accepted`：需要載入時先發布 `STAGE_LOADING`；呼叫來源的 `prepare()` 再送交 arbiter。內容有誤、檔案不存在、目前在播的不可中斷時 abort，message 說明原因；這時還沒有切換。之後：
+  - `wait_until_finished: false`：立即 `succeed`（`Switched`；已經在播同一個而沒有重新開始時為 `Already playing this, not restarted`）。
+  - `wait_until_finished: true`：把 goal 和這次播放的序號放進等待清單，由 wall timer（`switch_mode_poll_rate`）比對 planner 的進度：
 
     | 情況 | 結果 |
     |---|---|
-    | 序號相同且 `MotionStatus::kFinished` | succeed（`Mode finished`） |
-    | 序號相同且 `kFailed`（plugin 丟出例外） | abort |
-    | 目前模式的序號已不是這個 goal 的（被 action 或 `~/mode` 切走、被重播） | abort（`Preempted by mode [ X ]`） |
+    | 序號相同且 `MotionStatus::kFinished` | succeed（`Finished`） |
+    | 序號相同且 `kFailed`（plugin 丟出例外，例如編舞進入時的檢查不通過） | abort（`[ X ] failed, see the controller log`） |
+    | 目前的序號已不是這個 goal 的（被任何入口取代、被重播） | abort（`Preempted by [ X ]`） |
     | controller 不是 active | abort |
-    | client cancel | canceled |
-    | 其他 | 發布 feedback（`elapsed`：進入模式後經過的時間） |
+    | client cancel | canceled（`Stopped waiting; the motion keeps running`） |
+    | 其他 | 發布 feedback（`STAGE_PLAYING`、`elapsed`：開始播放後經過的時間） |
 
-  - 已在該模式且沒有重新開始時，goal 等的是**目前這一次**播放；已經播完就立即成功。
-  - 「播完」以 planner 的**命令位置**為準（target 到達目標、`bvh` 的 `loop: false` 播完、plugin 的 `finished()`），不看量測位置；持續性的模式（步行、policy、循環的 BVH）不會結束。
-- **cancel 只停止等待，不改變目前的動作**：要停下來必須另外切到別的模式（例如 `hold`）。BT 節點被 halt 時通常是別的分支要送出新的模式，所以不在這裡自動停止。
-- result 附上回傳當下的模式與所有 state interface 的快照（`interface_names` / `values`）。快照由 `update()` 以 `try_lock` 寫入（拿不到 lock 就跳過這一次），action callback 再以 lock 讀取。
+  - 已經在播同一個且沒有重新開始時，goal 等的是**目前這一次**播放；已經播完就立即成功。
+  - 「播完」以 planner 的**命令位置**為準（target 到達目標、BVH 的 `loop: false` 播完、plugin 的 `finished()`），不看量測位置；持續性的動作（policy、循環的 BVH）不會結束。
+- **cancel 只停止等待，不改變目前的動作**：要停下來必須另外切到停止類的系統模式。BT 節點被 halt 時通常是別的分支要送出新的指令，所以不在這裡自動停止。
+- result 附上回傳當下的 `mode` / `item` 與所有 state interface 的快照（`interface_names` / `values`）。快照由 `update()` 以 `try_lock` 寫入（拿不到 lock 就跳過這一次），action callback 再以 lock 讀取。
+
+**編舞（`~/play_choreo`、`ChoreoSource`）**
+- goal：`name`（舞曲庫中已發佈的名稱）或 `content`（腳本的 YAML，直接試播、不存檔），兩者擇一。BT 只能依名稱播放；帶內容的試播是給編輯工具用的。
+- **舞曲庫**：`choreo.library_path` 目錄中的 `<name>.choreo.yaml`，名稱只允許 `[a-z0-9_-]`（1 ~ 64 個字元，擋掉路徑穿越）。只保存發佈過的版本：同名覆寫、不留歷史、沒有刪除介面。
+- 每次播放或發佈都以 `choreo.plugin` 建立一個新的演算法實例並 configure（內容疊加在 controller 的 `choreo.*` 上），所以**發佈和播放用的是同一套檢查**（格式、限位、速度、`max_steps`、姿態的 joint 名稱，見 [§2.12](#212-編舞graphen_choreographer)），而且**重新發佈不影響正在播的那一次**（播放中的實例持有已解析的內容）。
+- service：`~/publish_choreo`（檢查通過才寫入，先寫暫存檔再 rename；回傳 sha256）、`~/list_choreos`（名稱與 sha256，編輯端用來比對是否已同步）、`~/get_choreo`（讀回內容）。
+
+**BVH（`~/play_bvh`、`BvhSource`）**
+- goal：`name`（`bvh.library_path` 中的 `<name>.bvh`）、`loop`、`time_scale`（0 視為 1.0）。檔案手動放進目錄，沒有上傳介面。
+- 第一次播放時解析 BVH、建立 `BvhRetargeter`（分組與驗證，以 INFO 印出分組），之後以（檔案、修改時間）快取；每一幀的角度仍然是播放時才在 planner thread 中求解（[§2.8](#28-bvh-轉換graphen_motion)）。每次播放建立新的 `BvhMotion`，共用快取中唯讀的 clip / retargeter。
+- 每週期上限（`bvh.max_steps`、`bvh.approach_max_steps`）與是否可中斷對所有 BVH 一致。
+- 需要 URDF：Humble 的 controller 沒有 robot_description API，改讀 controller node 的 `robot_description` 參數。launch 以 dict 傳給 controller_manager 的參數會寫成 `/**` 的參數檔，同一個 process 中的 controller node 會自動宣告它。
+
+**Policy（`~/run_policy`、`PolicySource`）**
+- goal：`name`（`policy.library_path` 中的 `<name>.policy.yaml`）。每個檔案是一個 policy 的完整設定：`plugin`（必填）、`max_steps`、`interruptible`，其餘的鍵由演算法讀取（[§2.11](#211-rl-policy-plugingraphen_rl_policy)）。唯讀，沒有發佈介面。
+- 第一次執行時建立演算法實例並 configure（讀 onnx、建立推論 session，約 150 ms），之後快取；設定檔的內容改變時重新載入。
+- **參數疊加**：controller 的參數 `<policy 名稱>.<鍵>` 覆寫設定檔中的同名鍵。情境 launch 用它調整單一設定（例如 `entry_speed`），不必複製整份設定。
+
+**預載（`~/preload`）**：`{mode: bvh | policy, items: [...]}` 把指定的項目先載入快取，避免第一次播放時的載入延遲（例如表演開始前）。編舞每次播放都重新讀取（很快），不需要預載。
+
+**啟動時的動作**：`default_mode`（系統模式）或 `default_policy`（policy 名稱）擇一。`default_policy` 在 configure 時就載入，設定有誤時 controller 直接 configure 失敗；activate 時進入。自由站立的模擬用它讓 policy 從一開始就接手（`sim_rl.launch.py`）。
 
 **Realtime 設計**
 - planner 在 non-RT thread 中透過 `realtime_tools::RealtimeBuffer` 寫入目標；`update()` 用 `readFromRT()` 讀取，不會阻塞。buffer 長度不符（尚未寫入）時不輸出。
-- `~/mode`、action 的 callback 都在 controller_manager 的 executor thread 執行，不會碰到 RT 路徑。
+- `~/mode`、action、service 的 callback 都在 controller_manager 的 executor thread 執行，不會碰到 RT 路徑（見上面的 Thread 歸屬）。
 - `~/mode` 的 QoS 設為 **reliable + transient_local**：模式切換不能遺失，而且晚啟動的 controller 也能收到最後一次設定的模式。發布端必須使用相容的 QoS（見 README 的指令）。
-- 每次 configure 都會回到 `default_mode`。
-- `on_activate` 以 `target_state_interfaces` 的目前值作為 planner 的起點，啟動瞬間輸出不會跳動，並把目前模式的 Motion 交給 planner；`on_deactivate` 停止 planner。
-- **保持模式**：`default_mode` 為空字串時，啟動後不進入任何模式。`on_activate` 以保持位置作為 planner 的起點，並交給 planner 一個全部為 NaN 的 `TargetMotion`（保持），收到第一個模式命令（BT、action 或 `~/mode`）才開始移動。
+- 每次 configure 都會回到啟動時的動作（`default_mode` / `default_policy`）。
+- `on_activate` 以 `target_state_interfaces` 的目前值作為 planner 的起點，啟動瞬間輸出不會跳動，並把啟動時的動作交給 planner；`on_deactivate` 停止 planner。
+- **保持**：`default_mode` 與 `default_policy` 都是空字串時，啟動後不進入任何模式。`on_activate` 以保持位置作為 planner 的起點，並交給 planner 一個全部為 NaN 的 `TargetMotion`（保持），收到第一個播放指令（BT、任何一個 action 或 `~/mode`）才開始移動。
   - 保持位置優先取下游 reference 的值。下游在 activate 時，會以硬體目前的 command 值初始化 reference，也就是 Ti5Hardware 從 `real_initial_positions.yaml` 或 encoder 得到的值；reference 無效時才用 `target_state_interfaces`。
   - 這樣實機馬達還在走向初始姿態時，不會被停在半路。
 
@@ -219,33 +309,45 @@ graph LR
 | `base_estimator.plugin` | string | `""` | 機身狀態估測器（`graphen_locomotion::BaseStateEstimator` 的 plugin）；空字串表示不估測（`base.valid` 為 false）。其餘 `base_estimator.*` 參數由估測器讀取 |
 | `command_timeout` | double | 0.5 | `~/cmd_vel` 的逾時（秒），必須 > 0；超過時速度指令為 0、`command.active` 為 false |
 | `imu_sensor_name` | string | `""` | IMU sensor 名稱（例如 `imu_sensor`），讀取 `<name>/orientation.x` … `linear_acceleration.z` 共 10 個 interface 交給 Motion；空的時候 `imu.valid` 為 false |
-| `switch_mode_poll_rate` | double | 20.0 | 檢查 `wait_until_finished` 的 goal 的頻率（Hz），也是 feedback 的頻率，必須 > 0 |
+| `switch_mode_poll_rate` | double | 20.0 | 檢查 `wait_until_finished` 的 goal 的頻率（Hz），也是 feedback 的頻率，所有播放類 action 共用，必須 > 0 |
 | `planner_rate` | double | 100.0 | planner 的規劃頻率（Hz），必須 > 0 |
-| `planner_max_steps` | double[] | `[]`（必填） | 每個 command interface 在每個規劃週期最多移動的量，每個值必須 > 0；各模式未指定 max_steps 時使用 |
-| `modes` | string[] | `[]`（必填） | 模式名稱，不可重複，只允許 `[A-Za-z0-9_]` |
-| `default_mode` | string | `""` | 啟動時的模式，必須列在 `modes` 中；空字串表示保持位置，直到收到第一個模式命令 |
-| `<mode>.type` | string | `target` | `target`、`hold`、`bvh` 或 `plugin` |
-| `<mode>.max_steps` | double[] | `planner_max_steps` | 該模式的每週期上限（bvh 為播放時） |
-| `<mode>.interruptible` | bool | true | false 時，播放中拒絕切換到其他模式或重播（`preempt` 的模式除外），播完後恢復 |
-| `<mode>.preempt` | bool | hold 為 true，其他為 false | true 時可以切入不可中斷的模式；用於停止類的模式 |
+| `planner_max_steps` | double[] | `[]`（必填） | 每個 command interface 在每個規劃週期最多移動的量，每個值必須 > 0；各處未指定 max_steps 時使用 |
+| `default_mode` | string | `""` | 啟動時進入的系統模式，必須列在 `modes` 中 |
+| `default_policy` | string | `""` | 啟動時執行的 policy（configure 時載入）；與 `default_mode` 只能擇一，都是空字串表示保持位置 |
+| `modes` | string[] | `[]`（必填） | 系統模式的名稱，不可重複，只允許 `[A-Za-z0-9_]`；`choreo` / `bvh` / `policy` 是保留名稱 |
+| `<mode>.type` | string | `target` | `target`、`hold` 或 `plugin` |
+| `<mode>.max_steps` | double[] | `planner_max_steps` | 該模式的每週期上限 |
+| `<mode>.interruptible` | bool | true | false 時，播放中拒絕被其他播放取代或重播（`preempt` 的模式除外），播完後恢復 |
+| `<mode>.preempt` | bool | hold 為 true，其他為 false | true 時可以切入不可中斷的播放；用於停止類的模式 |
 | `<mode>.joints` | string[] | 全部 | （target）要移動的 joint；沒有列出的保持進入模式時的位置 |
 | `<mode>.targets` | double[] | （必填） | （target）對應 `joints` 的目標位置 |
-| `<mode>.file` | string | （必填） | （bvh）BVH 路徑，支援 `package://<pkg>/<path>` |
-| `<mode>.loop` | bool | true | （bvh）播放到結尾後循環 |
-| `<mode>.time_scale` | double | 1.0 | （bvh）播放速度倍率，必須 > 0 |
-| `<mode>.approach_max_steps` | double[] | `planner_max_steps` | （bvh）走向第 0 幀（含循環接回）時的每週期上限 |
 | `<mode>.plugin` | string | （必填） | （plugin）`graphen_locomotion::LocomotionAlgorithm` 的 plugin 類別名稱；其餘 `<mode>.*` 參數由演算法自行讀取 |
-| `bvh.base_link` | string | `""` | BVH 與 URDF 共同的基準 link，有 bvh 模式時必填（T170 為 `BASE_S`） |
+| `choreo.plugin` | string | `""` | 編舞的演算法 plugin（`graphen_choreographer/ChoreographerAlgorithm`）；空字串表示不啟用編舞 |
+| `choreo.library_path` | string | `~/.local/share/graphen/choreo` | 舞曲庫目錄，支援 `~/` 與 `package://` |
+| `choreo.max_steps` | double[] | `planner_max_steps` | 所有編舞共用的每週期上限 |
+| `choreo.*`（其餘） | — | plugin 的預設值 | `velocity_limit_scale`、`start_tolerance`、`entry_velocity`，由 plugin 讀取（[§2.12](#212-編舞graphen_choreographer)） |
+| `bvh.library_path` | string | `""` | BVH 目錄，支援 `~/` 與 `package://`；空字串表示不啟用 BVH |
+| `bvh.max_steps` | double[] | `planner_max_steps` | 播放時的每週期上限，所有 BVH 共用 |
+| `bvh.approach_max_steps` | double[] | `planner_max_steps` | 走向第 0 幀（含循環接回）時的每週期上限 |
+| `bvh.interruptible` | bool | true | false 時 BVH 播放中只有停止類能切入 |
+| `bvh.base_link` | string | `""` | BVH 與 URDF 共同的基準 link，播放 BVH 時必填（T170 為 `BASE_S`） |
 | `bvh.axis_tolerance` | double | 1e-4 | 判斷軸線交於一點的距離容差（m） |
 | `bvh.max_iterations` | int | 50 | 每組求解的迭代上限 |
 | `bvh.damping` | double | 1e-6 | damped least squares 的阻尼 |
 | `bvh.residual_tolerance` | double | 1e-3 | 從上一幀求解的殘差超過此值時改用多組初始值；也是選解時視為相同的範圍（rad） |
+| `policy.library_path` | string | `""` | policy 庫目錄，支援 `~/` 與 `package://`；空字串表示不啟用 policy |
+| `<policy 名稱>.<鍵>` | — | — | 覆寫該 policy 設定檔中的同名鍵 |
 
 | 介面 | 型別 | 方向 |
 |---|---|---|
 | `~/mode` | std_msgs/String | 訂閱 |
 | `~/cmd_vel` | geometry_msgs/Twist | 訂閱（`linear.x`、`linear.y`、`angular.z`，機身座標系） |
-| `~/switch_mode` | graphen_interfaces/action/SwitchMode | action server |
+| `~/switch_mode` | graphen_interfaces/action/SwitchMode | action server（系統模式） |
+| `~/play_choreo` | graphen_interfaces/action/PlayChoreo | action server（`choreo.plugin` 有設定時） |
+| `~/play_bvh` | graphen_interfaces/action/PlayBvh | action server（`bvh.library_path` 有設定時） |
+| `~/run_policy` | graphen_interfaces/action/RunPolicy | action server（`policy.library_path` 有設定時） |
+| `~/publish_choreo` / `~/list_choreos` / `~/get_choreo` | graphen_interfaces/srv/PublishChoreo / ListChoreos / GetChoreo | service（舞曲庫） |
+| `~/preload` | graphen_interfaces/srv/Preload | service（預載 BVH / policy） |
 | `~/states` | control_msgs/DynamicJointState | 發布 |
 
 ### 2.3 子群組 controller：PositionController / PdController
@@ -269,6 +371,7 @@ graph LR
   - 插補狀態（每個 output 的起點、目標、時間）在 `on_configure` 預先配置；`on_activate` 從目前的 command 開始，不會產生斜坡。
   - `input_interfaces` 不可使用保留名稱 `sample_period`。
 - `on_activate` 以對應 output 目前的 command 值初始化 reference（沒有對應 output 的為 NaN），讓上層可以據此保持位置。
+- **追蹤誤差**（`~/tracking`，`tracking_publish_rate > 0` 時）：讀取與各 output 同名的 state interface（例如 `L_KNEE_P/position`），每個 output 一組 `joint_names`（output 全名），`interface_names` 為 `expected`（插補後寫進硬體的 command）、`actual`（同一週期的量測值）、`error`（expected − actual，任一方無效時為 NaN）。比的是硬體收到的值，所以反映伺服本身的追蹤誤差，不含插補的落後；要看動作 reference 與實際的差距，對照 `~/references`。`output_enabled: false` 時 expected 是硬體保留的最後 command。關閉時不宣告 state interface，對沒有對應 state 的硬體也能啟動。共用元件為 `graphen_control_utils/tracking_publisher.hpp`。
 - **停用輸出**（`output_enabled: false`）：照常發布 `~/references`，但不更新插補、不寫 command。ros2_control 的 command interface 會保留最後的值，硬體（mock / `Ti5Hardware`）持續以它為目標，關節維持最後狀態（不斷電、不卸力）。上層照常運作，不受影響。用於停用會碰撞（例如 BVH 手臂打到大腿）或故障的部位；只在 configure 時讀取，執行中不能切換。
 
 | 參數 | 型別 | 預設值 | 說明 |
@@ -276,11 +379,13 @@ graph LR
 | `input_interfaces` | string[] | `[]`（必填） | 要導出的 reference interface 名稱；1 個（廣播）或與 `output_interfaces` 同數量（1:1） |
 | `output_interfaces` | string[] | `[]`（必填） | 要寫入的硬體 command interface |
 | `reference_publish_rate` | double | 50.0 | `~/references` 的發布頻率（Hz） |
+| `tracking_publish_rate` | double | 50.0 | `~/tracking` 的發布頻率（Hz）；≤ 0 時關閉，也不讀取 state interface |
 | `output_enabled` | bool | true | false 時不寫 command，關節維持最後的 command；只在 configure 時讀取 |
 
 | Topic | 型別 | 方向 |
 |---|---|---|
 | `~/references` | control_msgs/DynamicJointState | 發布 |
+| `~/tracking` | control_msgs/DynamicJointState | 發布 |
 
 **PdController**：在 controller 端做關節 PD，寫到硬體的 effort command。用於 `hardware:=mujoco_pd`（MuJoCo）與 `real_pd`（Ti5 電流模式，尚未在實機驗證），讓 RL policy 以訓練時的增益執行（§2.11）。
 
@@ -298,6 +403,12 @@ graph LR
 | `joint_gains.<joint>.kp` / `.kd` | double | （必填） | 各關節的預設增益，≥ 0；未提供或不合法時 configure 失敗並 log 參數全名 |
 | `joint_gains.<joint>.effort_limit` | double | （必填） | 各關節的力矩上限，> 0 |
 | `reference_publish_rate` | double | 50.0 | `~/references` 的發布頻率（Hz） |
+| `tracking_publish_rate` | double | 50.0 | `~/tracking` 的發布頻率（Hz）；≤ 0 時關閉 |
+
+| Topic | 型別 | 方向 |
+|---|---|---|
+| `~/references` | control_msgs/DynamicJointState | 發布 |
+| `~/tracking` | control_msgs/DynamicJointState | 發布；格式與 PositionController 相同，通道為 `<joint>/position`，expected 為插補後的 q*（PD 實際使用的目標），actual 為量測的 q |
 
 ### 2.4 LocomotionPlanner 與 Motion
 
@@ -322,14 +433,14 @@ graph LR
 
 **TargetMotion**（`type: target`）：以 `state.commanded_positions` 為目前位置，往固定目標移動；目標為 NaN 的介面在 `on_enter` 時記住目前位置並保持。`type: hold` 是全部為 NaN 的 TargetMotion，用來停止（保持進入模式時的位置）。輸出到達全部目標時為 `kFinished`（hold 會立即完成）。
 
-**BvhMotion**（`type: bvh`）：
+**BvhMotion**（`play_bvh`，由 `BvhSource` 建立；`loop` / `time_scale` 來自 goal）：
 - **Approach**：以 `approach_max_steps` 走向第 0 幀（`on_enter` 時以目前位置為初始值解出），所有介面都在一步之內時開始播放。
 - **Play**：時間累加 `dt × time_scale`；跨進新的一幀時才以 `BvhRetargeter` 解出該幀（以上一幀為初始值），**依檔案頻率輸出原始幀**（幀與幀之間保持），`sample_period()` 回傳 `frame_time / time_scale`，插補由子群組 controller（§2.3）進行。BVH 的轉換都在 planner thread 中進行，平均每幀約 0.1 ms。
 - `max_steps`（播放時）是對「一幀的跳動」的限制，要讓一個週期就能走完一幀，同時擋下異常的大跳動。
 - 播完最後一幀時：`loop: true` 回到 Approach（以 `approach_max_steps` 接回第 0 幀），否則保持最後一幀。Approach / Hold 時 `sample_period()` 為 0。 停在最後一幀且輸出到達後為 `kFinished`。
 - 沒有 BVH 資料的介面保持進入時的位置。
 
-**PluginMotion**（`type: plugin`）：把外部的 `LocomotionAlgorithm` 包成 Motion，`max_steps` 來自 `<mode>.max_steps`，`sample_period()` 為 0。演算法在 `on_enter` / `update` 丟出例外時，不讓例外離開 planner thread：記錄一次 ERROR，之後全部保持，直到下一次進入這個模式。 故障時為 `kFailed`；演算法的 `finished()` 為 true 時為 `kFinished`。
+**PluginMotion**（系統模式的 `type: plugin`、編舞、policy；由 `PluginFactory` 建立）：把外部的 `LocomotionAlgorithm` 包成 Motion，`max_steps` 來自該來源的設定（`<mode>.max_steps`、`choreo.max_steps`、policy 設定檔），`sample_period()` 為 0。演算法在 `on_enter` / `update` 丟出例外時，不讓例外離開 planner thread：記錄一次 ERROR，之後全部保持，直到下一次進入這個模式。 故障時為 `kFailed`；演算法的 `finished()` 為 true 時為 `kFinished`。
 
 ### 2.5 StateInterfacePublisher（graphen_control_utils）
 
@@ -360,7 +471,7 @@ launch argument：
 | 參數 | 預設值 | 說明 |
 |---|---|---|
 | `hardware` | `mock` | `mock`（GenericSystem + PositionController）、`mujoco`（MuJoCo 位置伺服 + PositionController）、`mujoco_pd`（MuJoCo 力矩 + PdController）、`real`（`ti5_hardware`，CAN 位置模式 + PositionController）、`real_pd`（`ti5_hardware`，CAN 電流模式 + PdController） |
-| `robot` | `ti5_170a` | 模型，同時決定 URDF 本體（xacro 參數 `robot`）、MJCF 與 PD 預設增益。`ti5_t170`：`ti5_t170_description`（T170-V2.1-A0，力矩馬達，MuJoCo 只能搭配 `mujoco_pd`）；`ti5_170a`：`ti5_170a_graphen`（自己的 URDF，`scripts/make_mjcf.py` 產生的 MJCF，力矩馬達）；`fb70`：`fb70_description`（位置伺服，URDF 本體用 `ti5_170a_graphen` 的 `robot.urdf.xacro`）。不合法的組合在 launch 時報錯。浮動基座初始高度依模型帶入（ti5_t170 / fb70 1.07 m、ti5_170a 0.899 m） |
+| `robot` | `ti5_170a` | 模型，同時決定 URDF 本體（xacro 參數 `robot`）、MJCF 與 PD 預設增益。`ti5_t170`：`ti5_t170_description`（T170-V2.1-A0，力矩馬達，MuJoCo 只能搭配 `mujoco_pd`）；`ti5_170a`：`ti5_170a_graphen`（自己的 URDF，`scripts/make_mjcf.py` 產生的 MJCF，力矩馬達）；`fb70`：`fb70_description`（位置伺服，URDF 本體用 `ti5_170a_graphen` 的 `robot.urdf.xacro`）。不合法的組合在 launch 時報錯。浮動基座初始高度依模型帶入（ti5_t170 1.000 m、fb70 1.07 m、ti5_170a 0.899 m） |
 | `mujoco_fixed_base` | `true` | （MuJoCo）吊掛：fb70 用 `t170_fixed.xml`，有 free joint 的模型每步重設基座 |
 | `scenario_params` | `""` | 最後疊加的參數檔，給情境 launch 使用（例如 `sim_rl.launch.py`），不改本機 `controllers.yaml` |
 | `mujoco_model` / `mujoco_viewer_port` | `""` / `9870` | （MuJoCo）指定 MJCF 路徑（空的時候依 `robot`）/ viewer 的 UDP port |
@@ -384,7 +495,7 @@ launch argument：
 
 後載入的覆蓋先載入的，所以 profile 一定會蓋掉本機檔中殘留的硬體設定。launch 會以 `LogInfo` 印出這次的參數檔清單。xacro 收到不合法的 `hardware` 時展開失敗。
 
-情境 launch：`sim_rl.launch.py` 以 `hardware:=mujoco_pd robot:=ti5_170a`（可改；必須是 policy 的訓練模型）自由站立啟動 bringup，並以 `scenario_params` 把 `default_mode` 設為 `mode`（預設 `rl_flat`）、該模式的 `entry_speed` 設為 0。自由站立時 PD 保持姿態沒有平衡能力，必須讓 policy 從模擬開始就接手。之後有其他固定情境時，同樣以新的 launch 檔加上 `scenario_params` 實作。
+情境 launch：`sim_rl.launch.py` 以 `hardware:=mujoco_pd robot:=ti5_170a`（可改；必須是 policy 的訓練模型）自由站立啟動 bringup，並以 `scenario_params` 把 `default_policy` 設為 `policy`（預設 `rl_flat`）、以 `<policy>.entry_speed: 0` 覆寫該 policy 設定檔的值。自由站立時 PD 保持姿態沒有平衡能力，必須讓 policy 從模擬開始就接手。之後有其他固定情境時，同樣以新的 launch 檔加上 `scenario_params` 實作。
 
 ### 2.7 Imu16460SensorInterface（imu16460_hardware）
 
@@ -448,6 +559,7 @@ launch argument：
   - `on_enter(state)`：每次切換到這個模式時呼叫
   - `update(dt, state, command)`：之後每週期呼叫
   - `finished()`：（選用，預設 false）有終點的演算法在動作完成後回傳 true，controller 據此回報「模式播完了」；每次 `update()` 之後讀取
+  - `interruptible()`：（選用，預設 true）內容本身不可中斷時回傳 false（例如編舞腳本的 `interruptible: false`）；configure 之後由 controller 查詢，與 controller 端的設定取較嚴格的。
   - `on_enter` / `update` 都在 planner thread 中執行
 - **`Context`**：
   - `joint_names`、`rate_hz`
@@ -504,18 +616,18 @@ launch argument：
   - `write()` 把 command 寫入 ctrl，再依 controller 週期推進物理（100 Hz 時每次 2 步，每次最多 20 步）。`hardware/pd_common.yaml` 把 `update_rate` 設為 200，PD 與物理同為 5 ms，與訓練相同。
   - `read()` 複製 qpos / qvel / qacc 與感測器值。
   - 模擬時間跟著 controller_manager 的 wall clock。
-- **viewer**：`viewer_port` > 0 時，`read()` 以非阻塞 UDP 把 `[time, qpos…]` 送到 127.0.0.1:port（約 60 Hz），並在 port+1 接收 `reset`。容器沒有 GL，所以畫面由主機的 [mujoco_viewer.py](../src/graphen_mujoco/tools/mujoco_viewer.py) 用同一份 MJCF 跑 `mj_forward` 顯示。
+- **viewer**：`viewer_port` > 0 時，`read()` 以非阻塞 UDP 把 `[time, qpos…]` 送到 127.0.0.1:port（約 60 Hz），並在 port+1 接收 `reset` 與 `model?`（回覆載入的 MJCF 絕對路徑，viewer 沒有指定 `--model` 時用它找模型）。容器沒有 GL，所以畫面由主機的 [mujoco_viewer.py](../src/graphen_mujoco/tools/mujoco_viewer.py) 用同一份 MJCF 跑 `mj_forward` 顯示。
 
 ### 2.11 RL policy plugin（graphen_rl_policy）
 
 原始碼：[policy_runner.hpp](../src/graphen_rl_policy/include/graphen_rl_policy/policy_runner.hpp)、[onnx_model.hpp](../src/graphen_rl_policy/include/graphen_rl_policy/onnx_model.hpp)、[obs_history.hpp](../src/graphen_rl_policy/include/graphen_rl_policy/obs_history.hpp)、[t170_velocity_policy.cpp](../src/graphen_rl_policy/src/t170_velocity_policy.cpp)、[ti5_flat_policy.cpp](../src/graphen_rl_policy/src/ti5_flat_policy.cpp)
-類型：`LocomotionAlgorithm` plugin。`controllers.yaml` 的 `type: plugin` 模式使用（`rl_walk`、`rl_flat`）。
+類型：`LocomotionAlgorithm` plugin。由 policy 庫的設定檔（`policy/<name>.policy.yaml`，例如 `rl_walk`、`rl_flat`）指定，以 `run_policy` action 執行（[§2.2](#22-switchgroupcontroller)）。
 
 **設計：onnx 綁定 plugin**。onnx 只是「數字進、數字出」的函數，obs 的組法與 action 的換算屬於 policy 的一部分。所以採用以下做法：
 - 每個 policy 家族（相同的 obs / action 組法）寫一個 plugin。
-- 訓練常數（關節順序、預設姿態、scale、增益）放在 YAML 模式參數，不編譯進程式。
+- 訓練常數（關節順序、預設姿態、scale、增益）放在 policy 設定檔（和 onnx 同一個目錄、跟著程式碼版控），不編譯進程式，也不放在 `controllers.yaml`。
 - `model_sha256` 把 onnx 檔與這份設定綁在一起。
-- 換 policy 時 controller 與硬體都不用動：同家族重新訓練只改 YAML；新家族加一個 plugin。
+- 換 policy 時 controller 與硬體都不用動：同家族重新訓練只加一份設定檔（一個 onnx 一個檔，以檔名選擇）；新家族加一個 plugin。
 
 **共用基類 `PolicyRunner`**（子類只實作 `configure_policy()`、`reset_policy()`、`build_obs()`、`action_to_targets()`）：
 - **綁定檢查**：`OnnxModel` 計算 onnx 的 SHA-256，和 `model_sha256` 比對，並檢查輸入輸出形狀 `[1, obs_dim] → [1, joints 數]`。不符時 configure 失敗，錯誤訊息會列出實際的 sha。ORT 型別只在 `.cpp` 中，其他套件可以繼承 `PolicyRunner`，不需要 ORT 的 include。
@@ -601,20 +713,23 @@ tracks:
 
 峰值速度 = `|Δ| / T × 係數`（linear 1、cubic 1.5、quintic 1.875）。
 
-**模式參數**（`<mode>.*`）：
+**腳本層的設定**：頂層的 `interruptible: false` 讓這段編舞播放中不可被其他播放打斷（停止類的系統模式除外），由編輯端決定哪一段要保護。`poses` 可以是涵蓋全身的姿態、由軌道的 `joints` 取用其中一部分；`poses` 中出現的 joint 名稱都必須是受控的 joint，即使沒有被任何軌道使用（打錯字不會被其他檢查發現）。
+
+**參數**（由 `play_choreo` 播放時為 controller 的 `choreo.*`，所有編舞共用、腳本無法放寬；作為系統模式的 plugin 使用時為 `<mode>.*`）：
 
 | 參數 | 預設 | 說明 |
 |---|---|---|
-| `file` | （必填） | 腳本路徑，支援 `package://<pkg>/<path>` |
+| `file` / `content` | （擇一） | 腳本路徑（支援 `package://<pkg>/<path>`）或腳本的 YAML 內容。`play_choreo` 由 controller 填入 `content` |
 | `start_tolerance` | 0.05 | 第一個 keyframe 在 `t: 0` 時，允許與進入時位置的最大差距（rad） |
 | `velocity_limit_scale` | 1.0 | 速度上限 = URDF velocity limit × 這個值，必須 > 0 |
 | `entry_velocity` | true | 第一段是否帶入切換當下的速度 |
 | `max_steps` | `planner_max_steps` | 由 controller 讀取；必須容得下腳本的峰值速度 |
-| `interruptible` / `preempt` | true / false | 由 controller 讀取（[§2.2](#22-switchgroupcontroller)）；表演中不能被打斷的段落設 `interruptible: false` |
 
-**`choreo_check`**：離線列出各軌道的時間範圍、各 joint 的範圍 / 限位 / 峰值速度與建議的 `max_steps`（峰值速度 / rate × 1.2），`--urdf` 檢查限位，`--csv` 輸出取樣後的整份編舞（從靜止開始，用法見 README）。起點 → 第一個姿態的那一段不在檢查範圍內。
+**`choreo_check`**：離線列出各軌道的時間範圍、各 joint 的範圍 / 限位 / 峰值速度與建議的 `max_steps`（峰值速度 / rate × 1.2），`--urdf` 檢查限位與姿態中的 joint 名稱，`--csv` 輸出取樣後的整份編舞（從靜止開始，用法見 README）。起點 → 第一個姿態的那一段不在檢查範圍內。
 
-**串接多段腳本**：一個腳本一個模式，BT 以 `SwitchMode wait_finished="true"` 依序播放（[trees/choreo_demo.xml](../src/graphen_bt/trees/choreo_demo.xml)）；同一段可能被重複觸發時用 `on_same_mode="restart_if_finished"`，播放中重複送出的指令會被吃掉。同一時間只有一個模式在執行：一份腳本內的軌道可以任意重疊，但兩份腳本不能同時播。
+**編輯、試播與發佈**：腳本在外部工具（UI）編輯。試播是把內容直接放進 `play_choreo` 的 goal；正式的舞曲用 `publish_choreo` 發佈到機器人端的舞曲庫，表演時 BT 只依名稱播放，不依賴編輯工具（流程見 [§2.2](#22-switchgroupcontroller)，給 UI 開發的介面說明見 [CHOREOGRAPHER.md](CHOREOGRAPHER.md)）。
+
+**串接多段腳本**：BT 以 `PlayChoreo wait_finished="true"` 依序播放（[trees/choreo_demo.xml](../src/graphen_bt/trees/choreo_demo.xml)）；同一段可能被重複觸發時用 `on_same="restart_if_finished"`，播放中重複送出的指令會被吃掉。同一時間只播放一個 Motion：一份腳本內的軌道可以任意重疊，但兩份腳本不能同時播。
 
 ---
 
@@ -644,7 +759,7 @@ graph TB
 
 - [graphen_bt_nodes](../src/graphen_bt_nodes/) 編成 `libgraphen_bt_nodes.so`，以 `BT_PLUGIN_EXPORT` 編譯。[register_nodes.cpp](../src/graphen_bt_nodes/src/register_nodes.cpp) 的 `BT_REGISTER_NODES` 會註冊全部節點。
 - `bt_runner` 依參數 `plugins`（函式庫名稱）呼叫 `factory.registerFromPlugin(SharedLibrary::getOSName(name))`，透過 `LD_LIBRARY_PATH` 尋找，所以執行前要先 source `install/setup.bash`。
-- **ROS node 注入**：需要 ROS 的節點（`IncrementSysCount`、`ClearSysCount`、`GetStateValue`、`SwitchMode`）在建構時以 [ros_node.hpp](../src/graphen_bt_nodes/include/graphen_bt_nodes/ros_node.hpp) 的 `get_ros_node()` 從 blackboard 的 `"node"` key 取得 `rclcpp::Node::SharedPtr`（Nav2 慣例）。`bt_runner` 會在建樹**之前**放入；取不到時建構會丟出 `BT::RuntimeError`。
+- **ROS node 注入**：需要 ROS 的節點（`IncrementSysCount`、`ClearSysCount`、`GetStateValue`、四個播放節點）在建構時以 [ros_node.hpp](../src/graphen_bt_nodes/include/graphen_bt_nodes/ros_node.hpp) 的 `get_ros_node()` 從 blackboard 的 `"node"` key 取得 `rclcpp::Node::SharedPtr`（Nav2 慣例）。`bt_runner` 會在建樹**之前**放入；取不到時建構會丟出 `BT::RuntimeError`。
 
 ### 3.3 節點清單
 
@@ -662,7 +777,12 @@ graph TB
 | `GetStateValue` | SyncAction | `topic`(string, `/switch_group_controller/states`)、`joint`(string)、`interface`(string)、out `value`(double) | 訂閱 DynamicJointState，tick 時輸出指定 joint / interface 的最新值；還沒有資料或找不到時回傳 FAILURE |
 | `IsBelow` | Condition | `value`、`threshold`(double) | `value < threshold` 時回傳 SUCCESS |
 | `IsAbove` | Condition | `value`、`threshold`(double) | `value > threshold` 時回傳 SUCCESS |
-| `SwitchMode` | StatefulAction | `action_name`(string, `/switch_group_controller/switch_mode`)、`mode`(string，模式名稱)、`timeout_ms`(int, 1000)、`wait_finished`(bool, false)、`on_same_mode`(string, `ignore`：`ignore` / `restart` / `restart_if_finished`)、`finish_timeout_ms`(int, 0) | 以 async 送出 SwitchMode goal，期間回傳 RUNNING；reject、失敗或逾時（含等待 server）回傳 FAILURE。每次執行都會送 goal，應放在只有換向時才會走到的分支。`wait_finished` 時等動作播完才回傳 SUCCESS（被取代、動作失敗或超過 `finish_timeout_ms` 時 FAILURE；0 表示不限），此時 `timeout_ms` 只算到 goal 被接受為止。被 halt 或逾時會 cancel goal，但**動作會繼續執行**。目前的模式不可中斷而被拒絕時回傳 FAILURE |
+| `SwitchMode` | StatefulAction | `mode`(string，系統模式名稱) + 共通 port | 切換到系統模式（`~/switch_mode`） |
+| `PlayChoreo` | StatefulAction | `choreo`(string，舞曲庫中的名稱) + 共通 port | 播放已發佈的編舞（`~/play_choreo`）；BT 不能帶內容試播 |
+| `PlayBvh` | StatefulAction | `bvh`(string，檔名不含 `.bvh`)、`loop`(bool, true)、`time_scale`(double, 1.0) + 共通 port | 播放 BVH（`~/play_bvh`）。第一次播放要載入檔案，`timeout_ms` 要涵蓋這段時間 |
+| `RunPolicy` | StatefulAction | `policy`(string，policy 庫中的名稱) + 共通 port | 執行 policy（`~/run_policy`）。第一次執行要載入，`timeout_ms` 要涵蓋，或事先用 `~/preload` 載入 |
+
+四個播放節點共用 [playback_action_node.hpp](../src/graphen_bt_nodes/include/graphen_bt_nodes/playback_action_node.hpp) 的 `PlaybackActionNode<ActionT>`，各自只定義專用的 port（[playback_nodes.hpp](../src/graphen_bt_nodes/include/graphen_bt_nodes/playback_nodes.hpp)）。共通 port：`action_name`(string，預設為該類型的 action)、`timeout_ms`(int, 1000)、`wait_finished`(bool, false)、`on_same`(string, `ignore`：`ignore` / `restart` / `restart_if_finished`)、`finish_timeout_ms`(int, 0)。共同行為：以 async 送出 goal，期間回傳 RUNNING；reject、失敗（內容有誤、目前在播的不可中斷…）或逾時（含等待 server）回傳 FAILURE。每次執行都會送 goal，應放在只有需要時才會走到的分支。`wait_finished` 時等動作播完才回傳 SUCCESS（被取代、動作失敗或超過 `finish_timeout_ms` 時 FAILURE；0 表示不限），此時 `timeout_ms` 只算到 goal 被接受為止。被 halt 或逾時會 cancel goal，但**動作會繼續執行**。
 
 `GetStateValue` 的 XML 屬性用 `joint` 而不是 `name`：BT.CPP v3 會把 `name` 當成節點的實例名稱。
 
@@ -701,7 +821,7 @@ IfThenElse "WalkEnabled"
 ├─ Fallback "Walk"                 # 兩個都 true 時也是 walk
 │  ├─ BlackboardCheckString "AlreadyWalking" {mode} == walk ─ AlwaysSuccess
 │  └─ Sequence "EnterWalk"
-│     ├─ SwitchMode mode=walk
+│     ├─ PlayBvh bvh=t170wk_walk1_subject1 loop=true
 │     └─ SetBlackboard mode = walk
 └─ IfThenElse "ReciprocateEnabled"
    ├─ IsOk {enable_reciprocate}
@@ -732,16 +852,16 @@ IfThenElse "WalkEnabled"
          └─ SetBlackboard mode = stop
 ```
 
-- 用 `IfThenElse` 而不是 `Fallback` 選分支：已選定的分支失敗時（例如 SwitchMode 失敗）直接回傳 FAILURE，下一個 tick 重試，不會落到優先順序較低的分支而送出別的模式。
-- walk / stop 已是目前模式時不再送 SwitchMode（BVH 不會重新播放）。`stop` 是 `type: hold` 的模式，controller 停在目前位置；之後再切到 walk 會重新 `on_enter`，從第 0 幀 approach 開始。
+- 用 `IfThenElse` 而不是 `Fallback` 選分支：已選定的分支失敗時（例如 action 失敗）直接回傳 FAILURE，下一個 tick 重試，不會落到優先順序較低的分支而送出別的指令。
+- 已經在 walk / stop 時不再送出 action（BVH 不會重新播放）。步行是內容，用 `PlayBvh` 播放 BVH 目錄中的檔案；`stop` 是 `type: hold` 的系統模式，controller 停在目前位置；之後再播放 BVH 會重新 `on_enter`，從第 0 幀 approach 開始。
 - 移動期間 `Forward`（forward 模式，往 +1.5）或 `Reverse`（reverse 模式，往 -1.5）分支持續成功；跨過門檻時走 `TurnToReverse` / `TurnToForward` 換向，之後由另一個方向的分支接手。因此 joint 會在 ±1.0 之間往返。
-- 切換時**先 SwitchMode 再寫入 `{mode}`**：action 失敗時 `{mode}` 不變，下一個 tick 會重試同一個換向分支。
+- 切換時**先送出 action 再寫入 `{mode}`**：action 失敗時 `{mode}` 不變，下一個 tick 會重試同一個換向分支。
 - `Init` 前面的兩個 Inverter 檢查，確保只有 `{mode}` 不是 forward / reverse 時才會走到這裡；否則換向失敗時，Fallback 會誤落到 `Init` 而送出 forward。
 - `BlackboardCheckString`、`SetBlackboard`、`Inverter`、`AlwaysSuccess` 都是 BT.CPP v3 內建的節點。
 - 門檻必須落在兩個模式的 arm 目標之間，否則 joint 到達模式目標後就停住，不會換向。
 - 以預設值（planner 0.005 × 100 Hz ≈ 0.5 rad/s、BT tick 100 ms）實測，換向週期約 4.1 秒，超出門檻的量約 0.05（等於速度 × tick 延遲）。
 
-**等動作播完再接下一段**：[trees/choreo_demo.xml](../src/graphen_bt/trees/choreo_demo.xml) 以 `Sequence` 串接兩個 `SwitchMode wait_finished="true" on_same_mode="restart_if_finished"`，依序播放兩段編舞（[§2.12](#212-編舞graphen_choreographer)）。節點在動作播完之前回傳 RUNNING，Sequence 停在該節點；`restart_if_finished` 讓 controller 已經停在同一個模式（例如 BT 重新啟動）時，播完的會重播、還在播放的不被打斷。會失敗的段落（例如起點不對）每個 tick 都會重送 goal，所以把「從任何位置都能執行」的段落放在最前面。
+**等動作播完再接下一段**：[trees/choreo_demo.xml](../src/graphen_bt/trees/choreo_demo.xml) 以 `Sequence` 串接兩個 `PlayChoreo wait_finished="true" on_same="restart_if_finished"`，依序播放舞曲庫中的兩段編舞（要先用 `choreo_publish` 發佈）（[§2.12](#212-編舞graphen_choreographer)）。節點在動作播完之前回傳 RUNNING，Sequence 停在該節點；`restart_if_finished` 讓 controller 已經停在同一段（例如 BT 重新啟動）時，播完的會重播、還在播放的不被打斷。會失敗的段落（例如起點不對）每個 tick 都會重送 goal，所以把「從任何位置都能執行」的段落放在最前面。
 
 ### 3.6 bt_runner 參數與介面
 
@@ -800,11 +920,19 @@ IfThenElse "WalkEnabled"
 | D22 | 子群組分成 `PositionController`（原 `SubGroupController`）與 `PdController`，kp / kd 經 `JointCommand` 由模式指定 | RL policy 的訓練假設是「關節 PD 以特定增益追目標」，增益因 policy 而異；Ti5 協議沒有 kp/kd，只能在 controller 端做 PD 輸出力矩。兩者導出相同名稱的位置 reference，上游接線不變。目前只在 MuJoCo 使用，實機待驗證電流模式與迴圈頻率 |
 | D25 | 組合動作做成 `LocomotionAlgorithm` plugin（`graphen_choreographer`），腳本是獨立的 YAML 檔（命名姿態 + 多軌 keyframe），各軌道開環、只共用時鐘 | 同一時間只有一個模式，切換模式會凍住其他部位，所以「重疊的多部位動作」必須在一個模式內完成；`target` 模式只有限速、沒有時間。做成 plugin 不必改控制層。腳本獨立成檔是因為 ROS 參數不支援巢狀結構，而且動作會常改，應該和 controller 接線分開（同 BVH）。開環的好處是行為可預測：一個部位延遲不會拖慢其他部位；代價是不能表達「等 A 到位再動 B」，需要時再加可選的同步點 |
 | D26 | 編舞不允許被 `max_steps` 限速：configure / 進入模式時檢查，不通過就不播放；為此 `Context` 增加 `max_steps` | 被限速的 joint 會默默落後，編舞就不是寫的那個樣子，而且只有該 joint 走樣，很難從外觀發現。寧可在啟動時報錯並給出建議值 |
-| D28 | 「已在該模式」的處理由**每一次指令**的 `on_same_mode` 決定（ignore / restart / restart_if_finished），不是模式的屬性 | 表演時重複觸發很常見：`restart_if_finished` 吃掉播放中的重複指令，播完後再觸發就重播。放在指令上，同一個模式在不同情境可以有不同處理，且不必知道模式背後是哪一種 Motion；預設 ignore 與原本的行為相同，既有的 tree 與 `~/mode` 不受影響 |
-| D29 | 「不可中斷」是模式的屬性（`interruptible: false`），在 controller 判斷；停止類模式以 `preempt` 永遠可以切入（hold 預設 true） | BT 只能管住自己送出的指令，手動 action、`~/mode` 或其他節點會繞過它；某些動作途中被切換有實機風險，保證必須和動作綁在一起。拒絕而不是延後切換，避免「指令已接受但還沒生效」的中間狀態。hold 預設 preempt，是為了忘了設定時停止仍然有效 |
+| D28 | 「已經在播同一個」的處理由**每一次指令**的 `on_same`（原 `on_same_mode`）決定（ignore / restart / restart_if_finished），不是模式的屬性 | 表演時重複觸發很常見：`restart_if_finished` 吃掉播放中的重複指令，播完後再觸發就重播。放在指令上，同一個模式在不同情境可以有不同處理，且不必知道模式背後是哪一種 Motion；預設 ignore 與原本的行為相同，既有的 tree 與 `~/mode` 不受影響 |
+| D29 | 「不可中斷」是被播放的東西的屬性（系統模式的 `interruptible: false`、編舞腳本的 `interruptible`…，見 D37），在 controller 判斷；停止類模式以 `preempt` 永遠可以切入（hold 預設 true） | BT 只能管住自己送出的指令，手動 action、`~/mode` 或其他節點會繞過它；某些動作途中被切換有實機風險，保證必須和動作綁在一起。拒絕而不是延後切換，避免「指令已接受但還沒生效」的中間狀態。hold 預設 preempt，是為了忘了設定時停止仍然有效 |
 | D30 | 編舞的第一段帶入切換當下的命令速度（五次 Hermite），為此 `RobotState` 增加 `commanded_velocities` | 播放途中切換時，從靜止開始的曲線等於命令在一個週期內煞停（實測加速度約 38 rad/s²），觀感是頓一下，實機上是電流尖峰與衝擊。用命令速度而不是量測速度：與命令位置一致、沒有雜訊，切換前後的命令曲線因此連續 |
-| D27 | 「模式播完了」由 `Motion::status()` → planner 的 `progress()`（附序號）→ `SwitchMode` action 的 `wait_until_finished` 回報；cancel 只停止等待 | BT 要依序播放多段動作，用固定時間的 `Wait` 會和腳本長度脫鉤。序號用來分辨「這一次播放」與之後的切換（被取代時 abort，不會誤報成功）。沿用同一個 action 而不是新增 topic：預設值維持原本「切換後立即成功」，既有的 tree 不受影響。cancel 不停止動作，是因為「停下來」本身就是切到另一個模式，由呼叫端決定切到哪裡比較明確 |
+| D27 | 「模式播完了」由 `Motion::status()` → planner 的 `progress()`（附序號）→ 播放類 action 的 `wait_until_finished` 回報；cancel 只停止等待 | BT 要依序播放多段動作，用固定時間的 `Wait` 會和腳本長度脫鉤。序號用來分辨「這一次播放」與之後的切換（被取代時 abort，不會誤報成功）。沿用同一個 action 而不是新增 topic：預設值維持原本「切換後立即成功」，既有的 tree 不受影響。cancel 不停止動作，是因為「停下來」本身就是切到另一個模式，由呼叫端決定切到哪裡比較明確 |
 | D31 | 模型以 `robot:=` 選擇（取代 `mujoco_robot`），同時決定 URDF 本體、MJCF 與 PD 預設增益，實機也跟著它走；子群組設定依控制方式分成 `position_common.yaml` / `pd_common.yaml`；PD 增益放在模型套件、以關節為 key（`joint_gains.<joint>.*`） | 原本 `robot_description` 不論模型都是 `ti5_170a_graphen` 的本體，與 ti5_t170 的 MJCF 有 6 軸軸向相反、極限不同，BVH 重定向與實際物理不一致；位置模式的接線在 mock / mujoco / real 三份檔案逐字重複；增益依「硬體」分檔（`mujoco_pd_<robot>.yaml`、`real_pd.yaml`）且綁定 controller 名稱，但增益本質上屬於模型。改成依控制方式與模型組合後，新增模型只要在模型套件放增益檔、在 launch 的 `robots` 加一列；改子群組分組不必改增益檔。t170a 一併移除。預設 `ti5_170a`（沿用原本的 URDF，所有 hardware 相同）；ti5_t170 的軸向與極限在實機確認後再考慮改預設 |
+| D32 | 設定、能力、內容分開：`controllers.yaml` 只留硬體、安全上限與系統模式；policy 在 policy 庫（跟著程式碼版控）；編舞在機器人端的舞曲庫、BVH 在 BVH 目錄 | 原本表演內容寫在機器人設定裡：改內容要重啟、會和安全設定混在同一個檔案，而且 `walk`、`arm_demo` 這種模式其實是「類型 + 某個檔案」。分開之後三種人各管各的東西，內容可以在執行時更換 |
+| D33 | 模式 = 類型，每種類型一個 action / BT 節點（`SwitchMode`、`PlayChoreo`、`PlayBvh`、`RunPolicy`），共通的選項 / 結果 / feedback 用巢狀 msg 定義一次（`Playback*.msg`） | 指令需要帶「每次都不一樣的資料」（播哪一段、試播的內容、循環與速度）時，塞進單一的 `SwitchMode` 會讓它長出只對某一種模式有效的欄位。獨立的 action 讓 goal 可以各自定義，BT 節點的名稱與有型別的 port 也直接表達意圖；共通語意只有一份，不會各自走樣 |
+| D34 | 所有入口都經過同一個 `PlaybackArbiter`；`SwitchMode` 保留給系統模式 | 不可中斷、`preempt`、互相取代必須對所有類型一致，否則從另一個入口就能繞過。停止走系統模式：不需要載入、不查任何庫、不會因為內容有誤而失敗，是相依最少的路徑 |
+| D35 | 內容在播放時載入：先載入並檢查、通過才切換；載入在專用的 callback group 進行，BVH 與 policy 快取並可預載 | 載入時間當作初始化時間是可以接受的，但不能讓機器人在載入期間失去控制，也不能擋住 `~/cmd_vel`。先檢查再切換讓「內容有誤」不會打斷正在進行的動作，錯誤訊息也能直接回給送出指令的一方 |
+| D36 | 編舞以編輯端為主：帶內容試播，正式的舞曲發佈到機器人端的舞曲庫，BT 只能依名稱播放；發佈與播放用同一套檢查；不留歷史、沒有刪除介面 | 編輯要能立刻試，表演則不能依賴編輯工具在線。機器人端只保存發佈過的快照，方向固定（編輯端 → 機器人），不會有兩邊各改一份的問題；以 sha256 讓編輯端比對是否已同步 |
+| D37 | 編舞的不可中斷寫在腳本（`interruptible`），機器人端的上限（`max_steps`、速度比例…）只在 `controllers.yaml` | 哪一段表演要保護是內容的性質，由編排的人決定；能動多快是機器人的性質，內容不能放寬。為此 `LocomotionAlgorithm` 增加 `interruptible()` |
+| D38 | 「同一個」的判斷包含內容的版本（編舞、policy 設定檔的 sha256；BVH 的播放選項） | 重新發佈之後，同名的舞曲應該被當成新的內容而切換過去，不是被 `ON_SAME_IGNORE` 吃掉；每次播放也因此在 log 留下內容的版本 |
+| D39 | policy 的參數可以用 controller 參數 `<policy>.<鍵>` 覆寫；啟動時以 `default_policy` 在 configure 階段載入 | 情境 launch 只需要改一兩個值（例如 `entry_speed`），不必複製整份訓練常數；自由站立的模擬必須從第一個週期就由 policy 接手，而且設定有誤要在啟動時發現 |
 
 ---
 
@@ -828,27 +956,34 @@ IfThenElse "WalkEnabled"
 4. 在 launch 的 `sub_group_controllers` 清單加上新 controller，它會自動串進啟動鏈。
 
 ### 新增 BVH 動作
-1. 把 BVH 放到 `graphen_bringup/motions/`，節點名稱必須是 URDF link 名稱，rest pose 必須等於 URDF 零位。
+1. 把 `<名稱>.bvh` 放到 BVH 目錄（`bvh.library_path`，預設 `graphen_bringup/motions/`；放在套件裡時要重新建置 `graphen_bringup`）。名稱只能用 `[a-z0-9_-]`；節點名稱必須是 URDF link 名稱，rest pose 必須等於 URDF 零位。
 2. 先用 `bvh_retarget_cli` 檢查分組、殘差、限位截斷與最大速度。
-3. 在 `modes` 加上名稱，設定 `type: bvh`、`file`，並以「最大速度 × frame_time × 1.2」設定 `max_steps`（每幀的跳動上限）。幀間隔會自動傳給子群組，不需要其他設定。
+3. 確認 `bvh.max_steps` 容得下這個檔案：「最大速度 × frame_time × 1.2」（每幀的跳動上限，所有 BVH 共用同一組）。幀間隔會自動傳給子群組，不需要其他設定。
+4. 以 `play_bvh` action（BT 的 `PlayBvh`）依檔名播放，不用重新啟動 controller；修改過的檔案下次播放時會重新載入。
 
-### 新增編舞動作（組合動作）
-1. 在 `graphen_bringup/motions/` 寫 `<名稱>.choreo.yaml`（格式見 [§2.12](#212-編舞graphen_choreographer)），新增檔案後重新建置 `graphen_bringup`（symlink-install 之後修改內容不必重建，但要重新啟動 controller 才會重新讀取）。
-2. `ros2 run graphen_choreographer choreo_check <檔案> --urdf <展開後的 URDF>` 檢查限位與峰值速度，並取得建議的 `max_steps`。
-3. 在 `modes` 加上名稱，設定 `type: plugin`、`plugin: graphen_choreographer/ChoreographerAlgorithm`、`file`、`max_steps`（32 個；編舞中的 joint 至少要是建議值，其他維持平常的值）。
-4. 要串接多段：BT 用 `SwitchMode wait_finished="true"`；同一段可能被重複觸發時加 `on_same_mode="restart_if_finished"`。表演中不能被打斷的段落在模式設定 `interruptible: false`（停止仍然有效）。
+### 新增編舞（組合動作）
+1. 寫腳本 `<名稱>.choreo.yaml`（格式見 [§2.12](#212-編舞graphen_choreographer) 與 [CHOREOGRAPHER.md](CHOREOGRAPHER.md)）。
+2. `ros2 run graphen_choreographer choreo_check <檔案> --urdf <展開後的 URDF>` 檢查限位與峰值速度；峰值速度必須在 `choreo.max_steps` 與 `choreo.velocity_limit_scale` 之內（所有編舞共用）。
+3. 試播：把內容放進 `play_choreo` 的 goal（`content`）。確認之後發佈到舞曲庫：`ros2 run graphen_bringup choreo_publish <名稱> <檔案>`。都不用重新啟動 controller。
+4. 要串接多段：BT 用 `PlayChoreo wait_finished="true"`；同一段可能被重複觸發時加 `on_same="restart_if_finished"`。表演中不能被打斷的段落在腳本頂層寫 `interruptible: false`（停止仍然有效）。
 5. 上實機前先在 mock / MuJoCo 看過；實機的 `Ti5Hardware` 另有 `max_command_velocity`，比腳本的峰值速度小時會被硬體端限速（編舞不知道）。
+
+### 新增一種播放類型
+1. 在 `graphen_interfaces` 加 action：goal 為專用欄位加 `PlaybackOptions options`，result 為 `PlaybackResult result`，feedback 為 `PlaybackFeedback feedback`。
+2. 在 `graphen_controllers` 加一個來源元件（參考 `BvhSource`）：`prepare()` 回傳 `PlaybackRequest`，失敗時丟出例外。類型名稱加進保留名稱。
+3. 在 `SwitchGroupController::create_playback_interfaces()` 建立 `PlaybackServer<新的 action>`，提供 `validate` / `start` / `describe`（需要載入時間的再加 `needs_loading`）。切換規則不用改。
+4. 在 `graphen_bt_nodes` 的 `playback_nodes` 加一個繼承 `PlaybackActionNode<新的 action>` 的節點並註冊。
 
 ### 新增外部 locomotion 演算法
 1. 在自己的套件中依賴 `graphen_locomotion`，實作 `graphen::locomotion::LocomotionAlgorithm`，在 `.cpp` 結尾加上 `PLUGINLIB_EXPORT_CLASS(<Class>, graphen::locomotion::LocomotionAlgorithm)`。可以參考 [sine_wave_algorithm.cpp](../src/graphen_locomotion/src/sine_wave_algorithm.cpp)。
 2. 寫 plugin 描述檔（`base_class_type="graphen::locomotion::LocomotionAlgorithm"`），並在 CMake 中以 `pluginlib_export_plugin_description_file(graphen_locomotion <xml>)` 導出。第一個參數是 **base class 所在的套件**，不是自己的套件。
-3. 在 `controllers.yaml` 的 `modes` 加上名稱，設定 `type: plugin`、`plugin: <plugin 名稱>`、`max_steps`（每週期上限，建議依演算法的最大速度 / `planner_rate` 設定），其餘參數也寫在 `<mode>.` 下。
+3. 作為系統模式使用：在 `controllers.yaml` 的 `modes` 加上名稱，設定 `type: plugin`、`plugin: <plugin 名稱>`、`max_steps`（每週期上限，建議依演算法的最大速度 / `planner_rate` 設定），其餘參數也寫在 `<mode>.` 下。
 4. 參數在 `configure()` 讀取並驗證，錯誤時丟例外；`update()` 中不要長時間阻塞（會拖慢 planner 週期）。
 5. 機身狀態用 `state.base`（機身座標系），速度指令用 `state.command`；使用前先檢查 `base.valid`、`command.active`。
-6. 有終點的演算法覆寫 `finished()`，`SwitchMode` 的 `wait_until_finished` 才等得到結束。
+6. 有終點的演算法覆寫 `finished()`，播放類 action 的 `wait_until_finished` 才等得到結束；內容本身不可中斷時覆寫 `interruptible()`。
 
 ### 新增 RL policy
-- **同一個家族重新訓練**（obs / action 組法相同）：把 onnx 放進 `graphen_rl_policy/policy/`，複製一個模式，更新 `model_path`、`model_sha256`（`sha256sum <onnx>`），以及改變的常數（`default_joint_pos`、`action_scale`、`kp`、`kd` 等）。不需要重新建置程式（`--symlink-install` 下新的 onnx 要重建 `graphen_rl_policy` 才會安裝到 share）。
+- **同一個家族重新訓練**（obs / action 組法相同）：把 onnx 放進 `graphen_rl_policy/policy/`，複製一份 `<名稱>.policy.yaml`（檔名就是 `run_policy` 用的名稱），更新 `model_path`、`model_sha256`（`sha256sum <onnx>`），以及改變的常數（`default_joint_pos`、`action_scale`、`kp`、`kd` 等）。不需要重新建置程式（`--symlink-install` 下新的 onnx 與設定檔要重建 `graphen_rl_policy` 才會安裝到 share）。不用改 `controllers.yaml`。
 - **新的家族**：在 `graphen_rl_policy`（或自己的套件，依賴 `graphen_rl_policy`）繼承 `PolicyRunner`，實作 `configure_policy()`、`reset_policy()`、`build_obs()`、`action_to_targets()`；history 可用 `ObsHistory`。plugin XML 以 `pluginlib_export_plugin_description_file(graphen_locomotion <xml>)` 導出。
 - 向訓練端索取：`robot.joint_names` 的實際順序、obs 的組法（term 順序、scale、history 排法）、action 的換算、預設姿態、PD 增益、控制週期、是否有 obs normalization 以及是否包在 onnx 內。
 
@@ -870,15 +1005,20 @@ IfThenElse "WalkEnabled"
 
 - **Motion plugin 化（已部分完成）**：外部演算法已可用 `type: plugin` 接入（D19），新增動作種類不必修改 `graphen_controllers`。`target` / `hold` / `bvh` 仍是內建的 Motion；如果之後需要，可以改寫成 `LocomotionAlgorithm` plugin。
 - **編舞是開環的**：只依時鐘輸出命令位置，「播完」也以命令位置為準。PD（力矩）模式下實際位置會有穩態誤差（MuJoCo `ti5_t170` 實測手臂約 0.05 ~ 0.2 rad），播完不代表實際到位。需要「等到位再繼續」時要加同步點（keyframe 上的可選等待），目前沒有。
-- **速度平滑化只在切入編舞模式時生效**：切到 `hold`（包括緊急停止）仍然是立即停住；新腳本沒有涵蓋的 joint 也是立即停住。需要的話，可以另外做一個「減速到停止」的停止模式。
-- **不可中斷的模式若永遠不結束**（循環 BVH、policy 設了 `interruptible: false`），只能用 preempt 的模式離開；configure 時對循環 BVH 印出 WARN。
-- **編舞尚未支援**：循環播放、整體的 `time_scale`、跨腳本共用的姿態庫、把目前姿態錄成 pose 的工具、兩份腳本同時播放（同一時間只有一個模式）。
+- **速度平滑化只在切入編舞時生效**：切到 `hold`（包括緊急停止）仍然是立即停住；新腳本沒有涵蓋的 joint 也是立即停住。需要的話，可以另外做一個「減速到停止」的停止模式。
+- **不可中斷的播放若永遠不結束**（`bvh.interruptible: false` 時的循環 BVH、設了 `interruptible: false` 的 policy），只能用 preempt 的系統模式離開。
+- **編舞尚未支援**：循環播放、整體的 `time_scale`、跨腳本共用的姿態庫、把目前姿態錄成 pose 的工具、兩份腳本同時播放（同一時間只播放一個 Motion）。
 - **編舞與硬體端限速**：`Ti5Hardware` 的 `max_command_velocity` 不在編舞的檢查範圍內，比腳本的峰值速度小時實機會落後（`TODO(verify-on-hw)`）。
-- **模式失敗的原因只在 log**：`wait_until_finished` 的 goal 因 plugin 丟例外而 abort 時，result 只說明失敗，詳細原因要看 controller 的 log。
-- **TODO：`package://` 解析重複**：`graphen_controllers`（BVH）、`graphen_rl_policy`（onnx）、`graphen_choreographer`（腳本）各有一份相同的邏輯，可以抽成共用元件。
+- **進入時才發現的失敗，原因只在 log**：載入與檢查階段的錯誤會直接出現在 result 的 message；但進入時才檢查的項目（例如編舞從目前位置到第一個姿態的那一段）失敗時，`wait_until_finished` 的 goal 只說明失敗，詳細原因要看 controller 的 log；不等待的 goal 這時已經回報成功。
+- **舞曲庫沒有刪除與歷史**：同名發佈直接覆寫，要移除只能到機器人上刪檔案。表演進行中重新發佈不影響正在播的那一次，但下一次播放就是新內容，沒有「凍結節目」的機制。
+- **BVH 與 policy 沒有列出介面**：UI 目前無法查詢機器人上有哪些 BVH / policy 可以選（編舞有 `list_choreos`）。
+- **所有 BVH 共用同一組 `bvh.max_steps`**：目前依步行的檔案設定；動作差異很大的檔案可能需要改成每個檔案自己的設定。
+- **policy 沒有進入條件檢查**：機身已經傾斜或倒下時仍然可以 `run_policy`，由 policy 自己面對。
+- **載入是序列化的**：播放用的 callback group 一次只處理一個要求，載入 policy 的那一兩百毫秒內，其他內容的播放指令與 service 要等它結束。`~/switch_mode`（包括 stop）與 `~/mode` 不在這個 group，不受影響。
+- **TODO：`package://` 解析重複**：`graphen_controllers`（`library_utils`）、`graphen_rl_policy`（onnx）、`graphen_choreographer`（腳本）各有一份相同的邏輯，可以抽成共用元件。
 - **TODO：機身線速度估測**：目前的 `ImuLeakyEstimator` 只用 IMU，線速度只能當短時間的近似值。需要準確的線速度時（例如 RL policy 的 observation），改寫一個融合 IMU 與腿部運動學（足底接觸判斷）的 `BaseStateEstimator` plugin，換掉 `base_estimator.plugin` 即可。
 - **速度前饋與增益只有 PdController 使用**：`PositionController` 與 `Ti5Hardware` 只有 position 介面，位置模式下 `JointCommand::velocities` / `kp` / `kd` 不會生效。實機要使用 PD 需要先驗證 Ti5 的電流模式（`TODO(verify-on-hw)`）。
-- **BT 的方向與 controller 的模式可能不一致**：controller 被 reconfigure 回到 `default_mode` 時，BT 的 `{mode}` 不會跟著改變，要等到下一次換向（或切換 `gp_enable_*`）才會重新同步。
+- **BT 的方向與 controller 的模式可能不一致**：controller 被 reconfigure 回到啟動時的動作時，BT 的 `{mode}` 不會跟著改變，要等到下一次換向（或切換 `gp_enable_*`）才會重新同步。
 - **planner 的速度受 non-RT 排程影響**：max_steps 是「每週期」的量，planner thread 被延遲時，實際速度會變慢（WSL 在高負載下觀察得到）。BVH 的播放時間以實際經過時間推進，不受影響，但輸出仍受 max_steps 限制。
 - **BVH 步態是開環播放**：沒有平衡控制，浮動基座（root 位移、`BASE_S` 旋轉）被忽略；實機只能在吊掛等安全條件下使用。
 - **BVH 超出 T170 限位**：`t170wk_walk1_subject1.bvh` 的髖 roll（約 ±0.6 rad）、踝等會超出 URDF 限位而被截斷，組的殘差因此不為 0（約 0.3~0.6 rad）。

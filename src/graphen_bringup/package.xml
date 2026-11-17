@@ -17,7 +17,10 @@
   <exec_depend>fb70_description</exec_depend>
   <exec_depend>ti5_t170_description</exec_depend>
   <exec_depend>graphen_controllers</exec_depend>
-  <!-- 編舞模式（graphen_choreographer/ChoreographerAlgorithm）與 motions/*.choreo.yaml -->
+  <exec_depend>graphen_interfaces</exec_depend>
+  <!-- policy 庫（policy.library_path 的預設位置：graphen_rl_policy/policy） -->
+  <exec_depend>graphen_rl_policy</exec_depend>
+  <!-- 編舞（choreo.plugin：graphen_choreographer/ChoreographerAlgorithm）與 motions/*.choreo.yaml -->
   <exec_depend>graphen_choreographer</exec_depend>
   <exec_depend>hardware_interface</exec_depend>
   <exec_depend>imu_sensor_broadcaster</exec_depend>
@@ -27,6 +30,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>ti5_170a_graphen</exec_depend>
   <exec_depend>xacro</exec_depend>

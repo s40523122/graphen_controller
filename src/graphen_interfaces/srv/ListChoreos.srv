@@ -1,0 +1,4 @@
+# 列出舞曲庫中已發佈的編舞（依名稱排序）
+---
+string[] names
+string[] sha256   # 與 names 一一對應

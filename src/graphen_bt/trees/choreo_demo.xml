@@ -1,33 +1,37 @@
 <?xml version="1.0"?>
 <!--
-  依序播放兩段編舞（graphen_choreographer），每一段播完才接下一段，然後從頭重複：
+  依序播放舞曲庫中的兩段編舞（graphen_choreographer），每一段播完才接下一段，然後從頭重複：
     arm_demo_return：兩隻手臂從目前的位置回到下垂姿態
-    arm_demo       ：右臂 0 ~ 3 s、左臂 1 ~ 5 s 的重疊動作（必須從下垂姿態開始）
+    arm_demo       ：右臂 0 ~ 3 s、左臂 1 ~ 5 s 的重疊動作（必須從下垂姿態開始；腳本標示為不可中斷）
 
-  wait_finished="true"            ：SwitchMode 在動作播完之前回傳 RUNNING，Sequence 停在這個節點。
-  on_same_mode="restart_if_finished"：controller 已經停在同一個模式、而且已經播完時（例如 BT 重新啟動）
-                                     重播；還在播放時不打斷，等的是目前這一次。
-  finish_timeout_ms   ：超過時回傳 FAILURE（動作本身不會停，要停必須另外切到 hold 類的模式）。
+  執行前要先把這兩段發佈到機器人的舞曲庫（bringup 啟動之後）：
+    ros2 run graphen_bringup choreo_publish arm_demo <share>/graphen_bringup/motions/arm_demo.choreo.yaml
+    ros2 run graphen_bringup choreo_publish arm_demo_return <share>/graphen_bringup/motions/arm_demo_return.choreo.yaml
+  controllers.yaml 需要有 choreo 區塊（見 controllers.yaml.example）。
 
-  模式名稱必須和 controllers.yaml 的 modes 一致（見 controllers.yaml.example 的 arm_demo / arm_demo_return）。
+  wait_finished="true"          ：PlayChoreo 在動作播完之前回傳 RUNNING，Sequence 停在這個節點。
+  on_same="restart_if_finished" ：controller 已經停在同一段、而且已經播完時（例如 BT 重新啟動）重播；
+                                  還在播放時不打斷，等的是目前這一次。
+  finish_timeout_ms             ：超過時回傳 FAILURE（動作本身不會停，要停必須另外 SwitchMode 到 hold 類的模式）。
+
   執行：ros2 launch graphen_bt bt.launch.py tree_file:=<share>/trees/choreo_demo.xml
 -->
 <root main_tree_to_execute="BehaviorTree">
     <!-- ////////// -->
     <BehaviorTree ID="BehaviorTree">
         <Sequence name="ArmDemo">
-            <Action ID="SwitchMode" name="ToRest" mode="arm_demo_return" wait_finished="true" on_same_mode="restart_if_finished" finish_timeout_ms="10000"/>
-            <Action ID="SwitchMode" name="PlayDemo" mode="arm_demo" wait_finished="true" on_same_mode="restart_if_finished" finish_timeout_ms="10000"/>
+            <Action ID="PlayChoreo" name="ToRest" choreo="arm_demo_return" wait_finished="true" on_same="restart_if_finished" finish_timeout_ms="10000"/>
+            <Action ID="PlayChoreo" name="PlayDemo" choreo="arm_demo" wait_finished="true" on_same="restart_if_finished" finish_timeout_ms="10000"/>
         </Sequence>
     </BehaviorTree>
     <!-- ////////// -->
     <TreeNodesModel>
-        <Action ID="SwitchMode">
-            <input_port name="action_name" type="std::string" default="/switch_group_controller/switch_mode">SwitchMode action name</input_port>
-            <input_port name="mode" type="std::string">Mode name to switch to</input_port>
-            <input_port name="timeout_ms" type="int" default="1000">Timeout for server discovery and the switch itself</input_port>
-            <input_port name="wait_finished" type="bool" default="false">Return SUCCESS only after the mode's motion has finished</input_port>
-            <input_port name="on_same_mode" type="std::string" default="ignore">When already in this mode: ignore, restart or restart_if_finished</input_port>
+        <Action ID="PlayChoreo">
+            <input_port name="action_name" type="std::string" default="/switch_group_controller/play_choreo">Action name</input_port>
+            <input_port name="choreo" type="std::string">Name of a published choreography</input_port>
+            <input_port name="timeout_ms" type="int" default="1000">Timeout for server discovery and the switch itself (including loading)</input_port>
+            <input_port name="wait_finished" type="bool" default="false">Return SUCCESS only after the motion has finished</input_port>
+            <input_port name="on_same" type="std::string" default="ignore">When this is already playing: ignore, restart or restart_if_finished</input_port>
             <input_port name="finish_timeout_ms" type="int" default="0">With wait_finished: limit on waiting for the motion to finish, 0 = no limit</input_port>
         </Action>
     </TreeNodesModel>

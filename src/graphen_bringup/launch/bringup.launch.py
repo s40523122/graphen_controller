@@ -17,6 +17,7 @@ def generate_launch_description():
     bringup_share = get_package_share_directory('graphen_bringup')
 
     xacro_file = os.path.join(description_share, 'urdf', 'ti5_170a_graphen.urdf.xacro')
+    default_srdf_file = os.path.join(description_share, 'config', 'ti5_170a_graphen.srdf')
     config_dir = os.path.join(bringup_share, 'config')
     # 與硬體無關的設定（模式、switch 接線）；控制方式依 hardware:= 疊加 hardware/<position|pd>_common.yaml、
     # IMU 疊加 imu/*.yaml，PD 增益依 robot:= 取自模型套件
@@ -42,6 +43,7 @@ def generate_launch_description():
     mujoco_viewer_port = LaunchConfiguration('mujoco_viewer_port')
     robot = LaunchConfiguration('robot')
     scenario_params = LaunchConfiguration('scenario_params')
+    srdf_file = LaunchConfiguration('srdf_file')
     # 由 resolve_mujoco_model 依 robot 設定
     mujoco_missing_joints = LaunchConfiguration('mujoco_missing_joints')
     mujoco_initial_base_height = LaunchConfiguration('mujoco_initial_base_height')
@@ -113,6 +115,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'mujoco_viewer_port', default_value='9870',
             description='UDP port of graphen_mujoco/tools/mujoco_viewer.py (0 disables)'),
+        DeclareLaunchArgument(
+            'srdf_file', default_value=default_srdf_file,
+            description='SRDF published (latched) on /robot_description_semantic for external '
+                        'programs; empty disables'),
     ]
 
     def is_mujoco(context):
@@ -122,11 +128,13 @@ def generate_launch_description():
     # URDF 本體由 ti5_170a_graphen.urdf.xacro 依 robot 選擇。只在需要時查詢模型套件
     #   mjcf：MJCF 相對路徑，None 時依 mujoco_fixed_base 選 mjcf/t170_fixed.xml / t170_free.xml
     #   servo：True 為位置伺服（mujoco / mujoco_pd 都可用），False 為力矩馬達（只能 mujoco_pd）
-    #   missing_joints / base_height：MujocoSystem 的設定；初始高度為訓練初始姿態下腳底貼地的高度
+    #   missing_joints / base_height：MujocoSystem 的設定；初始高度為直膝（ros2_control 的初始姿態，
+    #   所有關節 0）下腳底最低點 + 5 mm。以屈膝的訓練姿態計算會讓直膝的腳踩進地面，
+    #   吊掛時每一步重設基座、接觸力持續灌入能量，全身的 roll 關節會來回震盪
     Robot = namedtuple('Robot', 'package mjcf servo missing_joints base_height')
     robots = {
-        # 腳底貼地為 1.065 m（ti5_t170_description/scripts/make_mjcf.py），留 5 mm 落地
-        'ti5_t170': Robot('ti5_t170_description', 'mjcf/ti5_t170.xml', False, 'error', '1.07'),
+        # 直膝下腳底最低點為 0.9954 m，留 5 mm。MJCF 的 keyframe 用 0.985（屈膝的訓練姿態），兩者不同
+        'ti5_t170': Robot('ti5_t170_description', 'mjcf/ti5_t170.xml', False, 'error', '1.000'),
         # ti5_170a_graphen/scripts/make_mjcf.py 印出的高度（直膝下腳底最低點 + 5 mm），重新產生 MJCF 後同步
         'ti5_170a': Robot('ti5_170a_graphen', 'mjcf/ti5_170a.xml', False, 'error', '0.899'),
         'fb70': Robot('fb70_description', None, True, 'error', '1.07'),
@@ -191,6 +199,17 @@ def generate_launch_description():
         executable='robot_state_publisher',
         output='screen',
         parameters=[robot_description]
+    )
+
+    # 1-1. SRDF（joint 分組等語意資訊）給外部程式訂閱；controller 不使用。
+    #       QoS 與 /robot_description 相同（transient_local），晚加入的 subscriber 也收得到
+    node_srdf_publisher = Node(
+        package='graphen_bringup',
+        executable='file_publisher',
+        name='srdf_publisher',
+        output='screen',
+        parameters=[{'file_path': srdf_file, 'topic': 'robot_description_semantic'}],
+        condition=IfCondition(PythonExpression(["'", srdf_file, "' != ''"]))
     )
 
     # 2. Controller Manager
@@ -303,6 +322,7 @@ def generate_launch_description():
         set_mujoco_model,  # 必須在使用 robot_description 的 node 之前
         set_hw_read_timeout,
         node_robot_state_publisher,
+        node_srdf_publisher,
         node_controller_manager,
         spawn_joint_state_broadcaster,
         spawn_sensor_forwarder,

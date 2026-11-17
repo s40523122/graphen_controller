@@ -34,10 +34,13 @@ struct Context {
 
 // 外部 locomotion 演算法的 plugin 基類（pluginlib）。
 //
-// controller 以 YAML 的 <mode>.type: plugin、<mode>.plugin: <類別名稱> 建立，一個模式一個實例。
+// controller 建立實例的三種情況（參數的來源不同，演算法都是透過 Context::params 讀取）：
+//   系統模式  YAML 的 <mode>.type: plugin、<mode>.plugin: <類別名稱>，configure 時建立，一個模式一個實例
+//   policy    policy 庫的設定檔（<名稱>.policy.yaml 的 plugin），第一次執行時建立並快取
+//   編舞      controller 的 choreo.plugin，每次播放 / 發佈時建立一個新的實例
 // 呼叫順序：
-//   configure()：controller configure 時呼叫一次（controller 的 thread）。設定錯誤時丟出例外，
-//                controller 會 configure 失敗
+//   configure()：建立實例後呼叫一次（non-RT thread）。設定錯誤時丟出例外：
+//                系統模式會讓 controller configure 失敗，policy / 編舞則是該次播放指令失敗
 //   on_enter()：每次切換到這個模式時，在 planner thread 中呼叫
 //   update()：之後每個規劃週期在 planner thread 中呼叫（non-RT，但應避免長時間阻塞）
 // on_enter() / update() 都只在 planner thread 中呼叫，不需要額外的同步。
@@ -46,7 +49,7 @@ struct Context {
 // update() 的輸出會再經過 planner 的 <mode>.max_steps 限制（每週期最大移動量）才送往下游。
 //
 // 有終點的演算法（例如播放一段動作）可以覆寫 finished()，讓 controller 回報「這個模式播完了」
-// （SwitchMode action 的 wait_until_finished）；持續執行的演算法（步行、policy）不需要覆寫。
+// （播放類 action 的 wait_until_finished）；持續執行的演算法（步行、policy）不需要覆寫。
 class LocomotionAlgorithm {
 public:
   virtual ~LocomotionAlgorithm() = default;
@@ -63,6 +66,11 @@ public:
   // 這次進入模式後動作是否已經完成（之後的 update() 只是保持）。
   // 每次 update() 之後在 planner thread 中呼叫；on_enter() 之後要回到 false
   virtual bool finished() const {return false;}
+
+  // 播放中是否允許被其他播放打斷（例如內容本身標示為不可中斷的編舞）。configure() 之後由 controller
+  // 查詢一次；false 時，在 finished() 為 true 之前只有停止類（preempt）的模式可以切入。
+  // controller 端的設定（<mode>.interruptible）也是 false 時同樣不可中斷：兩者取較嚴格的
+  virtual bool interruptible() const {return true;}
 };
 
 }  // namespace graphen::locomotion

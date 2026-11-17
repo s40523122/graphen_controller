@@ -1,5 +1,5 @@
-#ifndef GRAPHEN_RL_POLICY__SHA256_HPP_
-#define GRAPHEN_RL_POLICY__SHA256_HPP_
+#ifndef GRAPHEN_LOCOMOTION__SHA256_HPP_
+#define GRAPHEN_LOCOMOTION__SHA256_HPP_
 
 #include <array>
 #include <cstdint>
@@ -8,10 +8,11 @@
 #include <stdexcept>
 #include <string>
 
-namespace graphen::rl_policy {
+namespace graphen::locomotion {
 
-// SHA-256（FIPS 180-4），用來確認載入的 onnx 與 YAML 綁定的是同一個檔案。
-// 自行實作以免為了一個雜湊引入 OpenSSL 依賴；只在 configure 時使用，不追求速度
+// SHA-256（FIPS 180-4）。用來確認載入的 onnx 與設定綁定的是同一個檔案（graphen_rl_policy），
+// 以及辨識播放內容的版本（controller 的舞曲庫 / policy 庫）。
+// 自行實作以免為了一個雜湊引入 OpenSSL 依賴；只在載入時使用，不追求速度
 class Sha256 {
 public:
   Sha256() {reset();}
@@ -59,6 +60,12 @@ public:
       }
     }
     return hex;
+  }
+
+  static std::string hex_digest_of(const std::string & data) {
+    Sha256 sha;
+    sha.update(reinterpret_cast<const unsigned char *>(data.data()), data.size());
+    return sha.hex_digest();
   }
 
   static std::string file_hex_digest(const std::string & path) {
@@ -132,6 +139,6 @@ private:
   uint64_t total_bytes_{0};
 };
 
-}  // namespace graphen::rl_policy
+}  // namespace graphen::locomotion
 
-#endif  // GRAPHEN_RL_POLICY__SHA256_HPP_
+#endif  // GRAPHEN_LOCOMOTION__SHA256_HPP_

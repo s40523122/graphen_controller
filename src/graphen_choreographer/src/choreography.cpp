@@ -176,7 +176,7 @@ Choreography parse_choreography(const std::string & yaml_text) {
   }
 
   try {
-    check_keys(root, {"version", "default_interp", "poses", "tracks"}, "top level");
+    check_keys(root, {"version", "default_interp", "interruptible", "poses", "tracks"}, "top level");
 
     int version = 0;
     if (!root["version"] || !YAML::convert<int>::decode(root["version"], version)) {
@@ -209,6 +209,24 @@ Choreography parse_choreography(const std::string & yaml_text) {
     }
 
     Choreography choreography;
+    if (const auto node = root["interruptible"]) {
+      // 只接受 true / false：yaml-cpp 會把 yes / on 等也轉成 bool，寫錯時不要默默接受
+      if (!node.IsScalar() || (node.Scalar() != "true" && node.Scalar() != "false")) {
+        fail("interruptible", "expected true or false");
+      }
+      choreography.interruptible = node.Scalar() == "true";
+    }
+    for (const auto & [name, pose] : poses) {
+      for (const auto & [joint, value] : pose) {
+        (void)value;
+        choreography.pose_joints.push_back(joint);
+      }
+    }
+    std::sort(choreography.pose_joints.begin(), choreography.pose_joints.end());
+    choreography.pose_joints.erase(
+      std::unique(choreography.pose_joints.begin(), choreography.pose_joints.end()),
+      choreography.pose_joints.end());
+
     std::map<std::string, std::string> joint_owner;  // joint → 軌道名稱
     for (const auto & entry : tracks_node) {
       Track track;
@@ -252,6 +270,18 @@ Choreography parse_choreography(const std::string & yaml_text) {
   } catch (const YAML::Exception & e) {
     throw std::invalid_argument(std::string("YAML error: ") + e.what());
   }
+}
+
+std::vector<std::string> unknown_pose_joints(
+  const Choreography & choreography, const std::vector<std::string> & known_joints)
+{
+  std::vector<std::string> unknown;
+  for (const auto & joint : choreography.pose_joints) {
+    if (std::find(known_joints.begin(), known_joints.end(), joint) == known_joints.end()) {
+      unknown.push_back(joint);
+    }
+  }
+  return unknown;
 }
 
 Choreography load_choreography(const std::string & path) {

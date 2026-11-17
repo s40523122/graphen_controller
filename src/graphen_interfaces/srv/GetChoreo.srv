@@ -1,0 +1,7 @@
+# 讀回舞曲庫中已發佈的編舞內容
+string name
+---
+bool success
+string message
+string content
+string sha256

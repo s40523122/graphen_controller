@@ -28,7 +28,7 @@
         <joint name="R_WRIST_R"/>
     </group>
     <!-- Hand -->
-    <group name="right_hand">
+    <!-- <group name="right_hand">
         <joint name="right_thumb_yaw_joint"/>
         <joint name="right_thumb_mcp_joint"/>
         <joint name="right_thumb_dip_joint"/>
@@ -57,10 +57,10 @@
         <joint name="left_ring_pip_joint"/>
         <joint name="left_pinky_mcp_joint"/>
         <joint name="left_pinky_pip_joint"/>
-    </group>
+    </group> -->
 
     <!-- Leg -->
-    <!--<group name="left_leg">
+    <!-- <group name="left_leg">
         <joint name="L_HIP_P"/>
         <joint name="L_HIP_R"/>
         <joint name="L_HIP_Y"/>
@@ -76,7 +76,7 @@
         <joint name="R_KNEE_P"/>
         <joint name="R_ANKLE_P"/>
         <joint name="R_ANKLE_R"/>
-    </group>-->
+    </group> -->
 
     <!-- Waist -->
     <group name="waist">

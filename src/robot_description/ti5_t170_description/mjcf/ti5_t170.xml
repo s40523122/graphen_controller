@@ -44,7 +44,7 @@
     <mesh name="CHEST_CAMERA_S" content_type="model/stl" file="CHEST_CAMERA_S.STL" />
   </asset>
   <worldbody>
-    <body name="BASE_S" pos="0 0 1.07">
+    <body name="BASE_S" pos="0 0 0.985">
       <inertial pos="0.012912 0 1e-06" quat="0.636066 -0.000732068 -0.0010025 0.771634" mass="1.59576" diaginertia="0.00262983 0.00227235 0.00226035" />
       <joint name="floating_base_joint" type="free" />
       <site name="imu" size="0.01" />
@@ -72,7 +72,7 @@
                 <body name="L_ANKLE_R_S">
                   <inertial pos="0.013551 2e-06 0" quat="0.73421 6.48407e-05 6.30472e-05 0.678922" mass="1.52055" diaginertia="0.00246112 0.00209335 0.00206762" />
                   <joint name="L_ANKLE_R" pos="0 0 0" axis="1 0 0" range="-0.34 0.34" armature="0.044336646" />
-                  <geom pos="0 0 -0.085" quat="1 0 0 0" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="L_ANKLE_R_S" />
+                  <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="L_ANKLE_R_S" />
                 </body>
               </body>
             </body>
@@ -102,7 +102,7 @@
                 <body name="R_ANKLE_R_S">
                   <inertial pos="0.013551 -2e-06 0" quat="0.73421 6.48407e-05 6.30472e-05 0.678922" mass="1.52055" diaginertia="0.00246112 0.00209335 0.00206762" />
                   <joint name="R_ANKLE_R" pos="0 0 0" axis="1 0 0" range="-0.34 0.34" armature="0.044336646" />
-                  <geom pos="0 0 -0.085" quat="1 0 0 0" type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_ANKLE_R_S" />
+                  <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_ANKLE_R_S" />
                 </body>
               </body>
             </body>
@@ -145,11 +145,11 @@
                       <geom type="mesh" rgba="0.776471 0.756863 0.737255 1" mesh="L_WRIST_P_S" />
                       <body name="L_WRIST_Y_S" pos="0 0.17615 -0.0035">
                         <inertial pos="0.004761 0.110285 -0.003891" quat="0.573993 0.538735 -0.443329 0.428668" mass="0.730783" diaginertia="0.00339734 0.00271482 0.000977877" />
-                        <joint name="L_WRIST_Y" pos="0 0 0" axis="0 0 -1" range="-0.69 0.69" armature="0.0189873" />
+                        <joint name="L_WRIST_Y" pos="0 0 0" axis="0 0 1" range="-0.69 0.69" armature="0.0189873" />
                         <geom type="mesh" rgba="1 1 1 1" mesh="L_WRIST_Y_S" />
                         <body name="L_WRIST_R_S" pos="0.00665 0 -0.0035">
                           <inertial pos="0.01174 -0.094004 0" quat="0.434037 0.558215 -0.434044 0.558224" mass="1.43947" diaginertia="0.00193378 0.0019203 0.0015284" />
-                          <joint name="L_WRIST_R" pos="0 0 0" axis="-1 0 0" range="-0.348 2.35" armature="0.0189873" />
+                          <joint name="L_WRIST_R" pos="0 0 0" axis="1 0 0" range="-2.35 0.348" armature="0.0189873" />
                           <geom pos="-1.0469 1.0536 1.0368" quat="0.5 0.5 0.5 -0.5" type="mesh" rgba="1 1 1 1" mesh="L_WRIST_R_S" />
                         </body>
                       </body>
@@ -168,7 +168,7 @@
                 <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_SHOULDER_R_S" />
                 <body name="R_SHOULDER_Y_S" pos="0 -0.10367 0">
                   <inertial pos="-0.00077 -0.079347 0.003347" quat="0.62583 0.779349 0.03085 0.000760536" mass="0.715036" diaginertia="0.00153338 0.00136386 0.000810693" />
-                  <joint name="R_SHOULDER_Y" pos="0 0 0" axis="0 1 0" range="-3.14 3.14" armature="0.10268748" />
+                  <joint name="R_SHOULDER_Y" pos="0 0 0" axis="0 -1 0" range="-3.14 3.14" armature="0.10268748" />
                   <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_SHOULDER_Y_S" />
                   <body name="R_ELBOW_Y_S" pos="0 -0.19633 0">
                     <inertial pos="1.9e-05 -0.085592 0.016017" quat="0.818288 0.574429 0.0110919 -0.0176923" mass="0.809895" diaginertia="0.00207402 0.00203671 0.000571747" />
@@ -180,11 +180,11 @@
                       <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_WRIST_P_S" />
                       <body name="R_WRIST_Y_S" pos="0 -0.17615 -0.0035">
                         <inertial pos="0.007651 -0.109169 -0.002162" quat="0.536655 0.584777 -0.408351 0.450873" mass="0.730783" diaginertia="0.00357876 0.00296756 0.000874121" />
-                        <joint name="R_WRIST_Y" pos="0 0 0" axis="0 0 -1" range="-0.69 0.69" armature="0.0189873" />
+                        <joint name="R_WRIST_Y" pos="0 0 0" axis="0 0 1" range="-0.69 0.69" armature="0.0189873" />
                         <geom type="mesh" rgba="0.898039 0.917647 0.929412 1" mesh="R_WRIST_Y_S" />
                         <body name="R_WRIST_R_S" pos="0.00675 0 -0.0035">
                           <inertial pos="0.01174 0.094004 0" quat="0.434037 0.558215 -0.434044 0.558224" mass="1.43947" diaginertia="0.00193378 0.0019203 0.0015284" />
-                          <joint name="R_WRIST_R" pos="0 0 0" axis="-1 0 0" range="-2.35 0.348" armature="0.0189873" />
+                          <joint name="R_WRIST_R" pos="0 0 0" axis="1 0 0" range="-0.348 2.35" armature="0.0189873" />
                           <geom pos="-1.0470 -1.0538 -1.0369" quat="0.5 -0.5 -0.5 -0.5" type="mesh" rgba="0.752941 0.752941 0.752941 1" mesh="R_WRIST_R_S" />
                         </body>
                       </body>
@@ -199,7 +199,7 @@
               <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="NECK_Y_S" />
               <body name="NECK_P_S" pos="0 0 0.12">
                 <inertial pos="0.00040928 -0.0012918 -3.4508e-05" quat="0.452307 0.793772 0.10275 0.39343" mass="0.250307" diaginertia="1.37622e-05 1.07297e-05 6.14361e-06" />
-                <joint name="NECK_P" pos="0 0 0" axis="0 1 0" range="-0.6807 0.6807" armature="0.00712674" />
+                <joint name="NECK_P" pos="0 0 0" axis="0 -1 0" range="-0.6807 0.6807" armature="0.00712674" />
                 <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="NECK_P_S" />
                 <body name="NECK_R_S" quat="0.707105 0.707108 0 0">
                   <inertial pos="-0.00909518 0.0552878 -0.0151752" quat="0.434994 0.153839 -0.742855 0.485057" mass="1.2865" diaginertia="0.0103194 0.00823211 0.00576109" />
@@ -262,6 +262,6 @@
     <accelerometer name="imu_acc" site="imu" />
   </sensor>
   <keyframe>
-    <key name="home" qpos="0 0 1.07 1 0 0 0 -0.2 0 0 0.4 0.2 0 0.2 0 0 -0.4 -0.2 0 0 0 0 0 -1.3 0 -0.3 0 0 0 0 1.3 0 0.3 0 0 0 0 0 0" />
+    <key name="home" qpos="0 0 0.985 1 0 0 0 -0.2 0 0 0.4 0.2 0 0.2 0 0 -0.4 -0.2 0 0 0 0 0 -1.3 0 -0.3 0 0 0 0 1.3 0 0.3 0 0 0 0 0 0" />
   </keyframe>
 </mujoco>

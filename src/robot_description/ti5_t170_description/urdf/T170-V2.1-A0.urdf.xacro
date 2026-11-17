@@ -27,20 +27,28 @@
   <xacro:property
     name="mesh_dir"
     value="package://ti5_t170_description/meshes"/>
+  <!-- 碰撞用的凸包：scripts/make_hulls.py 由 meshes/*.STL 產生，檔名、座標與單位都和原檔相同 -->
+  <xacro:property
+    name="hull_dir"
+    value="${mesh_dir}/hulls"/>
 
   <!-- Gazebo 時使用簡化碰撞（box）以提升 RTF；非 Gazebo 時保留 mesh 碰撞 -->
-  <!-- origin_z 可設負值讓 box 下移，腳掌 link 用來對齊腳底與地面 -->
+  <!-- origin_* 只套用在 box（origin_z 設負值讓 box 下移，腳掌 link 用來對齊腳底與地面）；
+       mesh 本身就在 link 座標系，套用偏移會讓碰撞（以及由 URDF 轉出的模型）與外觀錯開 -->
   <xacro:macro name="collision_geometry" params="mesh_file size_x:=0.12 size_y:=0.12 size_z:=0.2 origin_x:=0 origin_y:=0 origin_z:=0">
     <collision>
-      <origin xyz="${origin_x} ${origin_y} ${origin_z}" rpy="0 0 0" />
-      <geometry>
-        <xacro:if value="$(arg use_gazebo)">
+      <xacro:if value="$(arg use_gazebo)">
+        <origin xyz="${origin_x} ${origin_y} ${origin_z}" rpy="0 0 0" />
+        <geometry>
           <box size="${size_x} ${size_y} ${size_z}" />
-        </xacro:if>
-        <xacro:unless value="$(arg use_gazebo)">
+        </geometry>
+      </xacro:if>
+      <xacro:unless value="$(arg use_gazebo)">
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
           <mesh filename="${mesh_file}" />
-        </xacro:unless>
-      </geometry>
+        </geometry>
+      </xacro:unless>
     </collision>
   </xacro:macro>
 
@@ -81,7 +89,7 @@
           rgba="1 1 1 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/BASE_S.STL" size_x="0.25" size_y="0.15" size_z="0.12" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/BASE_S.STL" size_x="0.25" size_y="0.15" size_z="0.12" />
   </link>
   <link
     name="L_HIP_P_S">
@@ -113,7 +121,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_HIP_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_HIP_P_S.STL" />
   </link>
   <joint
     name="L_HIP_P"
@@ -163,7 +171,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_HIP_R_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_HIP_R_S.STL" />
   </link>
   <joint
     name="L_HIP_R"
@@ -213,7 +221,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_HIP_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_HIP_Y_S.STL" />
   </link>
   <joint
     name="L_HIP_Y"
@@ -263,7 +271,7 @@
           rgba="0.776470588235294 0.756862745098039 0.737254901960784 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_KNEE_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_KNEE_P_S.STL" />
   </link>
   <joint
     name="L_KNEE_P"
@@ -313,7 +321,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_ANKLE_P_S.STL" size_x="0.08" size_y="0.06" size_z="0.04" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_ANKLE_P_S.STL" size_x="0.08" size_y="0.06" size_z="0.04" />
   </link>
   <joint
     name="L_ANKLE_P"
@@ -363,7 +371,7 @@
           rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_ANKLE_R_S.STL" size_x="0.33" size_y="0.12" size_z="0.06" origin_z="-0.085" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_ANKLE_R_S.STL" size_x="0.33" size_y="0.12" size_z="0.06" origin_z="-0.085" />
   </link>
   <joint
     name="L_ANKLE_R"
@@ -413,7 +421,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_HIP_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_HIP_P_S.STL" />
   </link>
   <joint
     name="R_HIP_P"
@@ -463,7 +471,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_HIP_R_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_HIP_R_S.STL" />
   </link>
   <joint
     name="R_HIP_R"
@@ -513,7 +521,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_HIP_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_HIP_Y_S.STL" />
   </link>
   <joint
     name="R_HIP_Y"
@@ -563,7 +571,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_KNEE_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_KNEE_P_S.STL" />
   </link>
   <joint
     name="R_KNEE_P"
@@ -613,7 +621,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_ANKLE_P_S.STL" size_x="0.08" size_y="0.06" size_z="0.04" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_ANKLE_P_S.STL" size_x="0.08" size_y="0.06" size_z="0.04" />
   </link>
   <joint
     name="R_ANKLE_P"
@@ -663,7 +671,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_ANKLE_R_S.STL" size_x="0.33" size_y="0.12" size_z="0.06" origin_z="-0.085" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_ANKLE_R_S.STL" size_x="0.33" size_y="0.12" size_z="0.06" origin_z="-0.085" />
   </link>
   <joint
     name="R_ANKLE_R"
@@ -713,7 +721,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/WAIST_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/WAIST_Y_S.STL" />
   </link>
   <joint
     name="WAIST_Y"
@@ -763,7 +771,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/WAIST_R_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/WAIST_R_S.STL" />
   </link>
   <joint
     name="WAIST_R"
@@ -813,7 +821,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/WAIST_P_S.STL" size_x="0.4" size_y="0.25" size_z="0.15" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/WAIST_P_S.STL" size_x="0.4" size_y="0.25" size_z="0.15" />
   </link>
   <joint
     name="WAIST_P"
@@ -863,7 +871,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_SHOULDER_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_SHOULDER_P_S.STL" />
   </link>
   <joint
     name="L_SHOULDER_P"
@@ -913,7 +921,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_SHOULDER_R_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_SHOULDER_R_S.STL" />
   </link>
   <joint
     name="L_SHOULDER_R"
@@ -963,7 +971,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_SHOULDER_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_SHOULDER_Y_S.STL" />
   </link>
   <joint
     name="L_SHOULDER_Y"
@@ -1013,7 +1021,7 @@
           rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_ELBOW_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_ELBOW_Y_S.STL" />
   </link>
   <joint
     name="L_ELBOW_Y"
@@ -1063,7 +1071,7 @@
           rgba="0.776470588235294 0.756862745098039 0.737254901960784 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_WRIST_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_WRIST_P_S.STL" />
   </link>
   <joint
     name="L_WRIST_P"
@@ -1113,7 +1121,7 @@
           rgba="1 1 1 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/L_WRIST_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/L_WRIST_Y_S.STL" />
   </link>
   <joint
     name="L_WRIST_Y"
@@ -1126,7 +1134,7 @@
     <child
       link="L_WRIST_Y_S" />
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
     <limit
       lower="-0.69"
       upper="0.69"
@@ -1166,14 +1174,14 @@
       </material>
     </visual>
     <xacro:if value="$(arg use_gazebo)">
-      <xacro:collision_geometry mesh_file="${mesh_dir}/L_WRIST_R_S.STL" />
+      <xacro:collision_geometry mesh_file="${hull_dir}/L_WRIST_R_S.STL" />
     </xacro:if>
     <xacro:unless value="$(arg use_gazebo)">
       <collision>
         <origin xyz="-1.0483 1.0575 1.0373" rpy="1.5708 1.5708 0" />
         <geometry>
           <mesh
-            filename="${mesh_dir}/L_WRIST_R_S.STL"
+            filename="${hull_dir}/L_WRIST_R_S.STL"
             scale="0.001 0.001 0.001" />
         </geometry>
       </collision>
@@ -1190,10 +1198,10 @@
     <child
       link="L_WRIST_R_S" />
     <axis
-      xyz="-1 0 0" />
+      xyz="1 0 0" />
     <limit
-      lower="-0.348"
-      upper="2.35"
+      lower="-2.35"
+      upper="0.348"
       effort="8.3"
       velocity="12.36" />
   </joint>
@@ -1227,7 +1235,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_SHOULDER_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_SHOULDER_P_S.STL" />
   </link>
   <joint
     name="R_SHOULDER_P"
@@ -1277,7 +1285,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_SHOULDER_R_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_SHOULDER_R_S.STL" />
   </link>
   <joint
     name="R_SHOULDER_R"
@@ -1327,7 +1335,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_SHOULDER_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_SHOULDER_Y_S.STL" />
   </link>
   <joint
     name="R_SHOULDER_Y"
@@ -1340,7 +1348,7 @@
     <child
       link="R_SHOULDER_Y_S" />
     <axis
-      xyz="0 1 0" />
+      xyz="0 -1 0" />
     <limit
       lower="-3.14"
       upper="3.14"
@@ -1377,7 +1385,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_ELBOW_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_ELBOW_Y_S.STL" />
   </link>
   <joint
     name="R_ELBOW_Y"
@@ -1427,7 +1435,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_WRIST_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_WRIST_P_S.STL" />
   </link>
   <joint
     name="R_WRIST_P"
@@ -1477,7 +1485,7 @@
           rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/R_WRIST_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/R_WRIST_Y_S.STL" />
   </link>
   <joint
     name="R_WRIST_Y"
@@ -1490,7 +1498,7 @@
     <child
       link="R_WRIST_Y_S" />
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
     <limit
       lower="-0.69"
       upper="0.69"
@@ -1530,14 +1538,14 @@
       </material>
     </visual>
     <xacro:if value="$(arg use_gazebo)">
-      <xacro:collision_geometry mesh_file="${mesh_dir}/R_WRIST_R_S.STL" />
+      <xacro:collision_geometry mesh_file="${hull_dir}/R_WRIST_R_S.STL" />
     </xacro:if>
     <xacro:unless value="$(arg use_gazebo)">
       <collision>
         <origin xyz="-1.0483 -1.0572 -1.0369" rpy="-1.5708 -1.5708 0" />
         <geometry>
           <mesh
-            filename="${mesh_dir}/R_WRIST_R_S.STL"
+            filename="${hull_dir}/R_WRIST_R_S.STL"
             scale="0.001 0.001 0.001" />
         </geometry>
       </collision>
@@ -1554,10 +1562,10 @@
     <child
       link="R_WRIST_R_S" />
     <axis
-      xyz="-1 0 0" />
+      xyz="1 0 0" />
     <limit
-      lower="-2.35"
-      upper="0.348"
+      lower="-0.348"
+      upper="2.35"
       effort="8.3"
       velocity="12.36" />
   </joint>
@@ -1591,7 +1599,7 @@
           rgba="0.89804 0.91765 0.92941 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/NECK_Y_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/NECK_Y_S.STL" />
   </link>
   <joint
     name="NECK_Y"
@@ -1641,7 +1649,7 @@
           rgba="0.89804 0.91765 0.92941 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/NECK_P_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/NECK_P_S.STL" />
   </link>
   <joint
     name="NECK_P"
@@ -1654,7 +1662,7 @@
     <child
       link="NECK_P_S" />
     <axis
-      xyz="0 1 0" />
+      xyz="0 -1 0" />
     <limit
       lower="-0.6807"
       upper="0.6807"
@@ -1691,7 +1699,7 @@
           rgba="0.89804 0.91765 0.92941 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/NECK_R_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/NECK_R_S.STL" />
   </link>
   <joint
     name="NECK_R"
@@ -1741,7 +1749,7 @@
           rgba="0.86667 0.86667 0.8902 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/NECK_CAMERA_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/NECK_CAMERA_S.STL" />
   </link>
   <joint
     name="NECK_CAMERA"
@@ -1788,7 +1796,7 @@
           rgba="0.64706 0.61961 0.58824 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/ZJ1_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/ZJ1_S.STL" />
   </link>
   <joint
     name="XJZJ1"
@@ -1833,7 +1841,7 @@
           rgba="0.86667 0.86667 0.8902 1" />
       </material>
     </visual>
-    <xacro:collision_geometry mesh_file="${mesh_dir}/CHEST_CAMERA_S.STL" />
+    <xacro:collision_geometry mesh_file="${hull_dir}/CHEST_CAMERA_S.STL" />
   </link>
   <joint
     name="chest_camera"

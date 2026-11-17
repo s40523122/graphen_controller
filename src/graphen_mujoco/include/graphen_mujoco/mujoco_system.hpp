@@ -45,7 +45,8 @@ namespace graphen_mujoco {
 //
 // viewer_port > 0 時，read() 以 UDP 把 [time, qpos, actuator_force] 送到 127.0.0.1:viewer_port
 // （tools/mujoco_viewer.py 顯示姿態與各軸力矩），
-// 並在 127.0.0.1:viewer_port+1 接收 "reset" 指令。兩者都是非阻塞的。
+// 並在 127.0.0.1:viewer_port+1 接收指令："reset" 重置模擬；"model?" 把載入的 MJCF 絕對路徑
+// 以 "model <路徑>" 回給發問的位址（viewer 沒有指定 --model 時用來找模型）。都是非阻塞的。
 class MujocoSystem : public hardware_interface::SystemInterface {
 public:
   ~MujocoSystem() override;
@@ -134,6 +135,8 @@ private:
   double viewer_period_{1.0 / 60.0};
   double last_viewer_send_{-1.0};
   std::vector<double> viewer_buffer_;
+  // "model?" 的回覆（"model " + MJCF 絕對路徑），on_init 時組好
+  std::string model_reply_;
 };
 
 }  // namespace graphen_mujoco

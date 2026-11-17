@@ -4,9 +4,9 @@
 #include "graphen_bt_nodes/get_state_value.hpp"
 #include "graphen_bt_nodes/high_freq_control.hpp"
 #include "graphen_bt_nodes/is_ok.hpp"
+#include "graphen_bt_nodes/playback_nodes.hpp"
 #include "graphen_bt_nodes/rate_control.hpp"
 #include "graphen_bt_nodes/say_hello.hpp"
-#include "graphen_bt_nodes/switch_mode.hpp"
 #include "graphen_bt_nodes/sys_count_nodes.hpp"
 #include "graphen_bt_nodes/wait.hpp"
 
@@ -25,5 +25,9 @@ BT_REGISTER_NODES(factory)
   factory.registerNodeType<graphen::bt::GetStateValue>("GetStateValue");
   factory.registerNodeType<graphen::bt::IsBelow>("IsBelow");
   factory.registerNodeType<graphen::bt::IsAbove>("IsAbove");
+  // 播放類：一種類型一個節點（共同的行為在 PlaybackActionNode）
   factory.registerNodeType<graphen::bt::SwitchMode>("SwitchMode");
+  factory.registerNodeType<graphen::bt::PlayChoreo>("PlayChoreo");
+  factory.registerNodeType<graphen::bt::PlayBvh>("PlayBvh");
+  factory.registerNodeType<graphen::bt::RunPolicy>("RunPolicy");
 }

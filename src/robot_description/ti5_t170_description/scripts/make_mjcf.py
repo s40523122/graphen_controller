@@ -10,8 +10,14 @@
   - BASE_S 原點的 imu site 與 framequat / gyro / accelerometer（MujocoSystem 依類型與名稱尋找）
   - keyframe home：訓練的 init_state.joint_pos，基座高度為腳底貼地的高度
 
+  - 腳掌（RECENTERED_GEOMS）的 mesh 移回 link 原點：原檔帶著 URDF 給 Gazebo box 用的碰撞偏移
+    （z -0.085），腳掌會和腳踝分開
+
+例外：FLIPPED_JOINTS 的旋轉方向改成與 ti5_170a 相同（與 URDF 一致），這幾個關節的正負號和原檔、
+也就是訓練端相反。
+
 原檔更新後重新執行（只用標準函式庫）：
-  python3 scripts/make_mjcf.py --base-height 1.07   # 腳底貼地為 1.065 m，留 5 mm 落地
+  python3 scripts/make_mjcf.py --base-height 0.985   # 腳底貼地為 0.98 m，留 5 mm 落地
 """
 import argparse
 import csv
@@ -30,6 +36,13 @@ HOME_JOINT_POS = {
     'L_SHOULDER_R': -1.3, 'R_SHOULDER_R': 1.3,
     'L_ELBOW_Y': -0.3, 'R_ELBOW_Y': 0.3,
 }
+# 旋轉方向與 ti5_170a 相反的關節：axis 反向、range 對調變號（物理範圍不變），與 URDF 保持一致。
+# 訓練端的模型沒有反向：ti5_t170 訓練的 policy 在這幾個關節的 obs / action 正負號要另外處理
+FLIPPED_JOINTS = ('L_WRIST_Y', 'L_WRIST_R', 'R_SHOULDER_Y', 'R_WRIST_Y', 'R_WRIST_R', 'NECK_P')
+# mesh 要放回 link 原點的 geom（以 mesh 名稱指定）。原檔由 URDF 的碰撞轉出，腳掌帶著只給 Gazebo box 用的
+# 下移量；mesh 本身已經在 link 座標系（URDF 的 visual origin 為 0）。
+# TODO(verify-with-training): 訓練端由 URDF 載入，碰撞可能仍帶著這個偏移（腳底低 85 mm）
+RECENTERED_GEOMS = ('L_ANKLE_R_S', 'R_ANKLE_R_S')
 # param.csv 與 graphen 的 joint 名稱不同的項目
 PARAM_RENAME = {'NECK_Y1': 'NECK_Y'}
 
@@ -38,6 +51,19 @@ def load_armature():
     with PARAMS.open(encoding='utf-8') as f:
         rows = list(csv.reader(f))
     return {PARAM_RENAME.get(r[0], r[0]): r[1] for r in rows[1:] if r}
+
+
+def negate(values):
+    """把空白分隔的數值字串逐一變號（0 維持 0，不輸出 -0）。"""
+    return [f'{-float(v):g}' if float(v) != 0 else '0' for v in values.split()]
+
+
+def flip_joint(joint):
+    name = joint.get('name')
+    if name in HOME_JOINT_POS:
+        raise SystemExit(f"flipped joint '{name}' has a home position, negate it as well")
+    joint.set('axis', ' '.join(negate(joint.get('axis'))))
+    joint.set('range', ' '.join(reversed(negate(joint.get('range')))))
 
 
 def main():
@@ -74,6 +100,19 @@ def main():
         joint.set('armature', armature[name])
         ranges[name] = joint.attrib.pop('actuatorfrcrange')
         joints.append(name)
+    missing = set(FLIPPED_JOINTS) - set(joints)
+    if missing:
+        raise SystemExit(f'flipped joints not found in {SOURCE.name}: {sorted(missing)}')
+    for joint in root.iter('joint'):
+        if joint.get('name') in FLIPPED_JOINTS:
+            flip_joint(joint)
+
+    recentered = [g for g in root.iter('geom') if g.get('mesh') in RECENTERED_GEOMS]
+    if len(recentered) != len(RECENTERED_GEOMS):
+        raise SystemExit(f'expected one geom for each of {RECENTERED_GEOMS} in {SOURCE.name}')
+    for geom in recentered:
+        geom.attrib.pop('pos', None)
+        geom.attrib.pop('quat', None)
 
     base = next(b for b in root.iter('body') if b.get('name') == 'BASE_S')
     base.set('pos', f'0 0 {args.base_height:g}')

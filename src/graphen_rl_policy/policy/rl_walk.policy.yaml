@@ -1,0 +1,68 @@
+# rl_walk：FullBodyT70（mjlab）訓練的全身速度追蹤 policy（graphen_rl_policy/T170VelocityPolicy），
+# 以 ~/cmd_vel 的 vx、vy、wz 為指令（逾時或沒有指令時原地站立）。
+# 進入時先以 entry_speed 走到 default_joint_pos，再開始推論。
+# kp / kd 只在 PdController（hardware:=mujoco_pd）下生效，position 模式由 MJCF 的增益決定。
+# 目前只在 MuJoCo（hardware:=mujoco mujoco_fixed_base:=false）驗證過，實機的馬達增益與 IMU 姿態
+# 都還沒有確認，不要在實機上使用
+#
+# Policy 設定檔：由 controller 的 run_policy action（RunPolicy{name: rl_walk}）載入，格式見
+# graphen_controllers/policy_source.hpp。plugin 以外的鍵由演算法讀取。
+# controller 的參數 rl_walk.<鍵> 會覆寫這裡的同名鍵（情境 launch 用來調整 entry_speed 等）。
+# 常數必須與 onnx 來自同一次訓練：換 onnx 時一起更新，model_sha256 為 `sha256sum <onnx>` 的結果。
+# policy 每 20 ms 輸出一次絕對目標，閉迴路控制不能被限速：max_steps 設成 10 rad/週期，
+# 實際上不限制（必須 > 0）。
+
+plugin: graphen_rl_policy/T170VelocityPolicy
+model_path: package://graphen_rl_policy/policy/wtz_policy.onnx
+model_sha256: 92de47232a95bb248892b4302c2ad189e5f1238cfb1cc4eafa004bdb42c9840c
+policy_dt: 0.02     # s，訓練的控制週期（sim dt 0.005 × decimation 4）
+phase_period: 0.6   # s
+phase_stand_threshold: 0.1
+entry_speed: 0.5    # rad/s
+log_period: 2.0     # s，0 表示不 log
+# policy 的關節順序（onnx metadata 的 joint_names），NECK_Y1 在 controller 中叫 NECK_Y
+joints: [L_HIP_P, L_HIP_R, L_HIP_Y, L_KNEE_P, L_ANKLE_P, L_ANKLE_R,
+         R_HIP_P, R_HIP_R, R_HIP_Y, R_KNEE_P, R_ANKLE_P, R_ANKLE_R,
+         WAIST_Y, WAIST_R, WAIST_P,
+         L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R,
+         R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R,
+         NECK_Y1, NECK_P, NECK_R]
+name_map: ["NECK_Y1:NECK_Y"]   # policy 名稱:controller 名稱
+# 手臂自然下垂的 A-pose，其他 0
+default_joint_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.0, -1.19, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 1.05, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0]
+# 0.25 × effort_limit / stiffness（訓練設定）
+action_scale: [0.06763189008512659, 0.06649202676908512, 0.06385345427824841,
+               0.06763189008512659, 0.06649202676908512, 0.07282460074709322,
+               0.06763189008512659, 0.06649202676908512, 0.06385345427824841,
+               0.06763189008512659, 0.06649202676908512, 0.07282460074709322,
+               0.06649202676908512, 0.06649202676908512, 0.06649202676908512,
+               0.19947608030725536, 0.19947608030725536, 0.13298405353817025,
+               0.13298405353817025, 0.2912984029883729, 0.10512072803493458,
+               0.10512072803493458, 0.19947608030725536, 0.19947608030725536,
+               0.13298405353817025, 0.13298405353817025, 0.2912984029883729,
+               0.10512072803493458, 0.10512072803493458, 0.05256036401746729,
+               0.014564920149418644, 0.014564920149418644]
+# 訓練的 PD 增益（onnx metadata 的 joint_stiffness / joint_damping，與 MJCF 相同）
+kp: [986.96, 236.871, 473.741, 986.96, 236.871, 78.957,
+     986.96, 236.871, 473.741, 986.96, 236.871, 78.957,
+     236.871, 236.871, 236.871,
+     78.957, 78.957, 78.957, 78.957, 19.739, 19.739, 19.739,
+     78.957, 78.957, 78.957, 78.957, 19.739, 19.739, 19.739,
+     39.478, 39.478, 39.478]
+kd: [62.832, 15.080, 30.159, 62.832, 15.080, 5.027,
+     62.832, 15.080, 30.159, 62.832, 15.080, 5.027,
+     15.080, 15.080, 15.080,
+     5.027, 5.027, 5.027, 5.027, 1.257, 1.257, 1.257,
+     5.027, 5.027, 5.027, 5.027, 1.257, 1.257, 1.257,
+     2.513, 2.513, 2.513]
+max_steps: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # left arm
+            10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # right arm
+            10.0, 10.0, 10.0,                           # waist
+            10.0, 10.0, 10.0,                           # head
+            10.0, 10.0, 10.0, 10.0, 10.0, 10.0,         # left leg
+            10.0, 10.0, 10.0, 10.0, 10.0, 10.0]         # right leg
