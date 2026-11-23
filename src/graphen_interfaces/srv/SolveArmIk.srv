@@ -1,0 +1,20 @@
+# 手臂 IK：末端位姿 + elbow（swivel）→ 7 個關節角（graphen_arm_ik 的 arm_ik_server，~/solve）。
+# 只做計算，不送任何指令給 controller。未收斂、指定的 swivel 做不到、或解的姿態有碰撞時 success 為 false，
+# 但解仍然回傳（UI 可以顯示原因；示教可以選擇照用）
+string arm                           # arm_ik.yaml 中的手臂名稱（例如 left / right）
+geometry_msgs/PoseStamped target     # 末端（tip_body + tip_offset）的位姿；frame_id 必須為 root_body（空字串視為 root_body）
+float64 swivel                       # 手肘繞「肩 → 腕」軸的角度（rad，0 = swivel_reference，預設軀幹 −z）；NaN = 不指定
+float64[] seed                       # 迭代起點（7 個，順序同 joint_names）；空 = state 中的目前角度，沒有時用設定檔的 seed
+bool local                           # true：只從 seed 迭代、不從其他起點重試（解連續，拖曳示教用）；
+                                     # false：seed 解不到時重試其他起點（可能得到另一個分支的姿態）
+sensor_msgs/JointState state         # 其他關節（腰、腿、頭）的角度，影響 root_body 與碰撞；空 = server 收到的最新 /joint_states
+---
+bool success
+string message
+string[] joint_names                 # 該手臂的 7 個 joint
+float64[] positions                  # 解（rad）
+float64 position_error               # m
+float64 orientation_error            # rad
+float64 swivel                       # 解的 swivel（rad；無定義時為 NaN）
+float64 swivel_error                 # rad，沒有指定 swivel 時為 0
+string[] collisions                  # 解的姿態中與這隻手臂有關的碰撞，"bodyA|bodyB"

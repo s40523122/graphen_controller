@@ -2,6 +2,7 @@
 #define GRAPHEN_CONTROLLERS__MOTION_HPP_
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include "graphen_locomotion/robot_state.hpp"
@@ -61,6 +62,8 @@ public:
 
   // 動作的進度；planner 在每次 update() 之後讀取。on_enter() 之後要回到 kRunning
   virtual MotionStatus status() const {return MotionStatus::kRunning;}
+  // status() 為 kFailed 時的原因（給影子試播的結果使用）；沒有時為空
+  virtual std::string failure_reason() const {return {};}
 };
 
 }  // namespace graphen::control

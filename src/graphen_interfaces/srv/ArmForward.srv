@@ -1,0 +1,11 @@
+# 手臂正向運動學：關節角 → 末端位姿 + swivel + 碰撞（graphen_arm_ik 的 arm_ik_server，~/forward）
+string arm                           # arm_ik.yaml 中的手臂名稱
+sensor_msgs/JointState state         # 全身（或部分）關節角；空 = server 收到的最新 /joint_states。沒有給的 joint 用模型初始姿態，手臂用設定檔的 seed
+---
+bool success
+string message
+string[] joint_names                 # 該手臂的 7 個 joint
+float64[] positions                  # 實際使用的角度（rad）
+geometry_msgs/PoseStamped pose       # 末端位姿，frame_id 為 root_body
+float64 swivel                       # rad；無定義時為 NaN
+string[] collisions                  # 目前姿態中與這隻手臂有關的碰撞，"bodyA|bodyB"

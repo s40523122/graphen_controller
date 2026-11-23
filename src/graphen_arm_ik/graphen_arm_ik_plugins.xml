@@ -1,0 +1,11 @@
+<library path="graphen_arm_ik_plugins">
+  <!-- 視覺伺服：依 controller 的 ~/pose_targets 以 IK 讓手臂末端（含 elbow swivel）追蹤目標，碰撞時停住 -->
+  <class name="graphen_arm_ik/ArmServoAlgorithm"
+         type="graphen::arm_ik::ArmServoAlgorithm"
+         base_class_type="graphen::locomotion::LocomotionAlgorithm">
+    <description>
+      Servos arm end effectors (wrist pose + elbow swivel) to the controller's pose targets with
+      one IK step per planner cycle; an arm stops when its next step would collide.
+    </description>
+  </class>
+</library>

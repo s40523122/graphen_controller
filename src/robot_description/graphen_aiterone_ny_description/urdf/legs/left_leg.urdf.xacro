@@ -1,0 +1,178 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="t170_left_leg" params="prefix mesh_dir parent">
+
+    <!-- ===== L_HIP_P ===== -->
+    <link name="${prefix}L_HIP_P_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.0055060000000000005 0.081517 0" rpy="0 0 0"/>
+        <mass value="2.443182"/>
+        <inertia ixx="0.007651730159" ixy="-1.0006102999999999e-05" ixz="-0.001027271998"
+                 iyy="0.008350014866" iyz="-0.00015041607399999998" izz="0.003346951658"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_HIP_P_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_HIP_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_HIP_P" type="revolute">
+      <origin xyz="0 0.0545 0" rpy="0 0 0"/>
+      <parent link="${parent}"/>
+      <child  link="${prefix}L_HIP_P_S"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-1.57" upper="1.57" effort="267" velocity="5.76"/>
+    </joint>
+
+    <!-- ===== L_HIP_R ===== -->
+    <link name="${prefix}L_HIP_R_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.001701 0.00709 -0.240257" rpy="0 0 0"/>
+        <mass value="3.313186"/>
+        <inertia ixx="0.017716582885000002" ixy="-6.5155891e-05" ixz="-0.000408727743"
+                 iyy="0.018138413186" iyz="-0.000341543258" izz="0.00658831294"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_HIP_R_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_HIP_R_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <!-- TODO(verify-on-hw): HIP_R 的上下限與 ti5_170a / ti5_t170 左右相反、KNEE_P 允許反折到 -0.83 rad；沿用 NY 原值，Ti5Hardware 以此限位，實機上線前要逐軸確認 -->
+    <joint name="${prefix}L_HIP_R" type="revolute">
+      <origin xyz="0 0.084 0" rpy="0 0 0"/>
+      <parent link="${prefix}L_HIP_P_S"/>
+      <child  link="${prefix}L_HIP_R_S"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-1.7444" upper="0.2616" effort="63" velocity="8.06"/>
+    </joint>
+
+    <!-- ===== L_HIP_Y ===== -->
+    <link name="${prefix}L_HIP_Y_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.008183999999999999 0.010517 -0.130885" rpy="0 0 0"/>
+        <mass value="2.98234"/>
+        <inertia ixx="0.030681896087" ixy="-0.00023178750899999998" ixz="-0.0007690669939999999"
+                 iyy="0.029037579209" iyz="-0.000743542016" izz="0.006556655669"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_HIP_Y_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_HIP_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_HIP_Y" type="revolute">
+      <origin xyz="0 0 -0.1558" rpy="0 0 0"/>
+      <parent link="${prefix}L_HIP_R_S"/>
+      <child  link="${prefix}L_HIP_Y_S"/>
+      <axis xyz="0 0 -1"/>
+      <limit lower="-3.14" upper="3.14" effort="121" velocity="6.81"/>
+    </joint>
+
+    <!-- ===== L_KNEE_P ===== -->
+    <link name="${prefix}L_KNEE_P_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="-0.0051920000000000004 -0.003718 -0.12538" rpy="0 0 0"/>
+        <mass value="4.578205"/>
+        <inertia ixx="0.000114476853" ixy="1.2727470000000001e-06" ixz="7.950015000000001e-06"
+                 iyy="7.9570327e-05" iyz="-3.13696e-07" izz="0.000154297098"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_KNEE_P_S.STL"/></geometry>
+        <material name="t170_mid_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_KNEE_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <!-- TODO(verify-on-hw): HIP_R 的上下限與 ti5_170a / ti5_t170 左右相反、KNEE_P 允許反折到 -0.83 rad；沿用 NY 原值，Ti5Hardware 以此限位，實機上線前要逐軸確認 -->
+    <joint name="${prefix}L_KNEE_P" type="revolute">
+      <origin xyz="0 0 -0.2642" rpy="0 0 0"/>
+      <parent link="${prefix}L_HIP_Y_S"/>
+      <child  link="${prefix}L_KNEE_P_S"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-0.83" upper="2.3" effort="267" velocity="5.76"/>
+    </joint>
+
+    <!-- ===== L_ANKLE_P ===== -->
+    <link name="${prefix}L_ANKLE_P_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.039403 2e-06 -0.055027" rpy="0 0 0"/>
+        <mass value="1.698964"/>
+        <inertia ixx="0.003570433517" ixy="1.93084e-07" ixz="-0.00025761495000000003"
+                 iyy="0.008761164939" iyz="1.1193e-08" izz="0.007145342836"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_ANKLE_P_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_ANKLE_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_ANKLE_P" type="revolute">
+      <origin xyz="0 0 -0.37" rpy="0 0 0"/>
+      <parent link="${prefix}L_KNEE_P_S"/>
+      <child  link="${prefix}L_ANKLE_P_S"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="-1.57" upper="0.314" effort="63" velocity="8.06"/>
+    </joint>
+
+    <!-- ===== L_ANKLE_R ===== -->
+    <link name="${prefix}L_ANKLE_R_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.013551 2e-06 0.0" rpy="0 0 0"/>
+        <mass value="1.5205540000000002"/>
+        <inertia ixx="0.0020955936200000003" ixy="2.8645592e-05" ixz="-4.778e-09"
+                 iyy="0.0024588741299999997" iyz="-1.4159999999999999e-09" izz="0.002067617482"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_ANKLE_R_S.STL"/></geometry>
+        <material name="t170_blue_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_ANKLE_R_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_ANKLE_R" type="revolute">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <parent link="${prefix}L_ANKLE_P_S"/>
+      <child  link="${prefix}L_ANKLE_R_S"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.34" upper="0.34" effort="23" velocity="10.16"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>

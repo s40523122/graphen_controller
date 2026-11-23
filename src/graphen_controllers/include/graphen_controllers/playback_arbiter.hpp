@@ -33,6 +33,8 @@ struct PlaybackRequest {
   std::string detail;
   std::shared_ptr<Motion> motion;
   PlaybackPolicy policy;
+  // 內容的 sha256（影子試播的憑證以它比對內容）；沒有內容的類型為空
+  std::string content_sha256;
 };
 
 // 目前在播的就是同一個時的處理方式（對應 PlaybackOptions.msg 的 ON_SAME_*）
@@ -46,11 +48,13 @@ struct PlaybackOutcome {
   enum class Status {
     kSwitched,   // 已切換（或重播）
     kUnchanged,  // 已經在播同一個，依 on_same 不重新開始
-    kRejected,   // 目前在播的不可中斷
+    kRejected,   // 目前在播的不可中斷（或其他原因：內容有誤、試播憑證不符…）
+    kDryRun,     // 影子試播通過（沒有切換）
   };
   Status status{Status::kRejected};
   uint64_t sequence{0};  // 目前這次播放在 planner 中的序號（kSwitched / kUnchanged 時有效）
-  std::string message;   // kRejected 的原因
+  std::string message;   // kRejected 的原因；kDryRun 的結果說明
+  std::string shadow_token;  // kDryRun 時的試播憑證
 };
 
 // "<mode>" 或 "<mode>:<item>"，用在訊息中

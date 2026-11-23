@@ -2,6 +2,11 @@
 // 有 URDF 時檢查限位與姿態中的 joint 名稱，並可以把整份編舞取樣成 CSV。
 //
 //   choreo_check <腳本> [--urdf <展開後的 URDF>] [--rate <Hz>] [--velocity-scale <倍率>] [--csv <輸出>]
+//                [--arm-config <arm_ik.yaml>] [--nominal <joint>=<rad> ...]
+//
+// --arm-config 時以 graphen_arm_ik 的模型檢查整條路徑的手臂碰撞（與 ChoreographerAlgorithm 的
+// choreo.arm_ik_config 相同的檢查，取樣頻率為 --rate），列出所有碰撞的時間區間與 body 對。
+// 不在軌道中的 joint 用模型的初始姿態（手臂為 seed），可用 --nominal 覆寫（choreo.collision.nominal_*）。
 //
 // 從「開始播放時的位置」到各軌道第一個姿態的那一段取決於當下的位置，這裡無法檢查
 // （ChoreographerAlgorithm 在進入模式時檢查）；CSV 假設起點就是第一個姿態。
@@ -16,9 +21,11 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "graphen_choreographer/choreography.hpp"
+#include "graphen_choreographer/path_collision.hpp"
 
 namespace {
 
@@ -32,6 +39,8 @@ struct Options {
   std::string file;
   std::string urdf;
   std::string csv;
+  std::string arm_config;
+  std::vector<std::pair<std::string, double>> nominal;
   double rate{100.0};
   double velocity_scale{1.0};
 };
@@ -40,11 +49,16 @@ void print_usage() {
   std::cerr <<
     "Usage: choreo_check <choreography.yaml> [--urdf <file>] [--rate <Hz>]\n"
     "                      [--velocity-scale <factor>] [--csv <file>]\n"
+    "                      [--arm-config <arm_ik.yaml>] [--nominal <joint>=<rad> ...]\n"
     "  --urdf            expanded URDF (xacro <file> > out.urdf) to check joint limits against\n"
     "  --rate            planner rate used for the max_steps suggestion and CSV sampling "
     "(default 100)\n"
     "  --velocity-scale  velocity limit = URDF limit x factor (default 1.0)\n"
-    "  --csv             write the sampled choreography (time + one column per joint)\n";
+    "  --csv             write the sampled choreography (time + one column per joint)\n"
+    "  --arm-config      graphen_arm_ik config (package:// allowed): check the whole path for arm\n"
+    "                    collisions, sampled at --rate\n"
+    "  --nominal         angle of a joint outside the tracks during the collision check (repeatable;\n"
+    "                    default: initial pose of the IK model, arms at their seed)\n";
 }
 
 std::optional<double> to_positive(const std::string & text) {
@@ -67,12 +81,24 @@ std::optional<Options> parse_args(int argc, char ** argv) {
         }
         return std::string(argv[++i]);
       };
-    if (arg == "--urdf" || arg == "--csv") {
+    if (arg == "--urdf" || arg == "--csv" || arg == "--arm-config") {
       const auto text = value();
       if (!text) {
         return std::nullopt;
       }
-      (arg == "--urdf" ? options.urdf : options.csv) = *text;
+      (arg == "--urdf" ? options.urdf : arg == "--csv" ? options.csv : options.arm_config) = *text;
+    } else if (arg == "--nominal") {
+      const auto text = value();
+      const auto eq = text ? text->find('=') : std::string::npos;
+      char * end = nullptr;
+      const double number = eq != std::string::npos ? std::strtod(text->c_str() + eq + 1, &end) : 0.0;
+      if (eq == std::string::npos || eq == 0 || end == text->c_str() + eq + 1 || *end != '\0' ||
+        !std::isfinite(number))
+      {
+        std::cerr << "--nominal expects <joint>=<rad>\n";
+        return std::nullopt;
+      }
+      options.nominal.emplace_back(text->substr(0, eq), number);
     } else if (arg == "--rate" || arg == "--velocity-scale") {
       const auto text = value();
       const auto number = text ? to_positive(*text) : std::nullopt;
@@ -216,6 +242,43 @@ void write_csv(const Choreography & choreography, const Options & options) {
     options.csv.c_str());
 }
 
+// 回傳是否沒有碰撞
+bool check_collisions(const Choreography & choreography, const Options & options) {
+  const auto model = graphen::arm_ik::ArmModel::load_cached(options.arm_config);
+  graphen::choreographer::PathCollisionChecker checker(model, choreography);
+  for (const auto & [joint, value] : options.nominal) {
+    if (!checker.set_base_position(joint, value)) {
+      throw std::invalid_argument("--nominal: '" + joint + "' is not a joint of the IK model");
+    }
+  }
+  std::vector<std::string> outside;
+  for (const auto & track : choreography.tracks) {
+    for (const auto & joint : track.joints) {
+      if (model->qpos_address(joint) < 0) {
+        outside.push_back(joint);
+      }
+    }
+  }
+  const auto spans = checker.check_script(options.rate);
+  std::printf("\nArm collision check (%s, %.0f Hz, tracks start at their first pose):\n",
+    options.arm_config.c_str(), options.rate);
+  if (!outside.empty()) {
+    std::string names;
+    for (const auto & joint : outside) {
+      names += (names.empty() ? "" : ", ") + joint;
+    }
+    std::printf("  not in the IK model (ignored): %s\n", names.c_str());
+  }
+  if (spans.empty()) {
+    std::printf("  OK: no arm collision along the path.\n");
+    return true;
+  }
+  for (const auto & span : spans) {
+    std::printf("  - %s\n", span.describe().c_str());
+  }
+  return false;
+}
+
 }  // namespace
 
 int main(int argc, char ** argv) {
@@ -237,10 +300,11 @@ int main(int argc, char ** argv) {
     if (!options->csv.empty()) {
       write_csv(choreography, *options);
     }
+    const bool collision_free = options->arm_config.empty() || check_collisions(choreography, *options);
 
     if (options->urdf.empty()) {
       std::printf("\nNo --urdf given: joint limits were not checked.\n");
-      return 0;
+      return collision_free ? 0 : 1;
     }
     for (const auto & summary : summaries) {
       if (limits.find(summary.joint) == limits.end()) {
@@ -262,7 +326,7 @@ int main(int argc, char ** argv) {
     }
     if (violations.empty()) {
       std::printf("\nOK: all keyframes are within the joint limits.\n");
-      return 0;
+      return collision_free ? 0 : 1;
     }
     std::printf("\n%zu violation(s):\n", violations.size());
     for (const auto & violation : violations) {

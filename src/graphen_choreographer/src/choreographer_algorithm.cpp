@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <memory>
 #include <cmath>
 #include <cstdio>
 #include <iterator>
@@ -12,6 +15,7 @@
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "graphen_locomotion/locomotion_algorithm.hpp"
 #include "graphen_choreographer/choreography.hpp"
+#include "graphen_choreographer/path_collision.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
 namespace graphen::choreographer {
@@ -25,6 +29,8 @@ constexpr double kReachedTolerance = 1e-9;
 constexpr double kMaxStepMargin = 1.2;
 // 檢查帶起點速度的第一段時的取樣數：曲線不再單調，峰值速度與範圍以取樣求出
 constexpr int kEntrySamples = 64;
+// 進入時檢查「起點 → 第一個 keyframe」碰撞的預設取樣數（每點約 0.1 ms）
+constexpr int64_t kDefaultCollisionEntrySamples = 10;
 
 // package://<pkg>/<path> → <pkg 的 share 目錄>/<path>；其他字串原樣回傳
 // TODO: graphen_controllers（BVH）與 graphen_rl_policy（onnx）各有一份相同的邏輯，之後抽成共用元件
@@ -82,14 +88,24 @@ std::string num(double value, int precision = 4) {
 //   entry_velocity        是否帶入切換當下的速度（預設 true）
 //   max_steps             （由 controller 讀取）每週期最大移動量；必須容得下腳本的峰值速度，
 //                         可用 choreo_check 算出建議值
+//   arm_ik_config         （選填）graphen_arm_ik 的 arm_ik.yaml（支援 package://）；設定時檢查整條路徑
+//                         是否讓手臂碰撞（只偵測，不閃避）。空字串 = 不檢查。bringup 依 robot 帶入
+//   collision.sample_rate      路徑碰撞的取樣頻率（Hz，預設 = planner 頻率）
+//   collision.entry_samples    進入時「起點 → 第一個 keyframe」的取樣數（預設 10）
+//   collision.nominal_joints / collision.nominal_positions
+//                         configure 時不在任何軌道中的 joint（腰、腿、頭）的角度；沒有列出的用
+//                         模型的初始姿態（手臂為 arm_ik.yaml 的 seed）。進入時改用量測值
 //
 // 檢查（任何一項不通過，configure 就失敗）：
 //   - 腳本的 joint 都是受控的 joint；poses 中的 joint 名稱也都必須是受控的 joint，
 //     即使沒有被任何軌道使用（全身姿態只取一部分時，其餘名稱打錯也要報錯）
 //   - 有 robot_description 時：每個 keyframe 都在位置限位內、每一段的峰值速度不超過速度上限
 //   - 每一段的峰值速度不會被 max_steps 限速
+//   - 設定 arm_ik_config 時：整條路徑（各軌道從第一個姿態開始）沒有碰撞，錯誤訊息指出時間與 body 對
 // 從進入時的位置到第一個姿態的那一段，在 on_enter 以同樣的條件（含位置限位，因為帶起點速度的曲線
-// 會超出兩端）檢查，不通過時不執行（保持並回報失敗）。
+// 會超出兩端；碰撞則以實際的起點與量測的其他關節）檢查，不通過時不執行（保持並回報失敗）。
+// 限制：configure 時其他 joint 用 nominal 姿態；播放時腰 / 腿與 nominal 差很多時，keyframe 之間的
+// 碰撞檢查是近似的。
 class ChoreographerAlgorithm : public locomotion::LocomotionAlgorithm {
 public:
   void configure(const locomotion::Context & context) override {
@@ -221,6 +237,8 @@ public:
       throw std::invalid_argument(message);
     }
 
+    configure_collision(context, choreography, label);
+
     duration_ = choreography.duration();
     rate_hz_ = context.rate_hz;
     time_ = 0.0;
@@ -258,6 +276,7 @@ public:
     for (const auto & track : tracks_) {
       check_entry(track);
     }
+    check_entry_collision(state);
   }
 
   void update(
@@ -375,6 +394,92 @@ private:
     }
   }
 
+  // 設定 arm_ik_config 時：載入模型並檢查整條路徑；有碰撞時丟出例外
+  void configure_collision(
+    const locomotion::Context & context, const Choreography & choreography, const std::string & label)
+  {
+    collision_.reset();
+    const auto config = context.params.get_string("arm_ik_config").value_or("");
+    if (config.empty()) {
+      return;
+    }
+    const double sample_rate = context.params.get_double("collision.sample_rate").value_or(context.rate_hz);
+    if (!(sample_rate > 0.0)) {
+      throw std::invalid_argument("'collision.sample_rate' must be greater than zero");
+    }
+    const auto entry_samples =
+      context.params.get_int("collision.entry_samples").value_or(kDefaultCollisionEntrySamples);
+    if (entry_samples < 1) {
+      throw std::invalid_argument("'collision.entry_samples' must be at least 1");
+    }
+    const auto nominal_joints =
+      context.params.get_string_array("collision.nominal_joints").value_or(std::vector<std::string>{});
+    const auto nominal_positions =
+      context.params.get_double_array("collision.nominal_positions").value_or(std::vector<double>{});
+    if (nominal_joints.size() != nominal_positions.size()) {
+      throw std::invalid_argument(
+              "'collision.nominal_joints' and 'collision.nominal_positions' must have the same length");
+    }
+
+    std::shared_ptr<const arm_ik::ArmModel> model;
+    try {
+      model = arm_ik::ArmModel::load_cached(config);
+    } catch (const std::exception & e) {
+      throw std::invalid_argument("arm_ik_config '" + config + "': " + e.what());
+    }
+    auto checker = std::make_unique<PathCollisionChecker>(model, choreography);
+    for (size_t i = 0; i < nominal_joints.size(); ++i) {
+      if (!checker->set_base_position(nominal_joints[i], nominal_positions[i])) {
+        throw std::invalid_argument(
+                "'collision.nominal_joints': '" + nominal_joints[i] + "' is not a joint of the IK model");
+      }
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const auto spans = checker->check_script(sample_rate);
+    const double ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    if (!spans.empty()) {
+      std::string message = "choreography '" + label + "' makes the arms collide:";
+      for (const auto & span : spans) {
+        message += "\n  - " + span.describe();
+      }
+      throw std::invalid_argument(message);
+    }
+    context.log(locomotion::LogLevel::kInfo,
+      "Choreography '" + label + "': no arm collision along the path (" + num(sample_rate, 0) +
+      " Hz, " + num(ms, 0) + " ms).");
+
+    collision_ = std::move(checker);
+    collision_entry_samples_ = static_cast<int>(entry_samples);
+    collision_joint_names_ = context.joint_names;
+    entry_starts_.clear();
+    entry_velocities_.clear();
+    for (const auto & track : tracks_) {
+      entry_starts_.emplace_back(track.indices.size(), 0.0);
+      entry_velocities_.emplace_back(track.indices.size(), 0.0);
+    }
+  }
+
+  // 進入時：起點 → 第一個 keyframe 那一段（取決於當下的位置）是否碰撞；其他 joint 用量測值
+  void check_entry_collision(const locomotion::RobotState & state) {
+    if (!collision_) {
+      return;
+    }
+    for (size_t i = 0; i < collision_joint_names_.size() && i < state.measured_positions.size(); ++i) {
+      collision_->set_base_position(collision_joint_names_[i], state.measured_positions[i]);
+    }
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+      std::copy(tracks_[t].start.begin(), tracks_[t].start.end(), entry_starts_[t].begin());
+      std::copy(tracks_[t].start_velocity.begin(), tracks_[t].start_velocity.end(),
+        entry_velocities_[t].begin());
+    }
+    const auto spans = collision_->check_entry(entry_starts_, entry_velocities_, collision_entry_samples_);
+    if (!spans.empty()) {
+      throw std::runtime_error("the move from here to the first keyframes makes the arms collide: " +
+              spans.front().describe());
+    }
+  }
+
   std::vector<TrackState> tracks_;
   size_t num_joints_{0};
   double duration_{0.0};
@@ -382,6 +487,13 @@ private:
   double start_tolerance_{0.05};
   bool entry_velocity_{true};
   bool interruptible_{true};  // 腳本頂層的 interruptible
+
+  // 路徑碰撞檢查（沒有設定 arm_ik_config 時為 nullptr）
+  std::unique_ptr<PathCollisionChecker> collision_;
+  int collision_entry_samples_{static_cast<int>(kDefaultCollisionEntrySamples)};
+  std::vector<std::string> collision_joint_names_;
+  std::vector<std::vector<double>> entry_starts_;
+  std::vector<std::vector<double>> entry_velocities_;
 
   double time_{0.0};  // 進入模式後經過的時間
   bool finished_{false};

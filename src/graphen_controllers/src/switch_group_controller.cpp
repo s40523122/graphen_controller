@@ -76,11 +76,20 @@ controller_interface::CallbackReturn SwitchGroupController::on_init() {
     auto_declare<std::string>("imu_sensor_name", std::string{});
     auto_declare<std::string>("base_estimator.plugin", std::string{});
     auto_declare<double>("command_timeout", 0.5);
+    auto_declare<std::vector<std::string>>("pose_targets.names", std::vector<std::string>{});
+    auto_declare<std::string>("pose_targets.frame", std::string{"WAIST_P_S"});
+    auto_declare<double>("pose_targets.timeout", 0.5);
     auto_declare<double>("switch_mode_poll_rate", 20.0);
     // 內容與 policy 的來源：庫的路徑是空字串（編舞為 plugin 是空字串）時，該類型不啟用
     auto_declare<std::string>("choreo.plugin", std::string{});
     auto_declare<std::string>("choreo.library_path", std::string{"~/.local/share/graphen/choreo"});
     auto_declare<std::vector<double>>("choreo.max_steps", std::vector<double>{});
+    // 影子試播（PlaybackOptions.dry_run / shadow_token），見 ShadowGate、run_shadow
+    auto_declare<bool>("choreo.shadow.require", false);
+    auto_declare<double>("choreo.shadow.start_tolerance", 0.01);
+    auto_declare<double>("choreo.shadow.token_ttl", 300.0);
+    auto_declare<double>("choreo.shadow.max_duration", 600.0);
+    auto_declare<double>("choreo.shadow.publish_rate", 50.0);
     auto_declare<std::string>("policy.library_path", std::string{});
     auto_declare<std::string>("bvh.library_path", std::string{});
     auto_declare<std::vector<double>>("bvh.max_steps", std::vector<double>{});
@@ -112,6 +121,7 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
   preload_service_.reset();
   mode_subscriber_.reset();
   cmd_vel_subscriber_.reset();
+  pose_target_subscriber_.reset();
   arbiter_.reset();
   choreo_source_.reset();
   bvh_source_.reset();
@@ -262,6 +272,33 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     RCLCPP_ERROR(logger, "Every entry of 'planner_max_steps' must be greater than zero.");
     return controller_interface::CallbackReturn::ERROR;
   }
+  // 末端位姿目標（選填）：名稱不可重複；plugin 依名稱找到自己的目標
+  pose_target_names_ = get_node()->get_parameter("pose_targets.names").as_string_array();
+  pose_target_frame_ = get_node()->get_parameter("pose_targets.frame").as_string();
+  pose_target_timeout_ = get_node()->get_parameter("pose_targets.timeout").as_double();
+  for (size_t i = 0; i < pose_target_names_.size(); ++i) {
+    if (pose_target_names_[i].empty() ||
+      std::find(pose_target_names_.begin() + static_cast<std::ptrdiff_t>(i) + 1,
+      pose_target_names_.end(), pose_target_names_[i]) != pose_target_names_.end())
+    {
+      RCLCPP_ERROR(logger, "'pose_targets.names' must contain unique, non-empty names.");
+      return controller_interface::CallbackReturn::ERROR;
+    }
+  }
+  if (!pose_target_names_.empty() && pose_target_frame_.empty()) {
+    RCLCPP_ERROR(logger, "'pose_targets.frame' must not be empty when 'pose_targets.names' is set.");
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  if (!(pose_target_timeout_ > 0.0)) {
+    RCLCPP_ERROR(logger, "'pose_targets.timeout' must be greater than zero, got %f.",
+      pose_target_timeout_);
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  {
+    std::lock_guard<std::mutex> lock(pose_target_mutex_);
+    pose_target_commands_.assign(pose_target_names_.size(), PoseTargetCommand{});
+  }
+
   planner_ = std::make_unique<LocomotionPlanner>(planner_rate_, num_commands);
   arbiter_ = std::make_unique<PlaybackArbiter>(planner_.get(), logger);
 
@@ -274,6 +311,8 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
     setup.robot_description = get_node()->has_parameter("robot_description") ?
       get_node()->get_parameter("robot_description").as_string() : std::string{};
     setup.logger = logger;
+    setup.pose_target_names = pose_target_names_;
+    setup.pose_target_frame = pose_target_frame_;
     plugin_factory_.configure(std::move(setup));
   }
 
@@ -287,6 +326,8 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
       num_commands, std::numeric_limits<double>::quiet_NaN());
     // commanded_* 由 planner 填入；這裡配置好大小，planner 讀取時不必重新配置
     initial_state.commanded_velocities.assign(num_commands, 0.0);
+    // 目標由 planner 填入（fill_planner_state）；大小固定，之後只覆寫內容
+    initial_state.pose_targets.assign(pose_target_names_.size(), locomotion::PoseTarget{});
     state_buffer_.reset(std::move(initial_state));
   }
 
@@ -384,6 +425,21 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
       velocity_command_.received = true;
     });
 
+  // 末端位姿目標：只取最新值，逾時由 planner 端判斷。座標轉換（相機 → 軀幹）由發送端完成
+  if (!pose_target_names_.empty()) {
+    pose_target_subscriber_ = get_node()->create_subscription<graphen_interfaces::msg::ArmPoseTarget>(
+      "~/pose_targets", rclcpp::SystemDefaultsQoS(),
+      [this](const graphen_interfaces::msg::ArmPoseTarget::SharedPtr msg) {
+        on_pose_target(*msg);
+      });
+    std::string names;
+    for (const auto & name : pose_target_names_) {
+      names += (names.empty() ? "" : ", ") + name;
+    }
+    RCLCPP_INFO(logger, "Pose targets [ %s ] in frame '%s' on ~/pose_targets (timeout %.2f s).",
+      names.c_str(), pose_target_frame_.c_str(), pose_target_timeout_);
+  }
+
   try {
     create_playback_interfaces();
   } catch (const std::exception & e) {
@@ -402,6 +458,7 @@ controller_interface::CallbackReturn SwitchGroupController::on_configure(
       for (const auto & server : playback_servers_) {
         server->poll();
       }
+      publish_playback_state();
     });
 
   // 啟動時的動作：實際交給 planner 是在 activate 時。空字串表示不進入任何模式，保持目前位置
@@ -612,8 +669,14 @@ SwitchGroupController::SystemMode SwitchGroupController::create_mode(const std::
   result.policy.interruptible =
     get_or_declare<bool>(node, mode + ".interruptible", true) && motion_interruptible;
   result.policy.preempt = get_or_declare<bool>(node, mode + ".preempt", type == "hold");
+  result.shadow_playback = get_or_declare<bool>(node, mode + ".shadow_playback", false);
   if (!result.policy.interruptible) {
     RCLCPP_INFO(node->get_logger(), "Mode [ %s ] is not interruptible while it is playing.",
+      mode.c_str());
+  }
+  if (result.shadow_playback) {
+    RCLCPP_INFO(node->get_logger(),
+      "Mode [ %s ]: choreographies are only dry-run while it is playing (shadow_playback).",
       mode.c_str());
   }
   return result;
@@ -642,6 +705,37 @@ void SwitchGroupController::create_playback_interfaces() {
   playback_group_ = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
   choreo_source_ = std::make_unique<ChoreoSource>(node, &plugin_factory_, default_max_steps_);
+
+  // 影子試播：設定錯誤時丟出例外（configure 失敗）
+  ShadowGate::Config gate;
+  gate.require = node->get_parameter("choreo.shadow.require").as_bool();
+  gate.start_tolerance = node->get_parameter("choreo.shadow.start_tolerance").as_double();
+  gate.token_ttl = node->get_parameter("choreo.shadow.token_ttl").as_double();
+  shadow_gate_ = std::make_unique<ShadowGate>(gate);
+  shadow_max_duration_ = node->get_parameter("choreo.shadow.max_duration").as_double();
+  shadow_publish_rate_ = node->get_parameter("choreo.shadow.publish_rate").as_double();
+  if (!(shadow_max_duration_ > 0.0) || !std::isfinite(shadow_max_duration_)) {
+    throw std::invalid_argument("'choreo.shadow.max_duration' must be a finite number > 0");
+  }
+  if (!(shadow_publish_rate_ > 0.0) || !std::isfinite(shadow_publish_rate_)) {
+    throw std::invalid_argument("'choreo.shadow.publish_rate' must be a finite number > 0");
+  }
+  // 一般的 rclcpp publisher（不受 lifecycle 啟用狀態限制）：未啟用時也要能發布空的 playback_state
+  {
+    std::lock_guard<std::mutex> lock(shadow_mutex_);
+    shadow_replay_.reset();
+  }
+  shadow_publisher_ = rclcpp::create_publisher<sensor_msgs::msg::JointState>(
+    node, "~/shadow/joint_states", rclcpp::SystemDefaultsQoS());
+  shadow_timer_ = node->create_wall_timer(
+    std::chrono::duration<double>(1.0 / shadow_publish_rate_),
+    [this]() {publish_shadow_trajectory();});
+  last_playback_state_.reset();
+  playback_state_publisher_ = rclcpp::create_publisher<graphen_interfaces::msg::PlaybackState>(
+    node, "~/playback_state", rclcpp::QoS(1).reliable().transient_local());
+  if (gate.require) {
+    RCLCPP_INFO(logger, "Choreographies need a passed dry run (choreo.shadow.require).");
+  }
   bvh_source_ = std::make_unique<BvhSource>(node, joint_names_, default_max_steps_);
   policy_source_ = std::make_unique<PolicySource>(node, &plugin_factory_, default_max_steps_);
 
@@ -673,13 +767,26 @@ void SwitchGroupController::create_playback_interfaces() {
         return {};
       };
     hooks.start = [this](const PlayChoreoAction::Goal & goal, OnSame on_same) {
-        return arbiter_->request(
-          goal.name.empty() ? choreo_source_->prepare_preview(goal.content) :
-          choreo_source_->prepare(goal.name), on_same);
+        auto request = goal.name.empty() ? choreo_source_->prepare_preview(goal.content) :
+          choreo_source_->prepare(goal.name);
+        if (goal.options.dry_run) {
+          return run_dry(request, playback_label(ChoreoSource::kMode, request.item));
+        }
+        // 目前在示教等 shadow_playback 的模式：一律只做影子試播（帶 token 也一樣），要上機先切離該模式
+        if (const auto mode = shadow_playback_mode()) {
+          auto outcome = run_dry(request, playback_label(ChoreoSource::kMode, request.item));
+          outcome.message = "Shadow playback in mode [ " + *mode + " ] (switch to another mode to "
+            "play it for real): " + outcome.message;
+          return outcome;
+        }
+        check_shadow_token(goal.options.shadow_token, request);
+        return arbiter_->request(std::move(request), on_same);
       };
     hooks.describe = [](const PlayChoreoAction::Goal & goal) {
-        return playback_label(ChoreoSource::kMode, goal.name.empty() ? "(preview)" : goal.name);
+        return playback_label(ChoreoSource::kMode, goal.name.empty() ? "(preview)" : goal.name) +
+               (goal.options.dry_run ? " (dry run)" : "");
       };
+    hooks.supports_shadow = true;
     playback_servers_.push_back(std::make_unique<PlaybackServer<PlayChoreoAction>>(
         node, "play_choreo", playback_group_, arbiter_.get(), std::move(hooks)));
 
@@ -842,6 +949,43 @@ std::shared_ptr<locomotion::BaseStateEstimator> SwitchGroupController::create_ba
   return estimator;
 }
 
+void SwitchGroupController::on_pose_target(const graphen_interfaces::msg::ArmPoseTarget & msg) {
+  auto & clock = *get_node()->get_clock();
+  const auto it = std::find(pose_target_names_.begin(), pose_target_names_.end(), msg.arm);
+  if (it == pose_target_names_.end()) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), clock, 2000,
+      "~/pose_targets: unknown arm '%s', ignored.", msg.arm.c_str());
+    return;
+  }
+  if (msg.header.frame_id != pose_target_frame_) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), clock, 2000,
+      "~/pose_targets: frame_id '%s' is not '%s' (transform it before publishing), ignored.",
+      msg.header.frame_id.c_str(), pose_target_frame_.c_str());
+    return;
+  }
+  const auto & p = msg.pose.position;
+  const auto & o = msg.pose.orientation;
+  const double norm = std::sqrt(o.x * o.x + o.y * o.y + o.z * o.z + o.w * o.w);
+  // swivel 可以是 NaN（不指定），inf 不行
+  if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || !std::isfinite(norm) ||
+    norm < 1e-6 || std::isinf(msg.swivel))
+  {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), clock, 2000,
+      "~/pose_targets: non-finite pose or zero quaternion for '%s', ignored.", msg.arm.c_str());
+    return;
+  }
+  locomotion::PoseTarget target;
+  target.position = {p.x, p.y, p.z};
+  target.orientation = {o.x / norm, o.y / norm, o.z / norm, o.w / norm};
+  target.swivel = msg.swivel;
+  std::lock_guard<std::mutex> lock(pose_target_mutex_);
+  auto & command = pose_target_commands_[static_cast<size_t>(
+    std::distance(pose_target_names_.begin(), it))];
+  command.target = target;
+  command.stamp = std::chrono::steady_clock::now();
+  command.received = true;
+}
+
 void SwitchGroupController::fill_planner_state(RobotState & state) {
   state_buffer_.read(state);
 
@@ -853,6 +997,21 @@ void SwitchGroupController::fill_planner_state(RobotState & state) {
     state.command.active = velocity_command_.received && age <= command_timeout_;
     state.command.velocity = state.command.active ?
       velocity_command_.velocity : std::array<double, 3>{0.0, 0.0, 0.0};
+  }
+
+  // 末端位姿目標：逾時或尚未收到時 active 為 false
+  if (!pose_target_commands_.empty()) {
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(pose_target_mutex_);
+    for (size_t i = 0; i < pose_target_commands_.size() && i < state.pose_targets.size(); ++i) {
+      const auto & command = pose_target_commands_[i];
+      auto & target = state.pose_targets[i];
+      target = command.target;
+      target.age = command.received ?
+        std::chrono::duration<double>(now - command.stamp).count() :
+        std::numeric_limits<double>::infinity();
+      target.active = command.received && target.age <= pose_target_timeout_;
+    }
   }
 
   state.base = locomotion::BaseState{};
@@ -961,7 +1120,108 @@ controller_interface::return_type SwitchGroupController::update(
   return controller_interface::return_type::OK;
 }
 
+PlaybackOutcome SwitchGroupController::run_dry(
+  const PlaybackRequest & request, const std::string & label)
+{
+  const auto start = planner_ ? planner_->snapshot() : std::nullopt;
+  if (!start) {
+    throw std::runtime_error("the planner has not started yet; try again");
+  }
+  auto result = run_shadow(
+    request.motion, *start, planner_rate_, shadow_max_duration_, shadow_publish_rate_);
+
+  PlaybackOutcome outcome;
+  outcome.message = result.message;
+  if (result.success) {
+    outcome.status = PlaybackOutcome::Status::kDryRun;
+    outcome.shadow_token = shadow_gate_->issue(request.content_sha256, start->commanded_positions);
+    RCLCPP_INFO(get_node()->get_logger(), "Dry run [ %s ] passed (%.2f s), shadow_token %s.",
+      label.c_str(), result.duration, outcome.shadow_token.c_str());
+  } else {
+    outcome.status = PlaybackOutcome::Status::kRejected;
+    RCLCPP_WARN(get_node()->get_logger(), "Dry run [ %s ]: %s", label.c_str(),
+      result.message.c_str());
+  }
+  // 通過與否都發布軌跡（失敗時可以看到停在哪裡）；新的試播取代舊的
+  std::lock_guard<std::mutex> lock(shadow_mutex_);
+  shadow_replay_ = ShadowReplay{std::move(result), std::chrono::steady_clock::now(), 0};
+  return outcome;
+}
+
+std::optional<std::string> SwitchGroupController::shadow_playback_mode() const {
+  if (!arbiter_) {
+    return std::nullopt;
+  }
+  const auto current = arbiter_->current();
+  const auto * mode = find_mode(current.mode);
+  if (mode == nullptr || !mode->shadow_playback) {
+    return std::nullopt;
+  }
+  return current.mode;
+}
+
+void SwitchGroupController::check_shadow_token(
+  const std::string & token, const PlaybackRequest & request) const
+{
+  if (token.empty() && !shadow_gate_->required()) {
+    return;
+  }
+  const auto current = planner_ ? planner_->snapshot() : std::nullopt;
+  if (!current) {
+    throw std::runtime_error("the planner has not started yet; try again");
+  }
+  // 驗證與 planner 實際 on_enter 之間差不到一個週期，由 start_tolerance 涵蓋
+  const auto reason = shadow_gate_->verify(
+    token, request.content_sha256, current->commanded_positions, joint_names_);
+  if (!reason.empty()) {
+    throw std::runtime_error(reason);
+  }
+}
+
+void SwitchGroupController::publish_playback_state() {
+  graphen_interfaces::msg::PlaybackState state;
+  if (arbiter_ && get_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    const auto current = arbiter_->current();
+    state.mode = current.mode;
+    state.item = current.item;
+  }
+  if (last_playback_state_ && *last_playback_state_ == state) {
+    return;
+  }
+  last_playback_state_ = state;
+  playback_state_publisher_->publish(state);
+}
+
+void SwitchGroupController::publish_shadow_trajectory() {
+  std::lock_guard<std::mutex> lock(shadow_mutex_);
+  if (!shadow_replay_) {
+    return;
+  }
+  auto & replay = *shadow_replay_;
+  const auto & times = replay.trajectory.times;
+  const double elapsed = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - replay.started).count();
+  // 只發布到期的最後一筆（落後時跳過中間的取樣）
+  size_t index = replay.next;
+  if (index >= times.size() || times[index] > elapsed) {
+    return;
+  }
+  while (index + 1 < times.size() && times[index + 1] <= elapsed) {
+    ++index;
+  }
+  sensor_msgs::msg::JointState msg;
+  msg.header.stamp = get_node()->now();
+  msg.name = joint_names_;
+  msg.position = replay.trajectory.positions[index];
+  shadow_publisher_->publish(msg);
+  replay.next = index + 1;
+  if (replay.next >= times.size()) {
+    shadow_replay_.reset();
+  }
+}
+
 }  // namespace graphen::control
+
 
 PLUGINLIB_EXPORT_CLASS(
   graphen::control::SwitchGroupController,

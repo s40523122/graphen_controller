@@ -40,7 +40,9 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [graphen_mujoco](src/graphen_mujoco/) | hardware plugin | MuJoCo 模擬的 T170 本體 + IMU（`graphen_mujoco/MujocoSystem`）、MJCF 匯出與主機端 viewer（`tools/`） | — |
 | [fb70_description](src/robot_description/fb70/) | 資源 | FullBodyT70 訓練場景匯出的 MJCF（位置伺服）與依關節的 PD 增益；沒有自己的 URDF | — |
 | [ti5_t170_description](src/robot_description/ti5_t170_description/) | 資源（外部） | T170-V2.1-A0 模型（URDF xacro、MJCF、mesh、依關節的 PD 增益），robolab `Ti5T170-Flat`（tc_new_025）的訓練模型，實機 T170 對應的模型 | — |
-| [graphen_choreographer](src/graphen_choreographer/) | locomotion plugin（不依賴 rclcpp） | 編舞（多軌 keyframe 的組合動作）：`ChoreographerAlgorithm`、腳本解析、`choreo_check` | graphen_locomotion |
+| [graphen_aiterone_ny_description](src/robot_description/graphen_aiterone_ny_description/) | 資源（外部） | NY 機台的模型（`robot:=aiterone_ny`）：運動學同 ti5_170a、質量取自 ti5_t170、L 型手腕轉接板；URDF xacro、產生的 MJCF、依關節的 PD 增益、手臂 IK 設定與該機台的 CAN 配線 | dexterous_hand_description |
+| [graphen_choreographer](src/graphen_choreographer/) | locomotion plugin（不依賴 rclcpp） | 編舞（多軌 keyframe 的組合動作）：`ChoreographerAlgorithm`、腳本解析、路徑碰撞檢查、`choreo_check` | graphen_locomotion、graphen_arm_ik |
+| [graphen_arm_ik](src/graphen_arm_ik/) | C++ lib + node + locomotion plugin | 手臂 IK（手腕 6D + 手肘 swivel）與碰撞偵測（MuJoCo 3.11）、`arm_ik_server`（`~/solve`、`~/forward`、`~/tcp_jog`）、視覺伺服 plugin `ArmServoAlgorithm`、`arm_ik_check` | graphen_mujoco（CMake）、graphen_locomotion、graphen_interfaces |
 | [graphen_rl_policy](src/graphen_rl_policy/) | locomotion plugin | RL policy 共用基類 `PolicyRunner`（ONNX Runtime）與 policy plugin：`T170VelocityPolicy`（FullBodyT70）、`Ti5FlatPolicy`（robolab） | graphen_locomotion |
 
 ## 快速開始
@@ -66,7 +68,7 @@ ros2 launch graphen_bt bt.launch.py                 # 行為層（另開終端�
 
 ### 硬體設定
 
-bringup 以 `hardware:=` 選擇硬體（預設 `mock`），以 `robot:=` 選擇模型（預設 `ti5_170a`，也就是一直以來實機用的 URDF；另有 `ti5_t170`、`fb70`），所有 hardware 的預設相同。
+bringup 以 `hardware:=` 選擇硬體（預設 `mock`），以 `robot:=` 選擇模型（預設 `ti5_170a`，也就是一直以來實機用的 URDF；另有 `ti5_t170`、`fb70`、`aiterone_ny`），所有 hardware 的預設相同。
 `robot` 同時決定 URDF 本體、MuJoCo 的 MJCF 與 PD 預設增益。controller 設定由 launch 依序疊加：
 
 | 檔案 | 內容 |
@@ -207,9 +209,38 @@ timeout 15 ros2 action send_goal --feedback /switch_group_controller/play_choreo
     tree_file:=$(ros2 pkg prefix graphen_bt)/share/graphen_bt/trees/choreo_demo.xml
   ```
 
+### 手臂 IK（指令 / 視覺伺服 / 碰撞檢查）
+
+bringup 依 `robot:=` 帶入 `<模型套件>/config/arm_ik.yaml`（launch 參數 `arm_ik_config`，`auto` 預設，`none` 停用；fb70 尚未驗證，`auto` 時停用），啟動 `arm_ik_server`，並設定編舞的路徑碰撞檢查與 `arm_servo` 模式。目標位姿一律以軀幹 `WAIST_P_S` 座標表示；swivel 為手肘繞「肩 → 腕」軸的絕對角度（0 = 軀幹 −z），`.nan` = 不指定。
+
+```bash
+# 設定檔的自我檢查（新增模型或修改 arm_ik.yaml 後）：收斂率、swivel、碰撞探測、伺服
+ros2 run graphen_arm_ik arm_ik_check package://ti5_170a_graphen/config/arm_ik.yaml
+
+# 指令：末端位姿 + elbow → 關節角（只計算，不送指令）；寫進編舞腳本的方式見 docs/CHOREOGRAPHER.md §7
+ros2 service call /arm_ik_server/forward graphen_interfaces/srv/ArmForward "{arm: right}"
+ros2 service call /arm_ik_server/solve graphen_interfaces/srv/SolveArmIk \
+  "{arm: right, target: {header: {frame_id: WAIST_P_S}, pose: {position: {x: 0.35, y: -0.25, z: 0.05}, orientation: {w: 1.0}}}, swivel: .nan}"
+
+# 末端單步（TCP jog）：以 reference（上一步的 positions；空 = 目前角度）沿一個軸走 delta，回傳新的關節角，
+# 再以一個 keyframe 的編舞播放（docs/CHOREOGRAPHER.md §7.4）。axis 0-6 = X/Y/Z/ROLL/PITCH/YAW/ELBOW，frame 0 = 手腕、1 = 軀幹
+ros2 service call /arm_ik_server/tcp_jog graphen_interfaces/srv/TcpJog "{arm: right, axis: 0, delta: 0.01, frame: 0}"
+
+# 編舞的路徑碰撞（離線；播放與發佈時 controller 會做同樣的檢查）
+ros2 run graphen_choreographer choreo_check <腳本> --arm-config package://ti5_170a_graphen/config/arm_ik.yaml
+
+# 視覺伺服：進入 arm_servo，持續發布目標（超過 pose_targets.timeout 0.5 s 沒更新就保持）；下一步會碰撞時該手臂停住
+ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: arm_servo}"
+ros2 topic pub -r 30 /switch_group_controller/pose_targets graphen_interfaces/msg/ArmPoseTarget \
+  "{header: {frame_id: WAIST_P_S}, arm: right, pose: {position: {x: 0.35, y: -0.3, z: 0.05}, orientation: {x: 0.59, y: 0.01, z: 0.15, w: 0.79}}, swivel: .nan}"
+ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: stop}"
+```
+
+本機 `controllers.yaml` 的手臂子群組若是 `output_enabled: false`，mock 上手臂不會動（伺服、編舞都一樣）。
+
 ### 播放介面的情境回歸
 
-`playback_scenarios` 對著已啟動的 bringup 送出一連串指令並比對回應，涵蓋四個播放入口、舞曲庫的 service 與切換規則（`on_same`、不可中斷、stop 搶占、互相取代），每一項印出 PASS / FAIL。**會讓機器人動作，只在 mock 或 MuJoCo 上執行。** 它會發佈名稱以 `scn_` 開頭的測試舞曲，建議用 `scenario_params` 把舞曲庫指到暫存目錄：
+`playback_scenarios` 對著已啟動的 bringup 送出一連串指令並比對回應，涵蓋四個播放入口、舞曲庫的 service、切換規則（`on_same`、不可中斷、stop 搶占、互相取代）與影子試播（`dry_run`、`shadow_token`、`~/playback_state`，需要 hold 模式 `teach`），每一項印出 PASS / FAIL。**會讓機器人動作，只在 mock 或 MuJoCo 上執行。** 它會發佈名稱以 `scn_` 開頭的測試舞曲，建議用 `scenario_params` 把舞曲庫指到暫存目錄：
 
 ```bash
 printf 'switch_group_controller:\n  ros__parameters:\n    choreo:\n      library_path: /tmp/choreo_test_library\n' \
@@ -217,8 +248,10 @@ printf 'switch_group_controller:\n  ros__parameters:\n    choreo:\n      library
 ros2 launch graphen_bringup bringup.launch.py scenario_params:=/tmp/playback_test.yaml
 # 另一個終端機
 ros2 run graphen_bringup playback_scenarios                   # 全部；沒有啟用的類型自動略過
-ros2 run graphen_bringup playback_scenarios --only choreo     # switch_mode / choreo / bvh / policy / cross
+ros2 run graphen_bringup playback_scenarios --only choreo     # switch_mode / choreo / shadow / bvh / policy / cross / arm
 ```
+
+`arm` 區段（手臂 IK service、編舞的路徑碰撞、`arm_servo` 伺服）會移動右手臂，需要手臂子群組 `output_enabled: true`（可以在 `scenario_params` 中覆寫 `left_arm_group_controller` / `right_arm_group_controller` 的 `output_enabled`）。
 
 修改腳本（`scripts/*.py`）之後要重新建置 `graphen_bringup` 才會生效。
 
@@ -277,7 +310,7 @@ ros2 control list_hardware_components               # 多出 left_hand_hardware�
 ros2 launch graphen_bringup bringup.launch.py hardware:=real
 ```
 
-CAN 通道與馬達對應在 [can_driver_config.json](src/graphen_bringup/config/can_driver_config.json)，實機初始位置在 [real_initial_positions.yaml](src/graphen_bringup/config/real_initial_positions.yaml)：開機時有列出的 joint 會以 `max_command_velocity`（預設 0.5 rad/s）限速走到該值，沒列的保持目前位置；之後要等 BT 或 action 下命令才會動。加上 `use_hands:=true` 時靈巧手也會改用實機（`left_hand_port`、`right_hand_port`、`hand_baudrate`）。
+CAN 通道與馬達對應在 [can_driver_config.json](src/graphen_bringup/config/can_driver_config.json)（`robot:=aiterone_ny` 時改用該機台的 [config/can_driver_config.json](src/robot_description/graphen_aiterone_ny_description/config/can_driver_config.json)，log 會印出 `can_config:`），實機初始位置在 [real_initial_positions.yaml](src/graphen_bringup/config/real_initial_positions.yaml)：開機時有列出的 joint 會以 `max_command_velocity`（預設 0.5 rad/s）限速走到該值，沒列的保持目前位置；之後要等 BT 或 action 下命令才會動。加上 `use_hands:=true` 時靈巧手也會改用實機（`left_hand_port`、`right_hand_port`、`hand_baudrate`）。
 
 `hardware:=real_pd` 改以電流模式輸出力矩，PD 由 `PdController` 在主機端以 200 Hz 計算（與訓練相同）。開機時先以位置模式保持目前姿態，等 controller 寫入力矩後才切換；回饋中斷或指令異常時退回位置保持。**尚未在實機驗證**，流程、單位換算與待驗證項目見 [TI5_CAN_TORQUE.md](docs/TI5_CAN_TORQUE.md)。
 
@@ -307,6 +340,7 @@ colcon build --symlink-install --packages-select graphen_mujoco   # 裝在其他
 | `ti5_t170` | `ti5_t170_description`（+ 靈巧手） | `ti5_t170_description/mjcf/ti5_t170.xml`（T170-V2.1-A0 T-pose，tc_new_025 的訓練模型） | 全部（MuJoCo 只有 `mujoco_pd`） | mesh 用相對路徑，WSL 也能跑；頸部是真正的關節；初始基座高度 1.000 m（直膝；MJCF 的 keyframe 為屈膝的 0.985 m） |
 | `ti5_170a`（預設） | `ti5_170a_graphen` 的 `robot.urdf.xacro` | `ti5_170a_graphen/mjcf/ti5_170a.xml`（由 URDF 產生，手固定、armature 借用 ti5_t170） | 全部（MuJoCo 只有 `mujoco_pd`） | 質量分布可疑（`WAIST_R_S` 49 kg、本體 93.7 kg），模擬不代表實機；初始基座高度 0.899 m |
 | `fb70` | `ti5_170a_graphen` 的 `robot.urdf.xacro` | `fb70_description/mjcf/t170_{free,fixed}.xml`（FullBodyT70 匯出，wtz 的訓練模型） | 全部 | mesh 指向 Orin 上的 `/devtest/FullBodyT70/...`，只能在 Orin 上載入 |
+| `aiterone_ny` | `graphen_aiterone_ny_description`（+ 靈巧手） | `graphen_aiterone_ny_description/mjcf/graphen_aiterone_ny.xml`（由 URDF 產生，手固定、位置伺服） | 全部 | 外觀（group 2）為原始網格、碰撞（group 3，viewer 按 `3` 顯示）為凸包，靈巧手的外觀也是凸包；`mujoco` 的伺服增益依頻寬計算（預設 10 Hz、阻尼比 1），近似實機位置模式（驅動器三環）、尚未以實機校正；`mujoco_pd` 時自動改成力矩馬達；初始基座高度 0.899 m |
 
 policy 只在自己的訓練模型上才站得穩，模型與 policy 要對應（`rl_flat` / `tc_flat_policy*` 的訓練模型 t170a 已移出工作區，目前沒有對應的模擬模型）。各模型的浮動基座初始高度不同（直膝下腳底離地 5 mm），由 launch 依 `robot` 帶入 MujocoSystem 的 `initial_base_height`。
 
@@ -324,6 +358,42 @@ ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_fixed_b
 bash src/graphen_mujoco/tools/mujoco_viewer.sh                                  # 模型跟著 bringup
 bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/fb70/mjcf/t170_fixed.xml" # fb70 吊掛
 bash src/graphen_mujoco/tools/mujoco_viewer.sh --model "$PWD/src/robot_description/ti5_t170_description/mjcf/ti5_t170.xml"  # sim_rl 預設
+# 兩手手腕（arm_ik.yaml 的 tip_body）的座標軸以箭頭顯示（x 紅、y 綠、z 藍，也就是 tcp_jog FRAME_TOOL 的軸），
+# Pause 鍵切換；--no-wrist-axes 預設隱藏，--wrist-bodies / --wrist-axis-length / --wrist-axis-width 調整
+
+# mock / 實機：--source ros 訂閱 /joint_states 顯示機器人的姿態（要能 import rclpy，見下方的 venv；必須指定 --model）
+PY=~/teach_env/bin/python bash src/graphen_mujoco/tools/mujoco_viewer.sh --source ros \
+    --model "$PWD/src/robot_description/ti5_170a_graphen/mjcf/ti5_170a.xml" \
+    --ghost-topic /switch_group_controller/shadow/joint_states        # 影子試播的軌跡以半透明的機器人疊加
+
+# 手臂示教（只改畫面、不送指令）：controller 切到 teach 模式（hold，機器人不動）時 viewer 自動進入示教，
+# 離開該模式就結束（--teach-always：不看 controller）。雙擊手腕目標（紅 = 右、藍 = 左），
+# Ctrl+右鍵拖曳平移、Ctrl+左鍵拖曳旋轉，手臂跟隨 wrist 位置 + 姿態；F9 / F10 調整手肘的 swivel、wrist 不動；
+# 解的姿態有碰撞時目標變黃並列出 body 對；PageDown 切換要調整 swivel 的手臂。
+# 也可以直接指定關節角（只填要改的 joint；超出限位截斷）。不要用 --once（viewer 常常還沒配對到就送完了）：
+#   timeout 10 ros2 topic pub -r 5 --times 3 -w 1 /mujoco_viewer_teach/set_pose sensor_msgs/msg/JointState \
+#     '{name: [R_SHOULDER_P, R_ELBOW_Y], position: [-0.5, 1.2]}' 
+# viewer 不記錄、不匯出：全身的姿態發布在 /mujoco_viewer_teach/pose（格式同 /joint_states：joint 與順序相同，
+# velocity / effort 為 0；sensor_msgs/JointState，transient_local），
+# 由外部程式擷取成 keyframe、組成腳本，再以 PlayChoreo 的影子試播（dry_run）檢查後播放（見 docs/CHOREOGRAPHER.md §3.4、§7.5）。
+# IK 由 arm_ik_server 計算（bringup 預設啟動）：viewer 要能 import rclpy（先 source install/setup.bash），
+# 沒有時示教停用。建議用 ROS 的 python3（3.10）另建 venv，避免 pip 升級系統的 numpy 影響 ROS 套件：
+#   python3 -m venv ~/teach_env && ~/teach_env/bin/pip install mujoco==3.11.0 glfw pyyaml "numpy<2"
+timeout 10 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: teach}"
+timeout 5 ros2 topic echo --once --qos-durability transient_local --qos-reliability reliable \
+    /mujoco_viewer_teach/pose sensor_msgs/msg/JointState                                  # 擷取目前示教的姿態
+# 影子試播：teach（shadow_playback: true）中的 PlayChoreo 一律只在 controller 內部空跑（不動），回傳 shadow_token；
+# 其他模式中要加 options.dry_run。content 的換行寫成 \n（YAML 單引號跨行會把換行摺成空格）
+timeout 30 ros2 action send_goal /switch_group_controller/play_choreo graphen_interfaces/action/PlayChoreo \
+    '{content: "<腳本，換行寫成 \n>"}'
+# 上機：先離開 teach（stop 同樣不動、起點不變），再帶 token 正式播放
+timeout 10 ros2 action send_goal /switch_group_controller/switch_mode graphen_interfaces/action/SwitchMode "{mode: stop}"
+timeout 30 ros2 action send_goal /switch_group_controller/play_choreo graphen_interfaces/action/PlayChoreo \
+    '{content: "<同一份腳本>", options: {shadow_token: "<token>", wait_until_finished: true}}'
+# 不開 bringup 時自己啟動 server（模型要和 viewer 的一致），viewer 加 --teach-always：
+ros2 run graphen_arm_ik arm_ik_server --ros-args -p arm_ik_config:=package://ti5_170a_graphen/config/arm_ik.yaml
+PY=~/teach_env/bin/python bash src/graphen_mujoco/tools/mujoco_viewer.sh --teach-always \
+    --model "$PWD/src/robot_description/ti5_170a_graphen/mjcf/ti5_170a.xml"
 
 # 執行 policy（run_policy：policy 庫中的 <name>.policy.yaml）：第一次要載入（建立 ONNX session），
 # 進入時會先以 entry_speed 走到 policy 的預設姿態，再開始推論
@@ -350,6 +420,10 @@ ros2 topic pub -r 20 /switch_group_controller/cmd_vel geometry_msgs/msg/Twist "{
   - `rl_flat`：`Ti5FlatPolicy` + `policy/tc_flat_policy.onnx`，用 t170a 訓練（t170a 模型已移出工作區）。當時的實測（t170a、`mujoco_pd`、自由站立、WSL）：能穩定站立（傾斜約 2.5°）；vx=0.5 時能邁步、不會倒下。關節順序與 obs 組法是推斷的，**仍待訓練端確認**。
 - ti5_170a 的 MJCF 由 URDF 產生，URDF 或 mesh 更新後重新產生，並把印出的基座高度同步到 `bringup.launch.py` 的 `robots['ti5_170a']`：
   `python3 src/robot_description/ti5_170a_graphen/scripts/make_mjcf.py`
+- aiterone_ny 的 MJCF 同樣由 URDF 產生（手部碰撞凸包產生在該套件的 `meshes/hulls/dexterous_hand/`），基座高度同步到 `robots['aiterone_ny']`；本體 mesh 更新時先跑同目錄的 `make_hulls.py`：
+  `python3 src/robot_description/graphen_aiterone_ny_description/scripts/make_mjcf.py`
+  外觀與碰撞是兩組 geom：class `visual`（group 2，只顯示、不碰撞、不算質量，本體用原始 STL）與 class `collision`（group 3，URDF collision 的凸包，viewer 預設隱藏）。`--visual-mesh hull` 時外觀也用凸包（載入約 0.14 s，原始網格約 0.46 s）；靈巧手的外觀一律沿用碰撞網格（要原始外觀用 `--hand-mesh-type original`，MJCF 會改用絕對路徑）。
+  致動器是位置伺服：`kp = I·ω²`、`kv = 2ζ·I·ω`，`I` 為 home 姿態下質量矩陣的對角項（含 armature），`ω = 2π·--servo-bandwidth`（預設 10 Hz），`ζ` 為 `--servo-damping-ratio`（預設 1）；腳本會列出各關節的 I / kp / kv。頻寬越高越硬，但 kp 是顯式積分，`ω·timestep` 超過約 0.5（約 16 Hz）就容易不穩。有實機位置模式的階躍響應後，以它校正頻寬與阻尼比
 - ti5_t170 的 MJCF 由 CAD 匯出的 T-pose 檔產生（補上 timestep、armature、ctrlrange、IMU、碰撞設定與 keyframe）；原檔或 `param.csv` 更新後重新產生：
   `python3 src/robot_description/ti5_t170_description/scripts/make_mjcf.py --base-height 0.985`
 - fb70 的 MJCF 由 FullBodyT70 的訓練場景匯出，重新訓練或修改場景後要重新產生（需要主機的 `~/learnWalk_env`）：

@@ -56,7 +56,8 @@ PluginFactory::Created PluginFactory::create(
 
   const auto log = make_algorithm_logger(setup_.logger.get_child(name));
   const locomotion::Context context{
-    setup_.joint_names, setup_.rate_hz, setup_.robot_description, params, log, max_steps};
+    setup_.joint_names, setup_.rate_hz, setup_.robot_description, params, log, max_steps,
+    setup_.pose_target_names, setup_.pose_target_frame};
   created.algorithm->configure(context);
 
   created.motion =

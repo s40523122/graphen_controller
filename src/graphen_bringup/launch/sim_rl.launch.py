@@ -38,7 +38,8 @@ def generate_launch_description():
             'hardware', default_value='mujoco_pd', choices=['mujoco', 'mujoco_pd'],
             description='MuJoCo control: position actuators or torque actuators + PdController'),
         DeclareLaunchArgument(
-            'robot', default_value='ti5_170a', choices=['ti5_170a', 'ti5_t170', 'fb70'],
+            'robot', default_value='ti5_170a',
+            choices=['ti5_170a', 'ti5_t170', 'fb70', 'aiterone_ny'],
             description='Simulated model; must match the model the policy was trained on '
                         '(ti5_t170 / ti5_170a need hardware:=mujoco_pd)'),
         DeclareLaunchArgument(

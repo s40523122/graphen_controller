@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:macro name="left_hand" params="parent xyz:='0 0 0' rpy:='0 0 0'">
-    <joint name="left_wrist_to_base" type="fixed">
+  <xacro:macro name="left_hand" params="parent prefix:='' xyz:='0 0 0' rpy:='0 0 0'">
+    <joint name="${prefix}left_wrist_to_base" type="fixed">
       <parent link="${parent}"/>
-      <child  link="left_hand_base"/>
+      <child  link="${prefix}left_hand_base"/>
       <origin xyz="${xyz}" rpy="${rpy}"/>
     </joint>
     <link
-      name="left_hand_base">
+      name="${prefix}left_hand_base">
       <inertial>
         <origin
           xyz="0.000590322130425508 4.41124716199504E-08 0.018658174252011"
@@ -48,7 +48,7 @@
       </collision>
     </link>
     <link
-      name="left_hand_palm">
+      name="${prefix}left_hand_palm">
       <inertial>
         <origin
           xyz="0.00508426712637999 -0.000665074443788383 0.065735027025566"
@@ -88,20 +88,20 @@
       </collision>
     </link>
     <joint
-      name="left_hand_palm_joint"
+      name="${prefix}left_hand_palm_joint"
       type="fixed">
       <origin
         xyz="0 0 0.0295"
         rpy="0 0 0" />
       <parent
-        link="left_hand_base" />
+        link="${prefix}left_hand_base" />
       <child
-        link="left_hand_palm" />
+        link="${prefix}left_hand_palm" />
       <axis
         xyz="0 0 0" />
     </joint>
     <link
-      name="left_thumb_yaw">
+      name="${prefix}left_thumb_yaw">
       <inertial>
         <origin
           xyz="0.000851891383030774 -0.00483573175773916 -0.00574146645894136"
@@ -141,15 +141,15 @@
       </collision>
     </link>
     <joint
-      name="left_thumb_yaw_joint"
+      name="${prefix}left_thumb_yaw_joint"
       type="revolute">
       <origin
         xyz="0.021 -0.021699 0.04225"
         rpy="0 0 0" />
       <parent
-        link="left_hand_palm" />
+        link="${prefix}left_hand_palm" />
       <child
-        link="left_thumb_yaw" />
+        link="${prefix}left_thumb_yaw" />
       <axis
         xyz="0 0 1" />
       <limit
@@ -159,7 +159,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_thumb_mcp">
+      name="${prefix}left_thumb_mcp">
       <inertial>
         <origin
           xyz="-0.0251945178412399 0.00470177554341607 -0.00721123225273901"
@@ -199,15 +199,15 @@
       </collision>
     </link>
     <joint
-      name="left_thumb_mcp_joint"
+      name="${prefix}left_thumb_mcp_joint"
       type="revolute">
       <origin
         xyz="0.0084186 -0.010193 -0.01022"
         rpy="1.7453 0 1.7453" />
       <parent
-        link="left_thumb_yaw" />
+        link="${prefix}left_thumb_yaw" />
       <child
-        link="left_thumb_mcp" />
+        link="${prefix}left_thumb_mcp" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -217,7 +217,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_thumb_pip">
+      name="${prefix}left_thumb_pip">
       <inertial>
         <origin
           xyz="-0.019640767057022 0.00242380087447702 -0.0109191513474222"
@@ -257,15 +257,15 @@
       </collision>
     </link>
     <joint
-      name="left_thumb_pip_joint"
+      name="${prefix}left_thumb_pip_joint"
       type="revolute">
       <origin
         xyz="-0.043727 0.01749 0.0036"
         rpy="0 0 0" />
       <parent
-        link="left_thumb_mcp" />
+        link="${prefix}left_thumb_mcp" />
       <child
-        link="left_thumb_pip" />
+        link="${prefix}left_thumb_pip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -274,12 +274,12 @@
         effort="1"
         velocity="2" />
       <mimic
-        joint="left_thumb_mcp_joint"
+        joint="${prefix}left_thumb_mcp_joint"
         multiplier="1.0853"
         offset="0" />
     </joint>
     <link
-      name="left_thumb_dip">
+      name="${prefix}left_thumb_dip">
       <inertial>
         <origin
           xyz="-0.0129223062507652 -0.00448889527590449 -0.00799771788559279"
@@ -319,15 +319,15 @@
       </collision>
     </link>
     <joint
-      name="left_thumb_dip_joint"
+      name="${prefix}left_thumb_dip_joint"
       type="revolute">
       <origin
         xyz="-0.036427 0.019902 -0.0028"
         rpy="0 0 0" />
       <parent
-        link="left_thumb_pip" />
+        link="${prefix}left_thumb_pip" />
       <child
-        link="left_thumb_dip" />
+        link="${prefix}left_thumb_dip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -337,7 +337,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_thumb_force_sensor">
+      name="${prefix}left_thumb_force_sensor">
       <inertial>
         <origin
           xyz="1.6729952903867E-05 0.00563393604355955 -0.0055985469152464"
@@ -377,20 +377,20 @@
       </collision>
     </link>
     <joint
-      name="left_thumb_force_sensor_joint"
+      name="${prefix}left_thumb_force_sensor_joint"
       type="fixed">
       <origin
         xyz="-0.025343 0.0072822 -0.0079999"
         rpy="1.3535 -1.5705 -2.7497" />
       <parent
-        link="left_thumb_dip" />
+        link="${prefix}left_thumb_dip" />
       <child
-        link="left_thumb_force_sensor" />
+        link="${prefix}left_thumb_force_sensor" />
       <axis
         xyz="0 0 0" />
     </joint>
     <link
-      name="left_index_yaw">
+      name="${prefix}left_index_yaw">
       <inertial>
         <origin
           xyz="-1.11022302462516E-16 1.38777878078145E-17 -0.00449999999999999"
@@ -430,15 +430,15 @@
       </collision>
     </link>
     <joint
-      name="left_index_yaw_joint"
+      name="${prefix}left_index_yaw_joint"
       type="revolute">
       <origin
         xyz="0.0156 -0.033249 0.12225"
         rpy="1.5708 0 1.5708" />
       <parent
-        link="left_hand_palm" />
+        link="${prefix}left_hand_palm" />
       <child
-        link="left_index_yaw" />
+        link="${prefix}left_index_yaw" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -448,7 +448,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_index_mcp">
+      name="${prefix}left_index_mcp">
       <inertial>
         <origin
           xyz="-0.00111234936674693 0.0237468971083405 -0.011226035099229"
@@ -488,15 +488,15 @@
       </collision>
     </link>
     <joint
-      name="left_index_mcp_joint"
+      name="${prefix}left_index_mcp_joint"
       type="revolute">
       <origin
         xyz="-0.0114 0 -0.0045"
         rpy="0 -1.5708 0" />
       <parent
-        link="left_index_yaw" />
+        link="${prefix}left_index_yaw" />
       <child
-        link="left_index_mcp" />
+        link="${prefix}left_index_mcp" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -506,7 +506,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_index_pip">
+      name="${prefix}left_index_pip">
       <inertial>
         <origin
           xyz="-0.0012428186063217 0.0110585328593934 -0.00864409288627266"
@@ -546,15 +546,15 @@
       </collision>
     </link>
     <joint
-      name="left_index_pip_joint"
+      name="${prefix}left_index_pip_joint"
       type="revolute">
       <origin
         xyz="0.011359 0.042391 -0.0029501"
         rpy="0 0 0" />
       <parent
-        link="left_index_mcp" />
+        link="${prefix}left_index_mcp" />
       <child
-        link="left_index_pip" />
+        link="${prefix}left_index_pip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -564,7 +564,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_index_dip">
+      name="${prefix}left_index_dip">
       <inertial>
         <origin
           xyz="0.00237596292202255 0.0152478023985814 -0.00810085568511099"
@@ -604,15 +604,15 @@
       </collision>
     </link>
     <joint
-      name="left_index_dip_joint"
+      name="${prefix}left_index_dip_joint"
       type="revolute">
       <origin
         xyz="0 0.018776 -0.00035"
         rpy="0 0 0" />
       <parent
-        link="left_index_pip" />
+        link="${prefix}left_index_pip" />
       <child
-        link="left_index_dip" />
+        link="${prefix}left_index_dip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -621,12 +621,12 @@
         effort="1"
         velocity="2" />
       <mimic
-        joint="left_index_pip_joint"
+        joint="${prefix}left_index_pip_joint"
         multiplier="1.1232"
         offset="0" />
     </joint>
     <link
-      name="left_index_force_sensor">
+      name="${prefix}left_index_force_sensor">
       <inertial>
         <origin
           xyz="-1.68060670143189E-05 -0.0056335940302915 -0.00559845819855389"
@@ -666,20 +666,20 @@
       </collision>
     </link>
     <joint
-      name="left_index_force_sensor_joint"
+      name="${prefix}left_index_force_sensor_joint"
       type="fixed">
       <origin
         xyz="0.0141343261630977 0.0290944897815981 -0.00809978577346993"
         rpy="-1.35354409811336 1.57052831054541 -1.26366585055774" />
       <parent
-        link="left_index_dip" />
+        link="${prefix}left_index_dip" />
       <child
-        link="left_index_force_sensor" />
+        link="${prefix}left_index_force_sensor" />
       <axis
         xyz="0 0 0" />
     </joint>
     <link
-      name="left_middle_yaw">
+      name="${prefix}left_middle_yaw">
       <inertial>
         <origin
           xyz="-5.55111512312578E-17 2.77555756156289E-17 -0.0045"
@@ -719,15 +719,15 @@
       </collision>
     </link>
     <joint
-      name="left_middle_yaw_joint"
+      name="${prefix}left_middle_yaw_joint"
       type="revolute">
       <origin
         xyz="0.0156 -0.0074987 0.12225"
         rpy="1.5708 0 1.5708" />
       <parent
-        link="left_hand_palm" />
+        link="${prefix}left_hand_palm" />
       <child
-        link="left_middle_yaw" />
+        link="${prefix}left_middle_yaw" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -737,7 +737,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_middle_mcp">
+      name="${prefix}left_middle_mcp">
       <inertial>
         <origin
           xyz="-0.00111234923615258 0.0237468977201539 -0.0112260350232041"
@@ -777,15 +777,15 @@
       </collision>
     </link>
     <joint
-      name="left_middle_mcp_joint"
+      name="${prefix}left_middle_mcp_joint"
       type="revolute">
       <origin
         xyz="-0.0114 0 -0.0045"
         rpy="0 -1.5708 0" />
       <parent
-        link="left_middle_yaw" />
+        link="${prefix}left_middle_yaw" />
       <child
-        link="left_middle_mcp" />
+        link="${prefix}left_middle_mcp" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -795,7 +795,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_middle_pip">
+      name="${prefix}left_middle_pip">
       <inertial>
         <origin
           xyz="-0.00124281848220535 0.0110585329113455 -0.00864409284297657"
@@ -835,15 +835,15 @@
       </collision>
     </link>
     <joint
-      name="left_middle_pip_joint"
+      name="${prefix}left_middle_pip_joint"
       type="revolute">
       <origin
         xyz="0.011359 0.042391 -0.0029501"
         rpy="0 0 0" />
       <parent
-        link="left_middle_mcp" />
+        link="${prefix}left_middle_mcp" />
       <child
-        link="left_middle_pip" />
+        link="${prefix}left_middle_pip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -853,7 +853,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_middle_dip">
+      name="${prefix}left_middle_dip">
       <inertial>
         <origin
           xyz="0.00245712524376147 0.0159454880760058 -0.00810127252274295"
@@ -893,15 +893,15 @@
       </collision>
     </link>
     <joint
-      name="left_middle_dip_joint"
+      name="${prefix}left_middle_dip_joint"
       type="revolute">
       <origin
         xyz="0 0.018776 -0.00035"
         rpy="0 0 0" />
       <parent
-        link="left_middle_pip" />
+        link="${prefix}left_middle_pip" />
       <child
-        link="left_middle_dip" />
+        link="${prefix}left_middle_dip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -910,12 +910,12 @@
         effort="1"
         velocity="2" />
       <mimic
-        joint="left_middle_pip_joint"
+        joint="${prefix}left_middle_pip_joint"
         multiplier="1.1232"
         offset="0" />
     </joint>
     <link
-      name="left_middle_force_sensor">
+      name="${prefix}left_middle_force_sensor">
       <inertial>
         <origin
           xyz="-1.68059765386919E-05 -0.00563359412533625 -0.005598458715046"
@@ -955,20 +955,20 @@
       </collision>
     </link>
     <joint
-      name="left_middle_force_sensor_joint"
+      name="${prefix}left_middle_force_sensor_joint"
       type="fixed">
       <origin
         xyz="0.014553 0.03105 -0.0080998"
         rpy="-1.3535 1.5705 -1.2637" />
       <parent
-        link="left_middle_dip" />
+        link="${prefix}left_middle_dip" />
       <child
-        link="left_middle_force_sensor" />
+        link="${prefix}left_middle_force_sensor" />
       <axis
         xyz="0 0 0" />
     </joint>
     <link
-      name="left_ring_mcp">
+      name="${prefix}left_ring_mcp">
       <inertial>
         <origin
           xyz="-0.00113237523036154 0.0238703726201038 -0.00947392305307765"
@@ -1008,15 +1008,15 @@
       </collision>
     </link>
     <joint
-      name="left_ring_mcp_joint"
+      name="${prefix}left_ring_mcp_joint"
       type="revolute">
       <origin
         xyz="0.0111 0.0053513 0.12225"
         rpy="1.5708 0 0" />
       <parent
-        link="left_hand_palm" />
+        link="${prefix}left_hand_palm" />
       <child
-        link="left_ring_mcp" />
+        link="${prefix}left_ring_mcp" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -1026,7 +1026,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_ring_pip">
+      name="${prefix}left_ring_pip">
       <inertial>
         <origin
           xyz="-0.00124281857647931 0.0110585345968191 -0.00864409289198054"
@@ -1066,15 +1066,15 @@
       </collision>
     </link>
     <joint
-      name="left_ring_pip_joint"
+      name="${prefix}left_ring_pip_joint"
       type="revolute">
       <origin
         xyz="0.011359 0.042391 -0.0012001"
         rpy="0 0 0" />
       <parent
-        link="left_ring_mcp" />
+        link="${prefix}left_ring_mcp" />
       <child
-        link="left_ring_pip" />
+        link="${prefix}left_ring_pip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -1084,7 +1084,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_ring_dip">
+      name="${prefix}left_ring_dip">
       <inertial>
         <origin
           xyz="0.00199306729521109 0.0150616692394735 -0.00810245822481873"
@@ -1124,15 +1124,15 @@
       </collision>
     </link>
     <joint
-      name="left_ring_dip_joint"
+      name="${prefix}left_ring_dip_joint"
       type="revolute">
       <origin
         xyz="0 0.018776 -0.00035"
         rpy="0 0 0" />
       <parent
-        link="left_ring_pip" />
+        link="${prefix}left_ring_pip" />
       <child
-        link="left_ring_dip" />
+        link="${prefix}left_ring_dip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -1141,12 +1141,12 @@
         effort="1"
         velocity="2" />
       <mimic
-        joint="left_ring_pip_joint"
+        joint="${prefix}left_ring_pip_joint"
         multiplier="1.1232"
         offset="0" />
     </joint>
     <link
-      name="left_ring_force_sensor">
+      name="${prefix}left_ring_force_sensor">
       <inertial>
         <origin
           xyz="-1.68063301828059E-05 -0.00563359430142496 -0.00559845840211641"
@@ -1186,20 +1186,20 @@
       </collision>
     </link>
     <joint
-      name="left_ring_force_sensor_joint"
+      name="${prefix}left_ring_force_sensor_joint"
       type="fixed">
       <origin
         xyz="0.014134 0.029094 -0.0080998"
         rpy="-1.3535 1.5705 -1.2637" />
       <parent
-        link="left_ring_dip" />
+        link="${prefix}left_ring_dip" />
       <child
-        link="left_ring_force_sensor" />
+        link="${prefix}left_ring_force_sensor" />
       <axis
         xyz="0 0 0" />
     </joint>
     <link
-      name="left_pinky_mcp">
+      name="${prefix}left_pinky_mcp">
       <inertial>
         <origin
           xyz="-0.00113237521338363 0.0238703725773533 -0.00947392302327352"
@@ -1239,15 +1239,15 @@
       </collision>
     </link>
     <joint
-      name="left_pinky_mcp_joint"
+      name="${prefix}left_pinky_mcp_joint"
       type="revolute">
       <origin
         xyz="0.0111 0.026851 0.12225"
         rpy="1.5708 0 0" />
       <parent
-        link="left_hand_palm" />
+        link="${prefix}left_hand_palm" />
       <child
-        link="left_pinky_mcp" />
+        link="${prefix}left_pinky_mcp" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -1257,7 +1257,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_pinky_pip">
+      name="${prefix}left_pinky_pip">
       <inertial>
         <origin
           xyz="-0.0012428185763822 0.0110585373001995 -0.00864409290006793"
@@ -1297,15 +1297,15 @@
       </collision>
     </link>
     <joint
-      name="left_pinky_pip_joint"
+      name="${prefix}left_pinky_pip_joint"
       type="revolute">
       <origin
         xyz="0.011359 0.042391 -0.0012001"
         rpy="0 0 0" />
       <parent
-        link="left_pinky_mcp" />
+        link="${prefix}left_pinky_mcp" />
       <child
-        link="left_pinky_pip" />
+        link="${prefix}left_pinky_pip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -1315,7 +1315,7 @@
         velocity="2" />
     </joint>
     <link
-      name="left_pinky_dip">
+      name="${prefix}left_pinky_dip">
       <inertial>
         <origin
           xyz="0.00222578752794614 0.014928721743907 -0.008099714374256"
@@ -1355,15 +1355,15 @@
       </collision>
     </link>
     <joint
-      name="left_pinky_dip_joint"
+      name="${prefix}left_pinky_dip_joint"
       type="revolute">
       <origin
         xyz="0 0.018776 -0.00035"
         rpy="0 0 0" />
       <parent
-        link="left_pinky_pip" />
+        link="${prefix}left_pinky_pip" />
       <child
-        link="left_pinky_dip" />
+        link="${prefix}left_pinky_dip" />
       <axis
         xyz="0 0 -1" />
       <limit
@@ -1372,12 +1372,12 @@
         effort="1"
         velocity="2" />
       <mimic
-        joint="left_pinky_pip_joint"
+        joint="${prefix}left_pinky_pip_joint"
         multiplier="1.1232"
         offset="0" />
     </joint>
     <link
-      name="left_pinky_force_sensor">
+      name="${prefix}left_pinky_force_sensor">
       <inertial>
         <origin
           xyz="-1.68000362298082E-05 -0.00563359582852715 -0.0055984600881584"
@@ -1417,20 +1417,20 @@
       </collision>
     </link>
     <joint
-      name="left_pinky_force_sensor_joint"
+      name="${prefix}left_pinky_force_sensor_joint"
       type="fixed">
       <origin
         xyz="0.013925 0.028117 -0.0080998"
         rpy="-1.3535 1.5705 -1.2637" />
       <parent
-        link="left_pinky_dip" />
+        link="${prefix}left_pinky_dip" />
       <child
-        link="left_pinky_force_sensor" />
+        link="${prefix}left_pinky_force_sensor" />
       <axis
         xyz="0 0 0" />
     </joint>
     <link
-      name="left_palm_force_sensor">
+      name="${prefix}left_palm_force_sensor">
       <inertial>
         <origin
           xyz="-0.000374440732824166 0.0013439351255902 -0.00351143662106354"
@@ -1470,15 +1470,15 @@
       </collision>
     </link>
     <joint
-      name="left_palm_force_sensor_joint"
+      name="${prefix}left_palm_force_sensor_joint"
       type="fixed">
       <origin
         xyz="0.020234 -0.00025311 0.0823"
         rpy="1.5708 0 1.5708" />
       <parent
-        link="left_hand_palm" />
+        link="${prefix}left_hand_palm" />
       <child
-        link="left_palm_force_sensor" />
+        link="${prefix}left_palm_force_sensor" />
       <axis
         xyz="0 0 0" />
       <limit
@@ -1488,7 +1488,7 @@
         velocity="0" />
     </joint>
     <link
-      name="left_hand_casing">
+      name="${prefix}left_hand_casing">
       <inertial>
         <origin
           xyz="-0.0146444318359191 -4.04089776555594E-05 0.0644559462929416"
@@ -1528,15 +1528,15 @@
       </collision>
     </link>
     <joint
-      name="left_hand_casing_joint"
+      name="${prefix}left_hand_casing_joint"
       type="fixed">
       <origin
         xyz="0 0 0"
         rpy="0 0 0" />
       <parent
-        link="left_hand_palm" />
+        link="${prefix}left_hand_palm" />
       <child
-        link="left_hand_casing" />
+        link="${prefix}left_hand_casing" />
       <axis
         xyz="0 0 0" />
       <limit

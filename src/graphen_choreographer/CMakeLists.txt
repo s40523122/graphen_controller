@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.8)
 project(graphen_choreographer)
 
 # 編舞（多軌 keyframe 的組合動作）。程式碼不依賴 rclcpp / ros2_control：
-#   graphen_choreographer          腳本的解析、取樣與限位檢查（共用函式庫）
+#   graphen_choreographer          腳本的解析、取樣、限位檢查與路徑碰撞檢查（共用函式庫；碰撞用 graphen_arm_ik，
+#                                  因此依賴 MuJoCo）
 #   graphen_choreographer_plugins  graphen_locomotion::LocomotionAlgorithm plugin（ChoreographerAlgorithm）
 #   choreo_check            離線檢查工具
 
@@ -12,6 +13,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
+find_package(graphen_arm_ik REQUIRED)
 find_package(graphen_locomotion REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(urdfdom REQUIRED)
@@ -20,13 +22,17 @@ find_package(yaml-cpp REQUIRED)
 # yaml-cpp、urdfdom 只在實作中使用，header 不需要
 add_library(${PROJECT_NAME} SHARED
   src/choreography.cpp
+  src/path_collision.cpp
 )
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
-target_link_libraries(${PROJECT_NAME} PRIVATE yaml-cpp urdfdom::urdfdom_model)
+# path_collision.hpp 會 include graphen_arm_ik 的 header，所以是 PUBLIC
+target_link_libraries(${PROJECT_NAME}
+  PUBLIC graphen_arm_ik::graphen_arm_ik
+  PRIVATE yaml-cpp urdfdom::urdfdom_model)
 
 add_library(${PROJECT_NAME}_plugins SHARED
   src/choreographer_algorithm.cpp
@@ -76,4 +82,5 @@ install(
 )
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(graphen_arm_ik)
 ament_package()

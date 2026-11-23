@@ -3,13 +3,14 @@
 <package format="3">
   <name>graphen_choreographer</name>
   <version>0.0.0</version>
-  <description>Multi-track keyframe choreographies (composed motions) as a graphen_locomotion algorithm plugin, with an offline checker. No rclcpp dependency.</description>
+  <description>Multi-track keyframe choreographies (composed motions) as a graphen_locomotion algorithm plugin, with an offline checker and optional arm path collision checking (graphen_arm_ik / MuJoCo). No rclcpp dependency.</description>
   <maintainer email="riverji@graphen.ai">jin</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>ament_index_cpp</depend>
+  <depend>graphen_arm_ik</depend>
   <depend>graphen_locomotion</depend>
   <depend>pluginlib</depend>
   <depend>urdfdom</depend>

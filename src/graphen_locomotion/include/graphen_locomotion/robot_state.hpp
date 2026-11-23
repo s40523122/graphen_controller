@@ -38,6 +38,21 @@ struct BaseCommand {
   bool active{false};
 };
 
+// 末端位姿目標（controller 的 ~/pose_targets，例如視覺伺服的手臂目標），以 controller 參數
+// pose_targets.frame 的座標系表示（Context::pose_target_frame）
+struct PoseTarget {
+  static constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+  std::array<double, 3> position{kNaN, kNaN, kNaN};          // m
+  std::array<double, 4> orientation{kNaN, kNaN, kNaN, kNaN};  // 四元數 x, y, z, w（已正規化）
+  // 手肘的 swivel（rad，定義見 graphen_arm_ik）；NaN 表示不指定
+  double swivel{kNaN};
+  // 距離收到這個目標的時間（s）；尚未收到時為 inf
+  double age{std::numeric_limits<double>::infinity()};
+  // 已收到且沒有逾時（pose_targets.timeout）時為 true；false 時其他欄位不可使用
+  bool active{false};
+};
+
 // 每個規劃週期交給演算法的機器人狀態。
 // 所有 vector 的長度都等於 joint 數，順序與 Context::joint_names 相同。
 struct RobotState {
@@ -57,6 +72,8 @@ struct RobotState {
   // 估測器輸出的機身狀態（機身座標系）
   BaseState base;
   BaseCommand command;
+  // 長度與順序同 Context::pose_target_names（controller 的 pose_targets.names）；沒有設定時為空
+  std::vector<PoseTarget> pose_targets;
 };
 
 // 演算法每個週期的輸出，長度等於 joint 數。

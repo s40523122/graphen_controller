@@ -6,10 +6,12 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
 #include "graphen_controllers/motion.hpp"
+#include "graphen_controllers/planner_core.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 
 namespace graphen::control {
@@ -25,18 +27,10 @@ namespace graphen::control {
 // 未啟動時設定的 motion 會保留到 start() 之後使用。
 // 每次 set_motion() 會得到一個遞增的序號，progress() 回報目前播放中的序號與 Motion::status()，
 // 呼叫端可以據此判斷「自己設定的那一次」是否已經播完、或已被後來的 set_motion() 取代。
+// 每週期的計算在 PlannerCore（影子試播共用）；這裡只負責計時、切換與緩衝。
 class LocomotionPlanner {
 public:
-  struct Output {
-    std::vector<double> positions;
-    // Motion 的速度前饋（rad/s），NaN 表示沒有
-    std::vector<double> velocities;
-    // Motion 指定的 PD 增益，NaN 表示使用下游的預設值
-    std::vector<double> kp;
-    std::vector<double> kd;
-    // 目前 Motion 的輸出點間隔（秒），供下游插補；0 表示連續
-    double sample_period{0.0};
-  };
+  using Output = PlannerOutput;
   using TargetBuffer = realtime_tools::RealtimeBuffer<Output>;
 
   struct Progress {
@@ -76,6 +70,12 @@ public:
 
   bool is_running() const {return running_.load();}
 
+  // 最近一個規劃週期開始時的狀態（量測值、IMU，以及 Motion 看到的 commanded_positions / velocities），
+  // 影子試播以它為起點。start() 之後第一個週期之前、或未啟動時為 nullopt。可以在任何 non-RT thread 呼叫
+  std::optional<RobotState> snapshot() const;
+  double rate_hz() const {return rate_hz_;}
+  size_t num_interfaces() const {return num_interfaces_;}
+
 private:
   void loop();
 
@@ -90,15 +90,14 @@ private:
   mutable std::mutex progress_mutex_;
   Progress progress_;
 
+  mutable std::mutex snapshot_mutex_;
+  RobotState snapshot_;          // 最近一個週期開始時的狀態（含 commanded_*）
+  bool has_snapshot_{false};
+
   // 只在規劃 thread 中存取
-  std::shared_ptr<Motion> motion_;
-  uint64_t active_sequence_{0};  // motion_ 的序號
-  double elapsed_{0.0};          // 進入 motion_ 之後經過的時間
-  Output output_;  // positions 即目前的輸出位置
-  std::vector<double> previous_positions_;  // 上一個週期的輸出位置，用來算 commanded_velocities
-  std::vector<double> command_velocity_;    // 上一個週期的命令速度
+  PlannerCore core_;
+  uint64_t active_sequence_{0};  // core_ 中 Motion 的序號
   RobotState state_;
-  JointCommand command_;
   TargetBuffer * sink_{nullptr};
   StateReader read_state_;
 

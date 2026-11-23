@@ -8,6 +8,7 @@
 - 控制介面：action、service、topic、BT
 - 指令範例
 - 注意事項
+- 以手腕位姿 + 手肘產生 keyframe（手臂 IK）
 
 設計背景見 [ARCHITECTURE.md](ARCHITECTURE.md) §2.2 與 §2.12；程式的權威定義在 `graphen_choreographer/choreography.hpp`、`interpolation.hpp`、`choreographer_algorithm.cpp`，介面定義在 `graphen_interfaces`（`action/PlayChoreo.action`、`msg/Playback*.msg`、`srv/*Choreo*.srv`）。
 
@@ -18,7 +19,8 @@
 ```
 UI（編輯區：腳本的來源）
   ├─ 編輯 poses / tracks，自己保存
-  ├─ 試播：play_choreo {content: <YAML>}        機器人檢查後播放，不存檔
+  ├─ 影子試播：play_choreo {content, options.dry_run}   controller 內部空跑，不動、回傳 shadow_token
+  ├─ 試播：play_choreo {content: <YAML>}        機器人檢查後播放，不存檔（可帶 shadow_token）
   └─ 發佈：publish_choreo {name, content}       機器人檢查後寫入舞曲庫（同名覆寫）
                                                       │
 機器人（正式區）                                       ▼
@@ -30,6 +32,7 @@ UI（編輯區：腳本的來源）
 - **編輯以 UI 為主**。機器人只保存「發佈過的版本」，不在機器人端修改；方向固定是 UI → 機器人。
 - **試播和正式播放分開**：試播帶的是內容本身，播完就丟掉；表演（BT）只能依名稱播放已發佈的舞曲，所以表演不依賴 UI 在線。
 - **試播和發佈用同一套檢查**（§3.2）。不通過時不播放、不寫入，原因直接回傳。
+- **影子試播**（§3.4）在機器人不動的情況下，以當下的狀態為起點把整段跑一遍，連「起點 → 第一個 keyframe」的檢查（§3.3）也包含在內；通過才拿到 `shadow_token`，正式播放時帶上它，controller 確認內容與起點都沒變才播放。
 - 腳本裡有多條**軌道（track）**，每條軌道控制自己的一組 joint，並有自己的 keyframe；所有軌道共用同一個時鐘，時間可以重疊。
 - 編舞是**開環**的：只照時鐘輸出，不等待實際位置。某個 joint 跟不上，也不會拖慢其他軌道。
 - 播完之後保持最後的姿態，不支援 loop。要重播就再送一次指令，見 §4.3 的 `on_same`。
@@ -157,6 +160,16 @@ switch_group_controller:
       start_tolerance: 0.05        # rad，預設 0.05
       velocity_limit_scale: 0.25   # 速度上限 = URDF velocity × 這個值，預設 1.0
       entry_velocity: true         # 預設 true，見 §2.3
+      arm_ik_config: <bringup 依 robot 帶入>   # 手臂碰撞檢查用的 arm_ik.yaml；空字串 = 不檢查
+      collision:
+        sample_rate: 50.0          # Hz，路徑碰撞的取樣頻率
+        entry_samples: 10          # 進入時「起點 → 第一個 keyframe」的取樣數
+      shadow:                      # 影子試播（§3.4）
+        require: false             # true：沒有通過影子試播（shadow_token）的編舞不播放；實機建議 true
+        start_tolerance: 0.01      # rad，正式播放時目前位置與試播起點的最大差距
+        token_ttl: 300.0           # s，shadow_token 的有效時間
+        max_duration: 600.0        # s，試播的最長時間
+        publish_rate: 50.0         # Hz，~/shadow/joint_states 的取樣頻率
       max_steps: [0.02 ×14 (手臂), 0.005 ×18 (其他)]   # 32 個值，每週期最大移動量（rad）
 ```
 
@@ -173,6 +186,7 @@ switch_group_controller:
 - 每個 keyframe 都在 URDF 的位置限位內
 - 每一段的峰值速度不超過 URDF velocity × `velocity_limit_scale`
 - 每一段的峰值速度不會被 `max_steps` 限速
+- 有 `choreo.arm_ik_config` 時：整條路徑（各軌道從第一個姿態開始、與實際播放同一條曲線，以 `collision.sample_rate` 取樣）不讓手臂碰撞。不在任何軌道中的 joint（腰、腿、頭）用模型的初始姿態（手臂為 `arm_ik.yaml` 的 `seed`），可以用 `collision.nominal_joints` / `nominal_positions` 指定。**兩個 keyframe 都不碰撞，中間的插值仍然可能穿過身體**，所以 UI 只檢查 keyframe 是不夠的
 
 失敗時 `play_choreo` 的 goal 為 aborted、`publish_choreo` 的 `success` 為 false，`message` 就是原因，例如：
 
@@ -184,6 +198,12 @@ choreography 'show_1' cannot be played as written:
 
 ```
 choreography 'show_1': poses use 'R_ELBOW_YY', which is not a commanded joint
+```
+
+```
+choreography 'show_1' makes the arms collide:
+  - collision at t=2.97-3.09 s: right_thumb_dip|R_HIP_R_S, right_thumb_pip|R_HIP_P_S (max 27.9 mm)
+  - collision at t=3.17-3.29 s: WAIST_Y_S|right_thumb_dip (max 19.0 mm)
 ```
 
 這時還沒有切換，機器人繼續原本的動作。
@@ -198,6 +218,7 @@ choreography 'show_1': poses use 'R_ELBOW_YY', which is not a commanded joint
 | 走過去的速度超過上限 | `reaching the keyframe at t = 1.00 s from here needs ... rad/s, above the limit ...` |
 | 走過去會被 `max_steps` 限速 | `... needs ... rad per cycle, but max_steps allows ...` |
 | 帶入速度的曲線超出位置限位 | `the move to the first keyframe (carrying ... rad/s ...) reaches [...], outside the limits [...]` |
+| 從目前位置走到第一個 keyframe 會讓手臂碰撞（其他 joint 用量測值） | `the move from here to the first keyframes makes the arms collide: collision at t=...` |
 
 失敗時：
 
@@ -205,7 +226,32 @@ choreography 'show_1': poses use 'R_ELBOW_YY', which is not a commanded joint
 - 用 `wait_until_finished` 送出的 goal 會 abort，訊息為 `[ choreo:<name> ] failed, see the controller log`；詳細原因只在 controller 的 log。
 - **不等待的 goal 這時已經回報成功**（`Switched`）。UI 想知道有沒有真的開始播，要用 `wait_until_finished`。
 
-### 3.4 什麼時候算「播完」
+### 3.4 影子試播（`options.dry_run`）
+
+controller 以 planner 目前的狀態（命令位置與速度，以及量測值）為起點，在內部把整段編舞空跑一遍：
+
+- 同一個演算法、同一份 `choreo.*` 上限、同一個 `max_steps` 限速，§3.2 與 §3.3 的檢查全部都會做。
+- **理想追蹤**：假設每個 joint 都完全跟上命令。編舞是開環的，所以這就是實際播放時送出的命令；但看不到力矩飽和、追蹤誤差。
+- **不切換、不送命令**：目前的動作不受影響，`result.mode` / `item` 仍是原本在播的。`wait_until_finished` 對試播不起作用（算完就回傳）。
+- 通過：SUCCEEDED，`message` 為 `Dry run finished in <秒數> s`，`result.shadow_token` 為憑證。
+- 失敗：ABORTED，`message` 為 `Dry run failed after <秒數> s: <原因>`（§3.3 的原因會直接出現在這裡，不必看 log），或 `did not finish within ... s`（`choreo.shadow.max_duration`）。
+- 不論通過與否，軌跡都會以實際時間發布到 `~/shadow/joint_states`（`sensor_msgs/JointState`，預設 50 Hz），可以用 mujoco_viewer 的 `--ghost-topic` 以半透明的機器人疊在畫面上看。
+
+**正式播放時帶 `options.shadow_token`**：controller 在切換前確認
+
+| 檢查 | 不通過時的 `message`（節錄） |
+|---|---|
+| token 是這個 controller 發出的、還沒過期（`choreo.shadow.token_ttl`，預設 300 s） | `unknown or expired shadow_token ...` |
+| 內容的 sha256 相同（試播用 content、正式播放用發佈後的名稱也可以） | `the content differs from the one that passed the dry run` |
+| 目前的命令位置和試播的起點相差都在 `choreo.shadow.start_tolerance`（預設 0.01 rad）以內 | `the robot moved since the dry run (<joint> differs by ...)` |
+
+不通過時 ABORTED，還沒有切換。token 在有效期間可以重複使用，每次都重新檢查起點。`choreo.shadow.require: true` 時沒有帶 token 的編舞一律拒絕（BT 播放已發佈的舞曲也要帶，所以預設關閉；實機建議開啟）。
+
+**影子播放模式**：系統模式設了 `shadow_playback: true`（`controllers.yaml` 的 `teach`）時，這個模式播放中**所有** `PlayChoreo`（content 或 name，帶不帶 `shadow_token` 都一樣）都改為影子試播：SUCCEEDED / ABORTED 同上，`message` 以 `Shadow playback in mode [ teach ] ...` 開頭，不切換、機器人不動，viewer 維持示教。所以示教中 UI 的「試播」不必加 `dry_run`。
+
+建議的流程：`switch_mode teach`（示教，機器人不動）→ `play_choreo`（自動影子播放，取得 token）→ `switch_mode stop`（離開示教，仍然不動、起點不變）→ `play_choreo` 帶 `shadow_token` 正式播放。機器人在動的時候試播，起點與切入速度都可能和正式播放不同。
+
+### 3.5 什麼時候算「播完」
 
 同時滿足以下兩個條件時算播完：
 
@@ -226,7 +272,11 @@ controller 名稱為 `switch_group_controller`，以下都在它的 namespace �
 | `/switch_group_controller/publish_choreo` | service `graphen_interfaces/srv/PublishChoreo` | 發佈到舞曲庫 |
 | `/switch_group_controller/list_choreos` | service `graphen_interfaces/srv/ListChoreos` | 列出已發佈的名稱與內容的 sha256 |
 | `/switch_group_controller/get_choreo` | service `graphen_interfaces/srv/GetChoreo` | 讀回已發佈的內容 |
-| `/switch_group_controller/switch_mode` | action `graphen_interfaces/action/SwitchMode` | 切換系統模式；UI 的「停止」用它切到 `stop` |
+| `/switch_group_controller/switch_mode` | action `graphen_interfaces/action/SwitchMode` | 切換系統模式；UI 的「停止」用它切到 `stop`，示教用 `teach` |
+| `/switch_group_controller/playback_state` | topic `graphen_interfaces/msg/PlaybackState`（transient_local，改變時） | 目前在播的 `mode` / `item` |
+| `/switch_group_controller/shadow/joint_states` | topic `sensor_msgs/msg/JointState` | 影子試播的軌跡（§3.4），以實際時間發布 |
+| `/mujoco_viewer_teach/set_pose` | topic `sensor_msgs/msg/JointState` | 示教中直接指定 viewer 的關節角（§7.5） |
+| `/mujoco_viewer_teach/pose` | topic `sensor_msgs/msg/JointState`（transient_local） | mujoco_viewer 示教中的全身姿態，格式同 `/joint_states`（§7.5） |
 | `/switch_group_controller/states` | topic `control_msgs/msg/DynamicJointState`（50 Hz） | 各關節的 state interface，用來顯示即時姿態 |
 | `/joint_states` | topic `sensor_msgs/msg/JointState` | 同上，標準格式 |
 | `/robot_description` | topic `std_msgs/msg/String` | URDF：關節限位 |
@@ -242,6 +292,8 @@ string content                   # 或：腳本的 YAML 內容（試播，不存
 PlaybackOptions options
   int8 on_same 0                 #   0 IGNORE / 1 RESTART / 2 RESTART_IF_FINISHED（§4.3）
   bool wait_until_finished false #   true：等播完才回傳
+  bool dry_run false             #   true：影子試播（§3.4），不切換、不動
+  string shadow_token            #   正式播放時帶上試播回傳的憑證（§3.4）
 ---
 # Result
 PlaybackResult result
@@ -251,6 +303,7 @@ PlaybackResult result
   string   item                  #   項目名稱：舞曲的名稱，試播為 "(preview)"；系統模式為空
   string[] interface_names       #   當下的 state 快照
   float64[] values
+  string   shadow_token          #   影子試播通過時的憑證；其他情況為空
 ---
 # Feedback（只在 wait_until_finished 時持續發布，頻率為 switch_mode_poll_rate，預設 20 Hz）
 PlaybackFeedback feedback
@@ -267,6 +320,8 @@ PlaybackFeedback feedback
 - `name` 不符合命名規則（§4.2）
 - `on_same` 超出 0–2
 
+（`SwitchMode`、`PlayBvh`、`RunPolicy` 收到 `dry_run` 或 `shadow_token` 也會被拒絕：目前只有編舞支援影子試播。）
+
 **結果一覽：**
 
 | 情況 | 狀態 | `message` |
@@ -274,6 +329,9 @@ PlaybackFeedback feedback
 | 切換成功，不等待 | SUCCEEDED | `Switched` |
 | 已經在播同一段，沒有重播 | SUCCEEDED | `Already playing this, not restarted` |
 | 等待後播完 | SUCCEEDED | `Finished` |
+| 影子試播通過 | SUCCEEDED | `Dry run finished in ... s`（`result.shadow_token` 有值）；影子播放模式中為 `Shadow playback in mode [ teach ] ...: Dry run finished ...` |
+| 影子試播失敗 | ABORTED | `Dry run failed after ... s: <原因>` |
+| 試播憑證不符（§3.4） | ABORTED | `unknown or expired shadow_token` / `the content differs ...` / `the robot moved since the dry run ...` |
 | 名稱沒有發佈 | ABORTED | `choreography '<name>' is not published` |
 | 內容沒有通過檢查（§3.2） | ABORTED | 檢查的錯誤訊息 |
 | 目前在播的不可中斷 | ABORTED | `[ X ] is not interruptible until it finishes; [ Y ] rejected.` |
@@ -282,7 +340,7 @@ PlaybackFeedback feedback
 | 等待中 controller 被停用 | ABORTED | `Controller is not active` |
 | 客戶端 cancel | CANCELED | `Stopped waiting; the motion keeps running` |
 
-前三種失敗（沒有發佈、沒通過檢查、不可中斷）發生時**還沒有切換**，`result.mode` / `item` 仍是原本在播的。
+前三種失敗（沒有發佈、沒通過檢查、不可中斷）與試播、試播憑證的失敗發生時**還沒有切換**，`result.mode` / `item` 仍是原本在播的。
 
 > **cancel 只會停止等待，不會停止動作。** 要停止動作，請用 `switch_mode` 切換到 `stop`。
 
@@ -407,6 +465,25 @@ tracks:
       - {t: 1.5, positions: {NECK_Y: 0.2}}
 ', options: {wait_until_finished: true}}"
 
+# 影子試播 → 正式播放：先切到 teach（hold，機器人不動），試播通過後帶 shadow_token 播放
+timeout 10 ros2 action send_goal /switch_group_controller/switch_mode \
+  graphen_interfaces/action/SwitchMode "{mode: teach}"
+timeout 30 ros2 action send_goal /switch_group_controller/play_choreo graphen_interfaces/action/PlayChoreo \
+  "{content: 'version: 1
+tracks:
+  head:
+    joints: [NECK_Y]
+    keyframes:
+      - {t: 1.5, positions: {NECK_Y: 0.2}}
+', options: {dry_run: true}}"
+# → result.shadow_token: 5e32a6b4-...；軌跡在 /switch_group_controller/shadow/joint_states
+timeout 30 ros2 action send_goal /switch_group_controller/play_choreo graphen_interfaces/action/PlayChoreo \
+  "{content: '<同一份內容>', options: {shadow_token: '5e32a6b4-...', wait_until_finished: true}}"
+
+# 目前在播什麼（transient_local，晚訂閱也收得到）
+timeout 5 ros2 topic echo --once --qos-durability transient_local --qos-reliability reliable \
+  /switch_group_controller/playback_state graphen_interfaces/msg/PlaybackState
+
 # 停止（任何時候都有效）
 timeout 10 ros2 action send_goal /switch_group_controller/switch_mode \
   graphen_interfaces/action/SwitchMode "{mode: stop}"
@@ -493,7 +570,120 @@ goal.options.on_same = PlaybackOptions.ON_SAME_RESTART_IF_FINISHED
 ### 6.4 安全
 
 - 新的腳本請依序在 mock → MuJoCo（`hardware:=mujoco_pd mujoco_fixed_base:=true`，`robot` 預設 ti5_170a）上驗證，最後才上實機。
-- 試播會讓機器人立刻動作，而且任何能連到 ROS 網路的程式都可以送出；目前沒有「排練模式」的開關。對實機試播前確認周圍安全。
+- 試播（帶 content 的正式播放）會讓機器人立刻動作，而且任何能連到 ROS 網路的程式都可以送出。先用影子試播（§3.4）確認，實機上建議設 `choreo.shadow.require: true`，讓沒有通過影子試播的編舞無法播放。對實機播放前確認周圍安全。
 - 上實機前用 `choreo.velocity_limit_scale`（例如 0.25）壓低速度上限。
 - 姿態的方向與碰撞未經實機確認的腳本，加上 `TODO(verify-on-hw)` 註解。
 - 表演中不可以被打斷的段落在腳本寫 `interruptible: false`；`stop` 仍然可以隨時切入。
+
+---
+
+## 7. 以手腕位姿 + 手肘產生 keyframe（手臂 IK）
+
+腳本格式**不變**，仍然是關節角。想用「手腕放在哪裡、手肘朝哪裡」來編輯時，UI 先呼叫 `graphen_arm_ik` 的 `arm_ik_server` 把位姿解成 7 個關節角，再寫進 keyframe 的 `positions`（或 `poses`）。IK 只在編輯時做一次，播放時不會因為 IK 而得到不同的姿態。設計見 [ARCHITECTURE.md](ARCHITECTURE.md) §2.13。
+
+bringup 預設會啟動 server（`arm_ik_server:=true`，模型依 `robot:=` 自動選擇）。
+
+### 7.1 `~/solve`（`graphen_interfaces/srv/SolveArmIk`）
+
+| 欄位 | 說明 |
+|---|---|
+| `arm` | `left` / `right`（`arm_ik.yaml` 的手臂名稱） |
+| `target` | 手腕（`tip_body` + `tip_offset`）的位姿；`frame_id` 必須是 `WAIST_P_S`（軀幹，`root_body`），空字串視同 |
+| `swivel` | 手肘繞「肩 → 腕」軸的角度（rad），**軀幹座標的絕對角度**：0 = 手肘朝軀幹 −z 的方向；NaN = 不指定（最小變動） |
+| `seed` | 迭代起點（7 個）；空 = `state` 中的目前角度，沒有時用設定檔的 seed。決定解落在哪一個分支：用上一個 keyframe 的解當 seed，相鄰的 keyframe 會比較接近 |
+| `local` | true：只從 seed 迭代（解連續，拖曳時使用）；false：解不到時從其他起點重試，可能得到另一個分支的姿態 |
+| `state` | 腰、腿、頭的角度（影響軀幹位置與碰撞）；空 = 機器人目前的 `/joint_states`。編輯「播放時的姿態」時，填入播放時預期的全身姿態 |
+
+回應：`success`、`message`、`joint_names`、`positions`、`position_error`（m）、`orientation_error`（rad）、`swivel`、`swivel_error`、`collisions`（`"bodyA|bodyB"`）。**未收斂、指定的 swivel 被限位擋住、或解的姿態有碰撞時 `success` 為 false**，但 `positions` 仍然回傳，UI 可以顯示原因或讓使用者決定。
+
+`~/forward`（`ArmForward`）是反方向：關節角 → 手腕位姿、swivel 與碰撞，用來顯示既有 keyframe 的手腕位置，或取得目前的 swivel 再微調。
+
+### 7.2 範例
+
+```bash
+# 右手腕目前的位姿與 swivel（state 空 = 機器人目前的姿態）
+ros2 service call /arm_ik_server/forward graphen_interfaces/srv/ArmForward "{arm: right}"
+
+# 解一個目標（位置在軀幹座標，單位 m；swivel NaN = 不指定）。姿態通常從 forward 的結果修改，
+# 任意給的姿態（例如這裡的 w: 1）不一定做得到，做不到時 success 為 false
+ros2 service call /arm_ik_server/solve graphen_interfaces/srv/SolveArmIk \
+  "{arm: right, target: {header: {frame_id: WAIST_P_S}, pose: {position: {x: 0.35, y: -0.25, z: 0.05}, orientation: {w: 1.0}}}, swivel: .nan}"
+```
+
+把回應的 `joint_names` / `positions` 寫成 keyframe：
+
+```yaml
+tracks:
+  right_arm:
+    joints: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R]
+    keyframes:
+      - {t: 2.0, positions: {R_SHOULDER_P: 0.61, R_SHOULDER_R: 1.2, ...}}   # 回應的 positions
+```
+
+之後照一般流程試播（`play_choreo` 帶 `content`）或發佈；路徑碰撞由機器人端檢查（§3.2）。離線可以用 `choreo_check <腳本> --arm-config package://ti5_170a_graphen/config/arm_ik.yaml` 做同樣的檢查，列出所有碰撞的時間區間。
+
+### 7.3 注意事項
+
+- swivel 是絕對角度：ti5_170a 手臂自然下垂（seed 姿態）時約為 ±118°，不是 0。UI 顯示時建議用 `forward` 取得目前值再相對調整。
+- 手腕位置相同時，不同 swivel 的姿態在插值時可能經過完全不同的路徑；兩個 keyframe 之間手肘方向差很多時，路徑碰撞檢查比較容易不通過，可以在中間多放一個 keyframe。
+- `tip_offset`（工具點，例如掌心）目前是手腕 body 的原點（`TODO(verify-on-hw)`）。
+- MuJoCo viewer 的示教模式用同一個 service 拖曳手腕，姿態發布在 `/mujoco_viewer_teach/pose`（§7.5）。
+
+### 7.4 末端單步（TCP jog）：`~/tcp_jog`（`graphen_interfaces/srv/TcpJog`）
+
+UI 每一步只送「一個軸 + 增量」，server 以基準姿態算出新的 7 個關節角；UI 再把它寫成**一個 keyframe** 的編舞，以 `PlayChoreo` 帶 `content` 播放。joint 單步與 TCP 單步都走編舞，交替使用不需要切換模式（`arm_servo` 是連續伺服用的，單步不需要）。
+
+| request 欄位 | 說明 |
+|---|---|
+| `arm` | `left` / `right` |
+| `axis` | `0` X、`1` Y、`2` Z（m）、`3` ROLL、`4` PITCH、`5` YAW（繞 x / y / z，rad）、`6` ELBOW（swivel，rad） |
+| `delta` | 增量，平移為 m，旋轉與 ELBOW 為 rad |
+| `frame` | `0` 手腕座標（預設，沿 / 繞手腕目前的軸）、`1` 軀幹座標（`WAIST_P_S` 固定的軸）；平移與旋轉都套用，ELBOW 不使用 |
+| `reference` | 基準姿態的 7 個關節角，**填上一步回傳的 `positions`**；空 = 機器人目前的角度 |
+| `state` | 腰、腿、頭的角度；空 = 目前的 `/joint_states` |
+
+- 平移 / 旋轉時手肘維持基準的 swivel（軀幹座標的絕對角度）；ELBOW 只改 swivel，末端不動。
+- 只從 `reference` 迭代（不重試其他起點），單步不會跳到另一個分支。
+- 回應與 `~/solve` 相同（`success`、`message`、`positions`、誤差、`collisions`），另外有 `max_joint_delta`（與 `reference` 相比最大的單一 joint 變化量，rad）與 `target`（這一步的末端目標）。**`success` 為 false 時不要播放**。
+
+**UI 的流程：**
+
+1. 第一步（或手臂被其他動作、stop 移動過之後）`reference` 留空，之後都填上一步的 `positions`。基準不用量測值，是因為 PD / 實機的量測有重力造成的穩態誤差，連按幾次就會逐步下沉。
+2. 呼叫 `~/tcp_jog`；`success` 為 false 時顯示 `message`（到不了、手肘被限位擋住、解的姿態會碰撞），不播放、`reference` 不變。
+3. 以回傳的 `joint_names` / `positions` 組成一個 keyframe，`t` 為這一步的時間，`PlayChoreo` 帶 `content`、`wait_until_finished: true`。時間太短時 controller 會以速度上限或 `max_steps` 拒絕（abort 的訊息寫出需要的值）；可以先用 `t ≥ 1.875 × max_joint_delta / 速度上限` 估算（§2.3、§3.1）。
+4. 播完（`Finished`）才把 `reference` 換成這一步的 `positions`，再允許下一步；abort 時 `reference` 不變。
+
+```bash
+# 右手腕沿手腕自己的 x 軸前進 1 cm（reference 空 = 目前角度）
+ros2 service call /arm_ik_server/tcp_jog graphen_interfaces/srv/TcpJog \
+  "{arm: right, axis: 0, delta: 0.01, frame: 0}"
+
+# 下一步：繞手腕的 y 軸轉 0.1 rad，以上一步的 positions 為基準
+ros2 service call /arm_ik_server/tcp_jog graphen_interfaces/srv/TcpJog \
+  "{arm: right, axis: 4, delta: 0.1, frame: 0, reference: [<上一步的 7 個 positions>]}"
+
+# 播放（positions 填回傳的值，t 為這一步的時間）
+ros2 action send_goal /switch_group_controller/play_choreo graphen_interfaces/action/PlayChoreo \
+  "{content: 'version: 1
+tracks:
+  right_arm:
+    joints: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R]
+    keyframes:
+      - {t: 0.8, positions: {R_SHOULDER_P: <j1>, R_SHOULDER_R: <j2>, R_SHOULDER_Y: <j3>, R_ELBOW_Y: <j4>, R_WRIST_P: <j5>, R_WRIST_Y: <j6>, R_WRIST_R: <j7>}}
+', options: {wait_until_finished: true}}"
+```
+
+### 7.5 以 MuJoCo viewer 拖曳示教
+
+viewer（`graphen_mujoco/tools/mujoco_viewer.py`）只負責拖曳與 IK，**不記錄、不匯出、不送指令**；keyframe 的擷取與腳本的組成由外部程式（編輯 UI）負責：
+
+1. `switch_mode {mode: teach}`：機器人保持不動，viewer 看到 `~/playback_state` 的 mode 為 `teach` 時自動進入示教，以機器人目前的姿態為起點（mock / 實機用 `--source ros` 顯示 `/joint_states`）。
+2. 在 viewer 中拖曳手腕目標、F9 / F10 調整手肘。全身的姿態發布在 `/mujoco_viewer_teach/pose`（`sensor_msgs/JointState`，transient_local，姿態改變時才發布），**格式同 `/joint_states`**：joint 與順序和 `/joint_states` 相同（模型外的 joint，例如靈巧手，沿用 `/joint_states` 的值），`velocity` / `effort` 等長、固定為 0（靜態姿態）。手臂是拖曳的結果，其他 joint 是進入示教時的姿態。還沒收到 `/joint_states` 時，改為模型中所有 joint（模型的順序）。
+   也可以直接指定角度：發布到 `/mujoco_viewer_teach/set_pose`（`sensor_msgs/JointState`，只填要改的 joint，手臂以外的也可以）。viewer 只套用列出的 joint，超出限位時截斷並在 terminal 印出警告；手腕目標跟著移到新的位置、碰撞時變黃，之後可以繼續用滑鼠微調。不在示教時收到的會被忽略。用 `ros2 topic pub` 時不要用 `--once`：它送完就退出，viewer 常常還沒配對到，訊息就丟了；改成連發幾次（角度是絕對值，重複套用結果相同）：
+   ```bash
+   timeout 10 ros2 topic pub -r 5 --times 3 -w 1 /mujoco_viewer_teach/set_pose sensor_msgs/msg/JointState \
+     '{name: [R_SHOULDER_P, R_ELBOW_Y], position: [-0.5, 1.2]}'
+   ```
+3. 外部程式在需要的時間點擷取這個 topic 的最新值，寫成 keyframe 的 `positions`（或 `poses`），組成腳本。
+4. `play_choreo {content}`：`teach` 設了 `shadow_playback: true`，示教中的播放自動變成影子試播（不必加 `dry_run`；viewer 加 `--ghost-topic /switch_group_controller/shadow/joint_states` 可以看到軌跡），通過時回傳 `shadow_token`。可以反覆修改、試播。
+5. 上機：`switch_mode stop`（viewer 結束示教、恢復顯示機器人的姿態；機器人仍不動、起點不變）→ `play_choreo` 帶 `shadow_token` 正式播放（§3.4）。

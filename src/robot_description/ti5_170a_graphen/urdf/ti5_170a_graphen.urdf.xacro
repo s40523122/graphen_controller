@@ -44,14 +44,16 @@
        ti5_t170：ti5_t170_description 的 T170-V2.1-A0（與 ti5_t170 MJCF 同一份 CAD）+ dexterous_hand_description 的雙手
        ti5_170a：本套件的 robot.urdf.xacro（含雙手；MJCF 由 scripts/make_mjcf.py 從它產生）
        fb70：沒有自己的 URDF，同樣使用本套件的 robot.urdf.xacro
-       三者的 32 個本體 joint 名稱相同，ros2_control 區塊共用。
+       aiterone_ny：graphen_aiterone_ny_description（運動學同本套件、質量取自 ti5_t170、L 型手腕轉接板與手部掛載位置不同，
+                    含雙手；MJCF 由該套件的 scripts/make_mjcf.py 產生）
+       四者的 32 個本體 joint 名稱相同，ros2_control 區塊共用。
        TODO(verify-on-hw): ti5_t170 與本套件的本體有 6 軸軸向相反（L/R_WRIST_R、L/R_WRIST_Y、NECK_P、R_SHOULDER_Y），
        位置極限也不同（HIP_P ±3.14、KNEE_P、WRIST_R）。Ti5Hardware 以 URDF 的極限做安全限制，
        實機上線前要逐軸確認馬達方向與極限 -->
   <xacro:arg name="robot" default="ti5_170a"/>
   <xacro:property name="robot_model" value="$(arg robot)"/>
-  <xacro:if value="${robot_model not in ['ti5_t170', 'ti5_170a', 'fb70']}">
-    ${xacro.fatal("robot must be one of ti5_t170, ti5_170a, fb70; got '" + robot_model + "'")}
+  <xacro:if value="${robot_model not in ['ti5_t170', 'ti5_170a', 'fb70', 'aiterone_ny']}">
+    ${xacro.fatal("robot must be one of ti5_t170, ti5_170a, fb70, aiterone_ny; got '" + robot_model + "'")}
   </xacro:if>
 
   <!-- 1. 機器人本體（root 為 base_link，含雙手模型） -->
@@ -70,6 +72,10 @@
   </xacro:if>
   <xacro:if value="${robot_model in ['ti5_170a', 'fb70']}">
     <xacro:include filename="$(find ti5_170a_graphen)/urdf/robot.urdf.xacro"/>
+  </xacro:if>
+  <xacro:if value="${robot_model == 'aiterone_ny'}">
+    <!-- 只取運動學模型（本體 + 雙手）；該套件的 xacro arg（prefix、hand_mount_*）使用它的預設值 -->
+    <xacro:include filename="$(find graphen_aiterone_ny_description)/urdf/graphen_aiterone_ny.urdf.xacro"/>
   </xacro:if>
 
   <link name="imu_link"/>

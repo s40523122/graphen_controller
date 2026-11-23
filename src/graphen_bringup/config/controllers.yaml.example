@@ -25,6 +25,13 @@ switch_group_controller:
       leak_time_constant: 2.0   # s，線速度積分的衰減時間常數
     # ~/cmd_vel（geometry_msgs/Twist）的逾時（s）；超過時速度指令視為 0
     command_timeout: 0.5
+    # ~/pose_targets（graphen_interfaces/ArmPoseTarget）：末端位姿目標，給 plugin 模式（arm_servo）使用。
+    # names 是接受的目標名稱（= arm_ik.yaml 的手臂名稱）；frame 為目標必須使用的座標系
+    # （= arm_ik.yaml 的 root_body，相機 → 軀幹的轉換由發送端完成）；超過 timeout（s）沒有更新視為沒有目標
+    pose_targets:
+      names: [left, right]
+      frame: WAIST_P_S
+      timeout: 0.5
     # switch_mode action 以 wait_until_finished 等待模式播完時，檢查與 feedback 的頻率（Hz）
     switch_mode_poll_rate: 20.0
     state_publish_rate: 50.0
@@ -186,7 +193,7 @@ switch_group_controller:
     # 系統模式：以名稱識別（switch_mode action、BT 的 SwitchMode、~/mode topic 都用這些名稱），
     # 名稱同時是下面參數的前綴。type 只有 target / hold / plugin；controller 不認得任何特定模式，
     # 行為完全由 type 與參數決定。choreo / bvh / policy 是保留名稱（見後面的內容與 policy 區塊）
-    modes: [forward, reverse, stop, sine, home]
+    modes: [forward, reverse, stop, teach, sine, arm_servo, home]
     # 啟動時的動作：default_mode（系統模式）或 default_policy（policy 名稱）擇一。
     # 都是空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
     # 收到 BT / action / ~/mode 的命令後才開始移動
@@ -212,6 +219,14 @@ switch_group_controller:
     stop:
       type: hold
 
+    # 示教：機器人保持在進入時的位置（type: hold），mujoco_viewer 看到 ~/playback_state 的 mode
+    # 等於 --teach-mode（預設 teach）時自動進入示教，離開這個模式就結束示教。
+    # shadow_playback: true：這個模式中所有 PlayChoreo 都只做影子試播（不切換、機器人不動，帶 token 也一樣），
+    # 回傳 shadow_token；要上機先切到其他模式（例如 stop，同樣保持不動、起點不變）再帶 token 播放
+    teach:
+      type: hold
+      shadow_playback: true
+
     # type: plugin，由外部演算法（graphen_locomotion::LocomotionAlgorithm 的 pluginlib plugin）產生
     # 期望角度與速度前饋；其餘 <mode>.* 參數由演算法自行讀取，輸出仍受 max_steps 限制。
     # sine 是範例演算法：讓頸部 yaw 以進入時的位置為中心擺動（最大速度 ≈ 0.31 rad/s），
@@ -223,6 +238,18 @@ switch_group_controller:
       amplitude: 0.2      # rad
       frequency: 0.25     # Hz
       log_period: 1.0     # s，0 表示不 log
+
+    # 視覺伺服：手臂末端（wrist 位姿 + elbow swivel）追蹤 ~/pose_targets 的目標，每個規劃週期解一步 IK。
+    # 碰撞只偵測、不閃避：下一步會碰撞時該手臂停住；目標逾時時保持。停止切到 stop。
+    # arm_ik_config 由 bringup 依 robot:= 帶入（<模型套件>/config/arm_ik.yaml），空字串時這個模式無法進入
+    # TODO(verify-on-hw): 增益與速度上限需要在實機上調整
+    arm_servo:
+      type: plugin
+      plugin: graphen_arm_ik/ArmServoAlgorithm
+      position_gain: 2.0         # 1/s
+      orientation_gain: 2.0      # 1/s
+      swivel_gain: 2.0           # 1/s
+      max_joint_velocity: 0.5    # rad/s（planner_max_steps 0.005 × 100 Hz）
 
     # home：FullBodyT70 policy 的預設姿態（手臂自然下垂的 A-pose，其他 0），以預設速度走過去。
     # （rl_walk policy 進入時會自己走到這個姿態，這個模式只是方便手動使用）
@@ -257,6 +284,20 @@ switch_group_controller:
       start_tolerance: 0.05        # rad，腳本第一個 keyframe 在 t: 0 時，允許與目前位置的差距
       velocity_limit_scale: 0.25   # 速度上限 = URDF velocity limit × 這個值
       entry_velocity: true         # 從移動中切進來時，第一段帶入當下的速度（不會瞬間煞停）
+      # 手臂碰撞檢查：arm_ik_config 由 bringup 依 robot:= 帶入（空字串 = 不檢查）。播放 / 發佈前以
+      # sample_rate 取樣整條路徑，進入時再以實際起點檢查到第一個 keyframe；有碰撞就不播放
+      collision:
+        sample_rate: 50.0          # Hz
+        entry_samples: 10
+      # 影子試播（PlayChoreo 的 options.dry_run）：在 controller 內部以目前的狀態為起點空跑整段編舞
+      # （同一個演算法、同一套上限，理想追蹤：量測值 = 命令值），不切換、不送命令；通過時回傳 shadow_token。
+      # 正式播放帶 options.shadow_token 時，確認內容（sha256）相同、未過期、目前的起點與試播時相同才播放
+      shadow:
+        require: false           # true：編舞一定要先通過試播（BT 播放已發佈的舞曲也要帶 token）；實機建議 true
+        start_tolerance: 0.01    # rad，正式播放時目前位置與試播起點的最大差距（每個介面）
+        token_ttl: 300.0         # s，shadow_token 的有效時間
+        max_duration: 600.0      # s，試播模擬的最長時間；超過視為沒有播完（失敗）
+        publish_rate: 50.0       # Hz，試播軌跡以實際時間發布到 ~/shadow/joint_states 的取樣頻率
       max_steps: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,     # left arm
                   0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,     # right arm
                   0.005, 0.005, 0.005,                          # waist

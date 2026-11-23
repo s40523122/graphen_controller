@@ -27,6 +27,7 @@ PluginMotion::PluginMotion(
 
 void PluginMotion::fail(const char * stage, const char * what) {
   faulted_ = true;
+  failure_reason_ = std::string(stage) + ": " + what;
   if (log_) {
     log_(locomotion::LogLevel::kError,
       "Algorithm of mode [ " + name_ + " ] threw in " + stage + ": " + what +

@@ -1,5 +1,8 @@
 import os
+import tempfile
 from collections import namedtuple
+
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -10,6 +13,7 @@ from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
 
@@ -22,8 +26,9 @@ def generate_launch_description():
     # 與硬體無關的設定（模式、switch 接線）；控制方式依 hardware:= 疊加 hardware/<position|pd>_common.yaml、
     # IMU 疊加 imu/*.yaml，PD 增益依 robot:= 取自模型套件
     controllers_yaml_file = os.path.join(config_dir, 'controllers.yaml')
-    # 實機本體（ti5_hardware）使用的 CAN 設定與初始位置
-    can_config_file = os.path.join(bringup_share, 'config', 'can_driver_config.json')
+    # 實機本體（ti5_hardware）使用的 CAN 設定與初始位置。CAN 配線依 robot 而定（Robot.can_config），
+    # 模型沒有自己的配線時用這份
+    default_can_config_file = os.path.join(bringup_share, 'config', 'can_driver_config.json')
     real_initial_positions_file = os.path.join(
         bringup_share, 'config', 'real_initial_positions.yaml')
 
@@ -44,6 +49,10 @@ def generate_launch_description():
     robot = LaunchConfiguration('robot')
     scenario_params = LaunchConfiguration('scenario_params')
     srdf_file = LaunchConfiguration('srdf_file')
+    arm_ik_config = LaunchConfiguration('arm_ik_config')
+    arm_ik_server = LaunchConfiguration('arm_ik_server')
+    # 由 resolve_can_config 依 robot 設定
+    can_config_file = LaunchConfiguration('can_config_path')
     # 由 resolve_mujoco_model 依 robot 設定
     mujoco_missing_joints = LaunchConfiguration('mujoco_missing_joints')
     mujoco_initial_base_height = LaunchConfiguration('mujoco_initial_base_height')
@@ -98,13 +107,15 @@ def generate_launch_description():
                         'fb70 selects t170_fixed.xml; models with a free joint (ti5_t170) are pinned'),
         DeclareLaunchArgument(
             'robot', default_value='ti5_170a',
-            choices=['ti5_170a', 'ti5_t170', 'fb70'],
-            description='Robot model, selects the URDF body, the MJCF (MuJoCo) and the PD gains '
-                        '(mujoco_pd / real_pd), for every hardware. ti5_t170: '
-                        'ti5_t170_description (T170-V2.1-A0, motor actuators); ti5_170a: '
-                        'ti5_170a_graphen (own URDF, generated MJCF with motor actuators); fb70: '
-                        'fb70_description (FullBodyT70 export, position servos, URDF body of '
-                        'ti5_170a_graphen). hardware:=mujoco needs fb70'),
+            choices=['ti5_170a', 'ti5_t170', 'fb70', 'aiterone_ny'],
+            description='Robot model, selects the URDF body, the MJCF (MuJoCo), the PD gains '
+                        '(mujoco_pd / real_pd) and the CAN wiring (real / real_pd), for every '
+                        'hardware. ti5_t170: ti5_t170_description (T170-V2.1-A0, motor actuators); '
+                        'ti5_170a: ti5_170a_graphen (own URDF, generated MJCF with motor actuators); '
+                        'fb70: fb70_description (FullBodyT70 export, position servos, URDF body of '
+                        'ti5_170a_graphen); aiterone_ny: graphen_aiterone_ny_description (NY machine, '
+                        'generated MJCF with position servos, own CAN wiring). '
+                        'hardware:=mujoco needs fb70 or aiterone_ny'),
         DeclareLaunchArgument(
             'mujoco_model', default_value='',
             description='MJCF path; empty selects the model of robot'),
@@ -115,6 +126,16 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'mujoco_viewer_port', default_value='9870',
             description='UDP port of graphen_mujoco/tools/mujoco_viewer.py (0 disables)'),
+        DeclareLaunchArgument(
+            'arm_ik_config', default_value='auto',
+            description='graphen_arm_ik config (arm IK, collision checking) shared by arm_ik_server, '
+                        'the choreography path collision check (choreo.arm_ik_config) and the arm '
+                        'servo modes. auto: <robot package>/config/arm_ik.yaml when the robot has a '
+                        'verified one; none disables all of them'),
+        DeclareLaunchArgument(
+            'arm_ik_server', default_value='true',
+            description='Start graphen_arm_ik arm_ik_server (~/solve, ~/forward) when arm_ik_config '
+                        'is set'),
         DeclareLaunchArgument(
             'srdf_file', default_value=default_srdf_file,
             description='SRDF published (latched) on /robot_description_semantic for external '
@@ -131,14 +152,71 @@ def generate_launch_description():
     #   missing_joints / base_height：MujocoSystem 的設定；初始高度為直膝（ros2_control 的初始姿態，
     #   所有關節 0）下腳底最低點 + 5 mm。以屈膝的訓練姿態計算會讓直膝的腳踩進地面，
     #   吊掛時每一步重設基座、接觸力持續灌入能量，全身的 roll 關節會來回震盪
-    Robot = namedtuple('Robot', 'package mjcf servo missing_joints base_height')
+    #   arm_ik：arm_ik_config:=auto 時是否使用模型套件的 config/arm_ik.yaml（graphen_arm_ik）
+    #   can_config：hardware:=real / real_pd 的 CAN 配線，模型套件內的相對路徑；None 為 graphen_bringup 的
+    #   config/can_driver_config.json。配線屬於機台，只有自己接線方式的機台才在模型套件提供
+    Robot = namedtuple('Robot', 'package mjcf servo missing_joints base_height arm_ik can_config',
+                       defaults=(None,))
     robots = {
         # 直膝下腳底最低點為 0.9954 m，留 5 mm。MJCF 的 keyframe 用 0.985（屈膝的訓練姿態），兩者不同
-        'ti5_t170': Robot('ti5_t170_description', 'mjcf/ti5_t170.xml', False, 'error', '1.000'),
+        'ti5_t170': Robot('ti5_t170_description', 'mjcf/ti5_t170.xml', False, 'error', '1.000', True),
         # ti5_170a_graphen/scripts/make_mjcf.py 印出的高度（直膝下腳底最低點 + 5 mm），重新產生 MJCF 後同步
-        'ti5_170a': Robot('ti5_170a_graphen', 'mjcf/ti5_170a.xml', False, 'error', '0.899'),
-        'fb70': Robot('fb70_description', None, True, 'error', '1.07'),
+        'ti5_170a': Robot('ti5_170a_graphen', 'mjcf/ti5_170a.xml', False, 'error', '0.899', True),
+        # TODO(verify-on-hw): fb70 的 MJCF mesh 指向 Orin 的 /devtest，開發機無法載入；
+        # 在 Orin 上以 arm_ik_check 驗證 arm_ik.yaml 之後再改成 True
+        'fb70': Robot('fb70_description', None, True, 'error', '1.07', False),
+        # graphen_aiterone_ny_description/scripts/make_mjcf.py 印出的高度（直膝下腳底最低點 + 5 mm），重新產生 MJCF 後同步
+        # TODO(verify-on-hw): NY 的 CAN 配線（can0–can5，每條腿 / 手臂一條通道）沿用 NY 工作區的設定
+        # 位置伺服的增益由 make_mjcf.py 依頻寬計算（--servo-bandwidth / --servo-damping-ratio）
+        'aiterone_ny': Robot('graphen_aiterone_ny_description', 'mjcf/graphen_aiterone_ny.xml', True,
+                             'error', '0.899', True, 'config/can_driver_config.json'),
     }
+
+    def resolve_can_config(context):
+        model = robots[robot.perform(context)]
+        path = (os.path.join(get_package_share_directory(model.package), model.can_config)
+                if model.can_config else default_can_config_file)
+        return [SetLaunchConfiguration('can_config_path', path)]
+
+    set_can_config = OpaqueFunction(function=resolve_can_config)
+
+    # arm_ik_config：auto 依 robot 選擇，none 停用。命令列的 arm_ik_config:='' 會收到字面上的兩個引號，
+    # 一併視為停用（否則會被當成路徑，連帶讓 arm_servo 模式與整個 controller configure 失敗）
+    def resolve_arm_ik_config(context):
+        value = arm_ik_config.perform(context).strip()
+        if value in ('', 'none', "''", '""'):
+            return ''
+        if value != 'auto':
+            return value
+        model = robots[robot.perform(context)]
+        if not model.arm_ik:
+            return ''
+        return os.path.join(get_package_share_directory(model.package), 'config', 'arm_ik.yaml')
+
+    # 把 arm_ik_config 帶入 switch_group_controller：choreo.arm_ik_config（編舞的路徑碰撞檢查），
+    # 以及所有 plugin 為 graphen_arm_ik/ArmServoAlgorithm 的模式（<mode>.arm_ik_config）。
+    # 模式從已組合的參數檔中找出，不寫死模式名稱。回傳產生的參數檔（暫存檔），沒有要帶入的值時為 None
+    def arm_ik_parameter_file(path, files):
+        merged = {}
+        for f in files:
+            with open(f) as stream:
+                content = yaml.safe_load(stream) or {}
+            params = (content.get('switch_group_controller') or {}).get('ros__parameters') or {}
+            for key, value in params.items():
+                if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                    merged[key] = {**merged[key], **value}
+                else:
+                    merged[key] = value
+        injected = {'choreo': {'arm_ik_config': path}}
+        for mode in merged.get('modes') or []:
+            settings = merged.get(mode)
+            if isinstance(settings, dict) and settings.get('plugin') == 'graphen_arm_ik/ArmServoAlgorithm':
+                injected[mode] = {'arm_ik_config': path}
+        out = tempfile.NamedTemporaryFile(
+            'w', prefix='graphen_arm_ik_', suffix='.yaml', delete=False)
+        with out:
+            yaml.safe_dump({'switch_group_controller': {'ros__parameters': injected}}, out)
+        return out.name, sorted(m for m in injected if m != 'choreo')
 
     def resolve_mujoco_model(context):
         model = robots[robot.perform(context)]
@@ -148,7 +226,8 @@ def generate_launch_description():
             return actions
         if not model.servo and hardware.perform(context) != 'mujoco_pd':
             raise RuntimeError(f'robot:={robot.perform(context)} needs hardware:=mujoco_pd '
-                               '(the model has motor actuators); use robot:=fb70 for hardware:=mujoco')
+                               '(the model has motor actuators); use robot:=fb70 or aiterone_ny for '
+                               'hardware:=mujoco')
         relpath = model.mjcf or os.path.join(
             'mjcf', 't170_fixed.xml' if IfCondition(mujoco_fixed_base).evaluate(context)
             else 't170_free.xml')
@@ -191,7 +270,8 @@ def generate_launch_description():
         ' mujoco_missing_joints:=', mujoco_missing_joints,
         ' mujoco_initial_base_height:=', mujoco_initial_base_height,
     ])
-    robot_description = {'robot_description': robot_description_raw}
+    # 明確指定為字串：否則 launch_ros 會把 URDF 當 YAML 解析，註解中出現「: 」就會失敗
+    robot_description = {'robot_description': ParameterValue(robot_description_raw, value_type=str)}
 
     # 1. State Publisher
     node_robot_state_publisher = Node(
@@ -233,12 +313,28 @@ def generate_launch_description():
             # 預設增益屬於模型：顯式 PD 的增益要配合模型的慣量，否則會振盪
             files.append(os.path.join(get_package_share_directory(robots[robot_name].package),
                                       'config', 'joint_pd_gains.yaml'))
+        # 手臂 IK 設定（依 robot），放在情境覆寫之前：情境仍然可以改掉它
+        arm_ik_path = resolve_arm_ik_config(context)
+        arm_ik_messages = []
+        if arm_ik_path:
+            arm_ik_file, servo_modes = arm_ik_parameter_file(
+                arm_ik_path,
+                files + ([scenario_params.perform(context)] if scenario_params.perform(context) else []))
+            files.append(arm_ik_file)
+            arm_ik_messages.append(LogInfo(
+                msg=f'arm_ik_config: {arm_ik_path} (choreo collision check, servo modes: '
+                    f'{", ".join(servo_modes) or "none"})'))
+        else:
+            arm_ik_messages.append(LogInfo(
+                msg='arm_ik_config: disabled (no choreography collision check; arm servo modes '
+                    'cannot be entered)'))
         # 情境 launch 的覆寫（例如一開始就進入 RL 模式），不改本機 controllers.yaml
         if scenario_params.perform(context):
             files.append(scenario_params.perform(context))
         def shown(path):
             return os.path.relpath(path, config_dir) if path.startswith(config_dir) else path
-        return [LogInfo(msg=f'robot: {robot_name} (URDF body, MJCF, PD gains)'),
+        return arm_ik_messages + [LogInfo(msg=f'robot: {robot_name} (URDF body, MJCF, PD gains, CAN wiring)'),
+                LogInfo(msg='can_config: ' + can_config_file.perform(context)),
                 LogInfo(msg='controller parameter files: ' + ', '.join(
             shown(f) for f in files)), Node(
             package='controller_manager',
@@ -248,6 +344,20 @@ def generate_launch_description():
         )]
 
     node_controller_manager = OpaqueFunction(function=create_controller_manager)
+
+    # 2-1. 手臂 IK service（~/solve、~/forward），給 viewer 的示教與外部 UI；只做計算，不送指令
+    def create_arm_ik_server(context):
+        path = resolve_arm_ik_config(context)
+        if not path or not IfCondition(arm_ik_server).evaluate(context):
+            return []
+        return [Node(
+            package='graphen_arm_ik',
+            executable='arm_ik_server',
+            output='screen',
+            parameters=[{'arm_ik_config': path}],
+        )]
+
+    node_arm_ik_server = OpaqueFunction(function=create_arm_ik_server)
 
     # 3. Joint State Broadcaster
     spawn_joint_state_broadcaster = Node(
@@ -320,10 +430,12 @@ def generate_launch_description():
 
     return LaunchDescription(declare_args + [
         set_mujoco_model,  # 必須在使用 robot_description 的 node 之前
+        set_can_config,
         set_hw_read_timeout,
         node_robot_state_publisher,
         node_srdf_publisher,
         node_controller_manager,
+        node_arm_ik_server,
         spawn_joint_state_broadcaster,
         spawn_sensor_forwarder,
         spawn_imu_sensor_broadcaster,

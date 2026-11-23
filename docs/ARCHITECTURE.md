@@ -24,6 +24,7 @@ graph LR
     motion[graphen_motion<br/>BVH 轉換，無 rclcpp]
     loco[graphen_locomotion<br/>演算法 plugin 介面，無 rclcpp]
     choreography[graphen_choreographer<br/>編舞 plugin，無 rclcpp]
+    armik[graphen_arm_ik<br/>手臂 IK + 碰撞（MuJoCo）<br/>arm_ik_server、伺服 plugin]
     ctrl[graphen_controllers<br/>controller plugin]
     bringup[graphen_bringup<br/>config + launch]
   end
@@ -47,6 +48,11 @@ graph LR
   ctrl -->|build| loco
   ctrl -->|build| ifaces
   choreography -->|build| loco
+  choreography -->|build| armik
+  armik -->|build| loco
+  armik -->|build| ifaces
+  ctrl -.->|runtime 載入| armik
+  bringup -.->|exec| armik
   ctrl -.->|runtime 載入| choreography
   btnodes -->|build| ifaces
   bringup -.->|exec| ctrl
@@ -132,7 +138,7 @@ graph LR
 **行為**
 1. 每個週期讀取所有 state interface，依 `state_publish_rate` 的頻率發布到 `~/states`。
 2. 讀取 sensor 值，存到 `sensor_value_`，供之後的控制邏輯使用。
-3. 把量測的關節角度（`target_state_interfaces`）、速度（`velocity_state_interfaces`）、IMU（`imu_sensor_name`）以 `TryLockBuffer<RobotState>` 交給 planner（拿不到 lock 就跳過這一次，不阻塞）。planner thread 讀取後補上 `~/cmd_vel` 的速度指令，並執行機身狀態估測器（見 [§2.9](#29-外部演算法介面graphen_locomotion)）。
+3. 把量測的關節角度（`target_state_interfaces`）、速度（`velocity_state_interfaces`）、IMU（`imu_sensor_name`）以 `TryLockBuffer<RobotState>` 交給 planner（拿不到 lock 就跳過這一次，不阻塞）。planner thread 讀取後補上 `~/cmd_vel` 的速度指令與 `~/pose_targets` 的末端目標，並執行機身狀態估測器（見 [§2.9](#29-外部演算法介面graphen_locomotion)）。
 4. 從 `target_buffer_` 讀取 `LocomotionPlanner` 的最新輸出，位置寫到 `command_interfaces`，`sample_period` 寫到 `sample_period_interfaces`。
 
 同一時間 planner 只播放一個 **Motion**；實際輸出由 planner 在 non-RT thread 中產生（見 [§2.4](#24-locomotionplanner)）。controller 本身只做接線，不包含任何特定動作的邏輯。
@@ -185,8 +191,8 @@ graph LR
 |---|---|---|
 | RT（`update()`） | 讀取 planner 的最新輸出、寫入介面、更新 state | 不碰任何內容庫、不建立或釋放 Motion |
 | planner（non-RT，`planner_rate`） | Motion 的 `on_enter` / `update`、進入時的檢查 | 不讀檔、不建立 plugin |
-| 播放用的 callback group（executor，non-RT） | 會載入內容的 action（`~/play_choreo`、`~/play_bvh`、`~/run_policy`）與所有 service：讀檔、解析、建立 plugin 與 ONNX session，然後送交 arbiter | — |
-| 預設的 callback group（executor，non-RT） | `~/switch_mode`、`~/mode`、`~/cmd_vel`、等待播完的 timer | 不做載入，所以不會被載入擋住：停止不必排在別人的載入後面 |
+| 播放用的 callback group（executor，non-RT） | 會載入內容的 action（`~/play_choreo`、`~/play_bvh`、`~/run_policy`）與所有 service：讀檔、解析、建立 plugin 與 ONNX session，然後送交 arbiter；編舞的影子試播（`run_shadow`）也在這裡同步執行 | — |
+| 預設的 callback group（executor，non-RT） | `~/switch_mode`、`~/mode`、`~/cmd_vel`、`~/pose_targets`、等待播完的 timer（同時發布 `~/playback_state`）、試播軌跡的 timer | 不做載入，所以不會被載入擋住：停止不必排在別人的載入後面 |
 
 - **先載入、通過才切換**：載入期間機器人繼續原本的動作；載入或檢查失敗時 goal 為 aborted，原本的動作不受影響。需要載入時先發布一次 `STAGE_LOADING` 的 feedback。
 - 播放用的 callback group 是 MutuallyExclusive：一次只載入一個內容或處理一個 service。
@@ -267,6 +273,16 @@ graph LR
 - **舞曲庫**：`choreo.library_path` 目錄中的 `<name>.choreo.yaml`，名稱只允許 `[a-z0-9_-]`（1 ~ 64 個字元，擋掉路徑穿越）。只保存發佈過的版本：同名覆寫、不留歷史、沒有刪除介面。
 - 每次播放或發佈都以 `choreo.plugin` 建立一個新的演算法實例並 configure（內容疊加在 controller 的 `choreo.*` 上），所以**發佈和播放用的是同一套檢查**（格式、限位、速度、`max_steps`、姿態的 joint 名稱，見 [§2.12](#212-編舞graphen_choreographer)），而且**重新發佈不影響正在播的那一次**（播放中的實例持有已解析的內容）。
 - service：`~/publish_choreo`（檢查通過才寫入，先寫暫存檔再 rename；回傳 sha256）、`~/list_choreos`（名稱與 sha256，編輯端用來比對是否已同步）、`~/get_choreo`（讀回內容）。
+- **影子試播**（`options.dry_run`，[shadow_runner.hpp](../src/graphen_controllers/include/graphen_controllers/shadow_runner.hpp)）：照常建立實例與檢查，但**不交給 arbiter**，改以 `LocomotionPlanner::snapshot()`（planner 最近一個週期開始時的 `RobotState`，含 `commanded_*`）為起點，用 `PlannerCore`（和實際播放同一份限速與速度計算，[§2.4](#24-locomotionplanner-與-motion)）以固定步長 `1 / planner_rate` 空跑到播完、失敗或 `choreo.shadow.max_duration`。
+  - **理想追蹤**：每一步令 `measured_* := commanded_*`；IMU、`base`、速度指令、末端目標沿用快照。編舞是開環的（只用起點與時間插值），這個假設下的結果就是實際播放時的命令；看不到力矩飽和與追蹤誤差。
+  - 起點的量測值保留實機的值：`on_enter` 的碰撞檢查以它設定非播放部位的姿態。
+  - 不碰任何 interface、不經過 arbiter，目前的動作不受影響；失敗原因取自 `Motion::failure_reason()`（`PluginMotion` 記錄的例外），回在 result 的 message。
+  - 軌跡（通過或失敗都會）以 `choreo.shadow.publish_rate` 取樣，由預設 group 的 timer 依實際時間發布到 `~/shadow/joint_states`（`sensor_msgs/JointState`，名稱為各 command interface 的 joint）；新的試播取代舊的。
+- **試播憑證**（[shadow_gate.hpp](../src/graphen_controllers/include/graphen_controllers/shadow_gate.hpp)）：試播通過時發出 `shadow_token`，記錄內容的 sha256 與起點（planner 的輸出位置）。正式播放帶 `options.shadow_token` 時，送交 arbiter 前確認 token 存在且未過期（`choreo.shadow.token_ttl`）、sha256 相同（所以可以用 content 試播、再以名稱播放發佈後的同一份內容）、目前 planner 的輸出位置和起點的差都在 `choreo.shadow.start_tolerance` 以內；不通過時 abort，還沒有切換。`choreo.shadow.require: true` 時沒有 token 的編舞一律拒絕（BT 播放已發佈的舞曲也一樣，所以預設 false）。token 在有效期間可重複使用，每次都重新檢查起點。驗證和 planner 實際 `on_enter` 之間差不到一個週期，靠 `start_tolerance` 涵蓋；機器人在動的時候（例如上一段還在播）起點與速度都可能不同，建議在 hold 模式（`teach`）下試播與正式播放。
+- **影子播放模式**（`<mode>.shadow_playback: true`，例如 `teach`）：這個系統模式播放中，所有 `PlayChoreo`（content 或 name，帶不帶 token 都一樣）都改為影子試播，回傳 token、不切換，`message` 以 `Shadow playback in mode [ <mode> ]` 開頭。示教時對 UI 的「試播」不必特別處理，機器人也不會被意外帶離示教；要上機必須先用 `switch_mode` 切離該模式（例如 `stop`，同樣保持不動、起點不變），再帶 token 播放。判斷以 arbiter 目前的模式為準，`dry_run` 與這個設定的效果相同。
+- 其他類型（`SwitchMode`、`PlayBvh`、`RunPolicy`）收到 `dry_run` 或 `shadow_token` 時在 `handle_goal` 就 REJECT（`PlaybackServer::Hooks::supports_shadow`）。
+
+**`~/playback_state`**（`graphen_interfaces/msg/PlaybackState`，reliable + transient_local）：目前在播的 `mode` / `item`（同 `PlaybackResult`；controller 未啟用時為空），由等待播完的 timer 比對、改變時才發布。給不需要送指令、只想知道目前模式的程式使用（例如 mujoco_viewer 依它進入示教，[§2.10](#210-mujocosystemgraphen_mujoco)）。這個 publisher 和 `~/shadow/joint_states` 是一般的 rclcpp publisher（`rclcpp::create_publisher`，不受 lifecycle 啟用狀態影響）。
 
 **BVH（`~/play_bvh`、`BvhSource`）**
 - goal：`name`（`bvh.library_path` 中的 `<name>.bvh`）、`loop`、`time_scale`（0 視為 1.0）。檔案手動放進目錄，沒有上傳介面。
@@ -308,6 +324,9 @@ graph LR
 | `velocity_state_interfaces` | string[] | `[]` | 與 `command_interfaces` 一一對應的速度 state interface，交給 Motion 的量測速度；空的時候為 NaN |
 | `base_estimator.plugin` | string | `""` | 機身狀態估測器（`graphen_locomotion::BaseStateEstimator` 的 plugin）；空字串表示不估測（`base.valid` 為 false）。其餘 `base_estimator.*` 參數由估測器讀取 |
 | `command_timeout` | double | 0.5 | `~/cmd_vel` 的逾時（秒），必須 > 0；超過時速度指令為 0、`command.active` 為 false |
+| `pose_targets.names` | string[] | `[]` | `~/pose_targets` 接受的目標名稱（= `arm_ik.yaml` 的手臂名稱），也是 `RobotState::pose_targets` 的順序；空的時候不訂閱，不可重複 |
+| `pose_targets.frame` | string | `WAIST_P_S` | 目標必須使用的 `header.frame_id`（= `arm_ik.yaml` 的 `root_body`）；controller 不做 tf |
+| `pose_targets.timeout` | double | 0.5 | 目標的逾時（秒），必須 > 0；超過時該目標 `active` 為 false |
 | `imu_sensor_name` | string | `""` | IMU sensor 名稱（例如 `imu_sensor`），讀取 `<name>/orientation.x` … `linear_acceleration.z` 共 10 個 interface 交給 Motion；空的時候 `imu.valid` 為 false |
 | `switch_mode_poll_rate` | double | 20.0 | 檢查 `wait_until_finished` 的 goal 的頻率（Hz），也是 feedback 的頻率，所有播放類 action 共用，必須 > 0 |
 | `planner_rate` | double | 100.0 | planner 的規劃頻率（Hz），必須 > 0 |
@@ -321,11 +340,17 @@ graph LR
 | `<mode>.preempt` | bool | hold 為 true，其他為 false | true 時可以切入不可中斷的播放；用於停止類的模式 |
 | `<mode>.joints` | string[] | 全部 | （target）要移動的 joint；沒有列出的保持進入模式時的位置 |
 | `<mode>.targets` | double[] | （必填） | （target）對應 `joints` 的目標位置 |
+| `<mode>.shadow_playback` | bool | false | true 時這個模式播放中所有 `PlayChoreo` 都只做影子試播、不切換（示教模式 `teach`） |
 | `<mode>.plugin` | string | （必填） | （plugin）`graphen_locomotion::LocomotionAlgorithm` 的 plugin 類別名稱；其餘 `<mode>.*` 參數由演算法自行讀取 |
 | `choreo.plugin` | string | `""` | 編舞的演算法 plugin（`graphen_choreographer/ChoreographerAlgorithm`）；空字串表示不啟用編舞 |
 | `choreo.library_path` | string | `~/.local/share/graphen/choreo` | 舞曲庫目錄，支援 `~/` 與 `package://` |
 | `choreo.max_steps` | double[] | `planner_max_steps` | 所有編舞共用的每週期上限 |
-| `choreo.*`（其餘） | — | plugin 的預設值 | `velocity_limit_scale`、`start_tolerance`、`entry_velocity`，由 plugin 讀取（[§2.12](#212-編舞graphen_choreographer)） |
+| `choreo.shadow.require` | bool | false | true 時編舞一定要帶通過試播的 `shadow_token`；實機建議 true |
+| `choreo.shadow.start_tolerance` | double | 0.01 | 正式播放時目前的輸出位置與試播起點的最大差距（rad，每個介面） |
+| `choreo.shadow.token_ttl` | double | 300.0 | `shadow_token` 的有效時間（s） |
+| `choreo.shadow.max_duration` | double | 600.0 | 試播模擬的最長時間（s）；超過視為沒有播完（失敗） |
+| `choreo.shadow.publish_rate` | double | 50.0 | 試播軌跡發布到 `~/shadow/joint_states` 的取樣頻率（Hz） |
+| `choreo.*`（其餘） | — | plugin 的預設值 | `velocity_limit_scale`、`start_tolerance`、`entry_velocity`、`arm_ik_config`（bringup 依 `robot` 帶入）、`collision.*`，由 plugin 讀取（[§2.12](#212-編舞graphen_choreographer)） |
 | `bvh.library_path` | string | `""` | BVH 目錄，支援 `~/` 與 `package://`；空字串表示不啟用 BVH |
 | `bvh.max_steps` | double[] | `planner_max_steps` | 播放時的每週期上限，所有 BVH 共用 |
 | `bvh.approach_max_steps` | double[] | `planner_max_steps` | 走向第 0 幀（含循環接回）時的每週期上限 |
@@ -342,6 +367,7 @@ graph LR
 |---|---|---|
 | `~/mode` | std_msgs/String | 訂閱 |
 | `~/cmd_vel` | geometry_msgs/Twist | 訂閱（`linear.x`、`linear.y`、`angular.z`，機身座標系） |
+| `~/pose_targets` | graphen_interfaces/msg/ArmPoseTarget | 訂閱（`pose_targets.names` 有設定時）：末端位姿 + swivel，frame / 名稱不符或非有限值時丟棄並 warn（throttle） |
 | `~/switch_mode` | graphen_interfaces/action/SwitchMode | action server（系統模式） |
 | `~/play_choreo` | graphen_interfaces/action/PlayChoreo | action server（`choreo.plugin` 有設定時） |
 | `~/play_bvh` | graphen_interfaces/action/PlayBvh | action server（`bvh.library_path` 有設定時） |
@@ -415,6 +441,8 @@ graph LR
 原始碼：[locomotion_planner.hpp](../src/graphen_controllers/include/graphen_controllers/locomotion_planner.hpp)、[motion.hpp](../src/graphen_controllers/include/graphen_controllers/motion.hpp)、[target_motion.hpp](../src/graphen_controllers/include/graphen_controllers/target_motion.hpp)、[bvh_motion.hpp](../src/graphen_controllers/include/graphen_controllers/bvh_motion.hpp)、[plugin_motion.hpp](../src/graphen_controllers/include/graphen_controllers/plugin_motion.hpp)
 類型：一般類別（不是 plugin），由 `SwitchGroupController` 擁有。
 
+**PlannerCore**（[planner_core.hpp](../src/graphen_controllers/include/graphen_controllers/planner_core.hpp)）：下面「每個週期」的第 1（`commanded_*` 的部分）~ 3 步與命令速度的計算，不含計時、thread 與緩衝。`LocomotionPlanner`（實際播放）與影子試播（`run_shadow`，[§2.2](#22-switchgroupcontroller)）共用，保證試播和實際播放的限速與速度計算完全相同。
+
 **LocomotionPlanner**
 - 在獨立的 non-RT thread 中以 `rate_hz` 執行（`sleep_until` 絕對時間排程；落後時重新對齊，不連續補跑）。
 - 每個週期：
@@ -427,6 +455,7 @@ graph LR
 - **進度**：`set_motion()` 回傳遞增的序號；planner 每週期在 `update()` 之後把 `{播放中的序號, Motion::status(), 進入後經過的時間}` 存起來，`progress()` 可以在任何 non-RT thread 讀取。呼叫端比對序號，就能分辨「自己設定的那一次」是還沒開始、播完了，還是已經被取代。
 - **命令速度**：每週期以「這次與上次輸出位置的差 ÷ 實際 dt」算出命令速度，下一個週期放進 `RobotState::commanded_velocities`。
 - `start()` 會先把起點寫入 buffer，controller 在第一個規劃週期前就有值可以輸出。
+- **快照**：每週期取得狀態後，把 `RobotState`（含 `commanded_*`）複製到 mutex 保護的快照；`snapshot()` 給 non-RT 的呼叫端（影子試播的起點、試播憑證的起點檢查）。
 - 不認識 joint 或模式，可以重用在其他 controller。
 
 **Motion 介面**：`on_enter(state)` / `update(dt, state, command)` / `max_steps()` / `sample_period()` / `status()`。`status()` 回傳 `MotionStatus`（`kRunning` / `kFinished` / `kFailed`），預設為 `kRunning`；有終點的動作在 planner 的輸出到達終點後回報 `kFinished`。`RobotState`、`JointCommand` 定義在 `graphen_locomotion`（見 [§2.9](#29-外部演算法介面graphen_locomotion)）。同一個實例可以重複進入，`on_enter` 會重設狀態；`max_steps()` 與 `sample_period()` 在每次 `update()` 之後讀取，可以依階段改變。`sample_period()` 預設為 0（輸出已連續，下游不插補）。
@@ -471,7 +500,7 @@ launch argument：
 | 參數 | 預設值 | 說明 |
 |---|---|---|
 | `hardware` | `mock` | `mock`（GenericSystem + PositionController）、`mujoco`（MuJoCo 位置伺服 + PositionController）、`mujoco_pd`（MuJoCo 力矩 + PdController）、`real`（`ti5_hardware`，CAN 位置模式 + PositionController）、`real_pd`（`ti5_hardware`，CAN 電流模式 + PdController） |
-| `robot` | `ti5_170a` | 模型，同時決定 URDF 本體（xacro 參數 `robot`）、MJCF 與 PD 預設增益。`ti5_t170`：`ti5_t170_description`（T170-V2.1-A0，力矩馬達，MuJoCo 只能搭配 `mujoco_pd`）；`ti5_170a`：`ti5_170a_graphen`（自己的 URDF，`scripts/make_mjcf.py` 產生的 MJCF，力矩馬達）；`fb70`：`fb70_description`（位置伺服，URDF 本體用 `ti5_170a_graphen` 的 `robot.urdf.xacro`）。不合法的組合在 launch 時報錯。浮動基座初始高度依模型帶入（ti5_t170 1.000 m、fb70 1.07 m、ti5_170a 0.899 m） |
+| `robot` | `ti5_170a` | 模型，同時決定 URDF 本體（xacro 參數 `robot`）、MJCF 與 PD 預設增益。`ti5_t170`：`ti5_t170_description`（T170-V2.1-A0，力矩馬達，MuJoCo 只能搭配 `mujoco_pd`）；`ti5_170a`：`ti5_170a_graphen`（自己的 URDF，`scripts/make_mjcf.py` 產生的 MJCF，力矩馬達）；`fb70`：`fb70_description`（位置伺服，URDF 本體用 `ti5_170a_graphen` 的 `robot.urdf.xacro`）；`aiterone_ny`：`graphen_aiterone_ny_description`（NY 機台，`scripts/make_mjcf.py` 產生的 MJCF，位置伺服，`mujoco` / `mujoco_pd` 都可用）。不合法的組合在 launch 時報錯。浮動基座初始高度依模型帶入（ti5_t170 1.000 m、fb70 1.07 m、ti5_170a / aiterone_ny 0.899 m） |
 | `mujoco_fixed_base` | `true` | （MuJoCo）吊掛：fb70 用 `t170_fixed.xml`，有 free joint 的模型每步重設基座 |
 | `scenario_params` | `""` | 最後疊加的參數檔，給情境 launch 使用（例如 `sim_rl.launch.py`），不改本機 `controllers.yaml` |
 | `mujoco_model` / `mujoco_viewer_port` | `""` / `9870` | （MuJoCo）指定 MJCF 路徑（空的時候依 `robot`）/ viewer 的 UDP port |
@@ -553,6 +582,7 @@ launch argument：
   - `imu`：原始 IMU 讀值（**IMU 座標系**）：`orientation`（xyzw）、`angular_velocity`、`linear_acceleration`、`valid`
   - `base`：估測器輸出的機身狀態（**機身座標系**）：`linear_velocity`、`angular_velocity`、`projected_gravity`（`R_wbᵀ·[0,0,-1]`）、`valid`
   - `command`：`~/cmd_vel` 的速度指令 `velocity`（vx, vy, wz）與 `active`；逾時或尚未收到時為 0、`active = false`
+  - `pose_targets`：`~/pose_targets` 的末端目標（順序同 `Context::pose_target_names`，座標系為 `Context::pose_target_frame`）：`position`、`orientation`（xyzw，已正規化）、`swivel`（NaN = 不指定）、`age`、`active`（逾時或尚未收到時為 false）
 - **`JointCommand`**（每週期的輸出）：`positions`（NaN 表示保持）、`velocities`（速度前饋，NaN 表示沒有）、`kp` / `kd`（PD 增益，NaN 或負值表示使用下游的預設值）。進入 `update()` 前已填滿 NaN。速度與增益只在下游為 `PdController` 時生效。
 - **`LocomotionAlgorithm`**：
   - `configure(Context)`：controller configure 時呼叫一次，設定錯誤時丟例外，controller 會 configure 失敗
@@ -605,7 +635,7 @@ launch argument：
 - **介面**：
   - 每個 joint 有一個 position 或 effort command（由 URDF 決定：`hardware:=mujoco_pd` 為 effort，`mujoco` 為 position），以及 position / velocity / acceleration state。其他 state（`current`、`error_code`）照樣匯出，值固定為 NaN。
   - **致動器**必須與 command 相符：
-    - position 需要位置伺服（fixed gain、affine bias，例如 `export_mjcf.py` 匯出的 fb70 模型）。
+    - position 需要位置伺服（fixed gain、affine bias，例如 `export_mjcf.py` 匯出的 fb70 模型、`graphen_aiterone_ny_description/scripts/make_mjcf.py` 產生的 aiterone_ny 模型）。aiterone_ny 的伺服增益依頻寬由 home 姿態的關節慣量計算（`kp = I·ω²`、`kv = 2ζ·I·ω`，預設 10 Hz、ζ = 1），代表實機位置模式（驅動器的位置 / 速度 / 電流三環）整體的剛性；MuJoCo 沒有驅動器，只能用一個高增益 PD 近似，增益待實機階躍響應校正（`TODO(verify-on-hw)`）。
     - effort 接受力矩馬達（`motor`，例如 ti5_t170），也接受位置伺服（載入時改成馬達：`gainprm[0] = 1`、`biasprm = 0`，保留 forcerange）。
     - 力矩馬達搭配 position command 時，載入就失敗，避免位置指令被當成力矩。
   - **effort 模式啟動**：所有 effort joint 都收到第一個有效的 command 之前（以及 viewer reset 之後），**物理暫停**，controller 啟動前機器人停在初始姿態，不會倒下。
@@ -617,6 +647,12 @@ launch argument：
   - `read()` 複製 qpos / qvel / qacc 與感測器值。
   - 模擬時間跟著 controller_manager 的 wall clock。
 - **viewer**：`viewer_port` > 0 時，`read()` 以非阻塞 UDP 把 `[time, qpos…]` 送到 127.0.0.1:port（約 60 Hz），並在 port+1 接收 `reset` 與 `model?`（回覆載入的 MJCF 絕對路徑，viewer 沒有指定 `--model` 時用它找模型）。容器沒有 GL，所以畫面由主機的 [mujoco_viewer.py](../src/graphen_mujoco/tools/mujoco_viewer.py) 用同一份 MJCF 跑 `mj_forward` 顯示。
+- **姿態來源**：`--source udp`（預設）收 `MujocoSystem` 的 UDP frame；`--source ros` 訂閱 `/joint_states`（依名稱對應 qpos，effort 當作力矩顯示），給 `hardware:=mock` / `real` / `real_pd` 使用，必須指定 `--model`，基座固定在模型的初始姿態（不套用 IMU）。
+- **幽靈**（`--ghost-topic`）：任意 `sensor_msgs/JointState` 以第二份 `MjData` 做 `mj_forward`，再以 `mjv_addGeoms` 加到 `user_scn` 並改成半透明（模型不修改）；沒有列出的 joint 與基座沿用目前的畫面。試播時指定為 `/switch_group_controller/shadow/joint_states`。viewer 不知道資料的來源。
+- **示教**：viewer 在載入時以 `MjSpec` 加入兩個手腕目標（mocap body，`nq` / `nu` 不變，UDP frame 仍相容）。**由 controller 的模式觸發**：`~/playback_state` 的 mode 等於 `--teach-mode`（預設 `teach`，`controllers.yaml` 的 hold 模式）時進入，離開該模式就結束（`--teach-always` 不看 controller）；`arm_ik_server` 還沒找到時每 2 秒重試，不阻塞畫面。進入後停止套用收到的姿態（以當下畫面，也就是機器人目前的姿態為起點），拖曳目標時呼叫 `arm_ik_server` 的 `~/solve`（[§2.13](#213-手臂-ikgraphen_arm_ik)；`local: true`，只從目前姿態迭代，解連續不跳分支），送出的 `state` 是 viewer 畫面上的全身姿態。一次只有一個請求在途中、拖曳中只送最新的目標；沒收斂但誤差仍在下降時以新的解繼續求解。F9 / F10 改的是要求的絕對 swivel；解的姿態有碰撞時目標變黃並列出 body 對（只警告）。
+  - **指定關節角**：示教中收到 `/mujoco_viewer_teach/set_pose`（`sensor_msgs/JointState`，只填要改的 joint）時，只套用列出的 joint（模型外的 joint 與非有限值忽略、超出 `jnt_range` 時截斷，都印出警告），作廢進行中的 IK 請求，以 `~/forward` 把手腕目標移到新的末端位姿（同時取得碰撞），並把「已送出的目標」設為新的位姿，所以不會再觸發求解；之後照樣可以拖曳。不在示教時收到的忽略。
+  - **viewer 不綁定編舞**：不記錄、不匯出、不送指令，只把全身的姿態發布在 `/mujoco_viewer_teach/pose`（`sensor_msgs/JointState`，transient_local，姿態改變時）。格式對齊 `/joint_states`：viewer 一律訂閱 `/joint_states`（udp 來源也是），沿用它的 joint 與順序，模型中的 joint 取畫面的姿態、模型外的 joint（靈巧手）沿用 `/joint_states` 的值，`velocity` / `effort` 等長、固定為 0；還沒收到 `/joint_states` 時改為模型中所有 joint。keyframe 的記錄、腳本的組成與試播由外部程式負責（擷取姿態 → `PlayChoreo` 的 `dry_run` → 帶 `shadow_token` 正式播放）。
+  - viewer 的 ROS 部分（mode、`/joint_states`、幽靈、示教姿態、IK client）共用一個 rclpy node，主迴圈每一輪 `spin_once`，不另開 thread；`rclpy.init` 不安裝 signal handler，讓 SIGINT / SIGTERM 照常結束程式。沒有 rclpy 時只保留 udp 顯示。
 
 ### 2.11 RL policy plugin（graphen_rl_policy）
 
@@ -709,7 +745,8 @@ tracks:
 | configure | 腳本格式；joint 都是受控的 joint | controller configure 失敗 |
 | configure | 有 `robot_description` 時：keyframe 在位置限位內、每段峰值速度 ≤ URDF velocity × `velocity_limit_scale` | 同上 |
 | configure | 每段峰值速度 / `planner_rate` ≤ `max_steps`（不會被限速） | 同上，訊息附建議值 |
-| 進入模式 | 起點 → 第一個姿態的那一段（取決於當下位置與速度）：同樣的速度條件，帶起點速度時另外檢查位置限位；`t: 0` 時差距 ≤ `start_tolerance` | `on_enter` 丟例外：保持、`kFailed`，等待中的 goal 被 abort |
+| configure | 設定 `arm_ik_config` 時：以 `collision.sample_rate` 取樣整條路徑（各軌道從第一個姿態開始，與播放同一條曲線 `sample_track()`），任何一點讓手臂碰撞（[§2.13](#213-手臂-ikgraphen_arm_ik)） | 同上，訊息列出時間區間與 body 對 |
+| 進入模式 | 起點 → 第一個姿態的那一段（取決於當下位置與速度）：同樣的速度條件，帶起點速度時另外檢查位置限位；`t: 0` 時差距 ≤ `start_tolerance`；設定 `arm_ik_config` 時以實際起點（其他 joint 用量測值）取樣 `collision.entry_samples` 點檢查碰撞 | `on_enter` 丟例外：保持、`kFailed`，等待中的 goal 被 abort |
 
 峰值速度 = `|Δ| / T × 係數`（linear 1、cubic 1.5、quintic 1.875）。
 
@@ -724,12 +761,46 @@ tracks:
 | `velocity_limit_scale` | 1.0 | 速度上限 = URDF velocity limit × 這個值，必須 > 0 |
 | `entry_velocity` | true | 第一段是否帶入切換當下的速度 |
 | `max_steps` | `planner_max_steps` | 由 controller 讀取；必須容得下腳本的峰值速度 |
+| `arm_ik_config` | `""` | `graphen_arm_ik` 的 `arm_ik.yaml`（支援 `package://`）；空字串 = 不檢查碰撞。bringup 依 `robot` 帶入 |
+| `collision.sample_rate` | planner 頻率 | 路徑碰撞的取樣頻率（Hz）；`controllers.yaml` 設為 50 |
+| `collision.entry_samples` | 10 | 進入時「起點 → 第一個 keyframe」的取樣數 |
+| `collision.nominal_joints` / `collision.nominal_positions` | — | configure 時不在任何軌道中的 joint（腰、腿、頭）的角度；沒有列出的用模型的初始姿態（手臂為 `arm_ik.yaml` 的 `seed`） |
 
-**`choreo_check`**：離線列出各軌道的時間範圍、各 joint 的範圍 / 限位 / 峰值速度與建議的 `max_steps`（峰值速度 / rate × 1.2），`--urdf` 檢查限位與姿態中的 joint 名稱，`--csv` 輸出取樣後的整份編舞（從靜止開始，用法見 README）。起點 → 第一個姿態的那一段不在檢查範圍內。
+**`choreo_check`**：離線列出各軌道的時間範圍、各 joint 的範圍 / 限位 / 峰值速度與建議的 `max_steps`（峰值速度 / rate × 1.2），`--urdf` 檢查限位與姿態中的 joint 名稱，`--csv` 輸出取樣後的整份編舞（從靜止開始，用法見 README），`--arm-config <arm_ik.yaml>` 以 `--rate` 取樣檢查整條路徑的手臂碰撞並列出所有碰撞區間（`--nominal <joint>=<rad>` 對應 `collision.nominal_*`）。起點 → 第一個姿態的那一段不在檢查範圍內。
 
 **編輯、試播與發佈**：腳本在外部工具（UI）編輯。試播是把內容直接放進 `play_choreo` 的 goal；正式的舞曲用 `publish_choreo` 發佈到機器人端的舞曲庫，表演時 BT 只依名稱播放，不依賴編輯工具（流程見 [§2.2](#22-switchgroupcontroller)，給 UI 開發的介面說明見 [CHOREOGRAPHER.md](CHOREOGRAPHER.md)）。
 
 **串接多段腳本**：BT 以 `PlayChoreo wait_finished="true"` 依序播放（[trees/choreo_demo.xml](../src/graphen_bt/trees/choreo_demo.xml)）；同一段可能被重複觸發時用 `on_same="restart_if_finished"`，播放中重複送出的指令會被吃掉。同一時間只播放一個 Motion：一份腳本內的軌道可以任意重疊，但兩份腳本不能同時播。
+
+### 2.13 手臂 IK（graphen_arm_ik）
+
+原始碼：[arm_config.hpp](../src/graphen_arm_ik/include/graphen_arm_ik/arm_config.hpp)、[arm_model.hpp](../src/graphen_arm_ik/include/graphen_arm_ik/arm_model.hpp)、[arm_ik.hpp](../src/graphen_arm_ik/include/graphen_arm_ik/arm_ik.hpp)、[arm_ik_server.cpp](../src/graphen_arm_ik/src/arm_ik_server.cpp)、[arm_servo_algorithm.cpp](../src/graphen_arm_ik/src/arm_servo_algorithm.cpp)、[arm_ik_check.cpp](../src/graphen_arm_ik/tools/arm_ik_check.cpp)
+類型：核心函式庫（不依賴 rclcpp，依賴 MuJoCo 3.11）+ `arm_ik_server` node + `LocomotionAlgorithm` plugin（`graphen_arm_ik/ArmServoAlgorithm`）+ 離線自我檢查。
+
+用途：以「手腕位姿 + 手肘」指定手臂姿態，三個功能共用同一份演算法與設定：
+
+| 功能 | 入口 | 碰撞時 |
+|---|---|---|
+| 示教 | MuJoCo viewer（[§2.10](#210-mujocosystemgraphen_mujoco)）→ `arm_ik_server` `~/solve`（`local: true`） | 警告（目標變黃），仍可拖曳 |
+| 指令 | 外部 UI（ROS）→ `~/solve` → 7 個關節角 → 寫進編舞腳本 → `PlayChoreo` / `PublishChoreo`；choreographer 仍只吃關節角 | `success: false`（解仍回傳）；播放 / 發佈時再檢查整條路徑 |
+| 視覺伺服 | 外部（視覺）→ controller `~/pose_targets` → 系統模式 `arm_servo`（`ArmServoAlgorithm`），每個規劃週期一步 | 該手臂不走這一步（停住），log 列出 body 對 |
+
+**設定**：`<模型套件>/config/arm_ik.yaml`（`ti5_170a_graphen`、`ti5_t170_description`、`fb70`、`graphen_aiterone_ny_description`），格式見 `arm_config.hpp`：`mjcf`、`root_body`（目標的座標系，`WAIST_P_S`）、各手臂的 7 個 joint / tip / elbow / shoulder body / `tip_offset` / `swivel_reference` / `seed`、`solver.*`、`collision.*`、`scene`（預留的環境障礙物，基座座標系）。bringup 的 `arm_ik_config:=auto` 依 `robot` 選擇並帶入 server、`choreo.arm_ik_config` 與所有 plugin 為 `ArmServoAlgorithm` 的模式（產生一個暫存參數檔，放在 `scenario_params` 之前）；fb70 的 MJCF 在開發機無法載入，`auto` 時停用（`TODO(verify-on-hw)`）。
+
+**模型**（`ArmModel`，唯讀、可共用；`load_cached()` 依路徑在 process 內只載入一次）：以 MjSpec 修改 MJCF（不改檔案）——移除 free joint（基座固定，只描述機器人相對自己的姿態）、移除所有 keyframe、`include_floor: false` 時移除地面、加入 `scene`。MJCF 原本只讓機器人和地面碰撞（`make_mjcf.py`），載入後重設碰撞位元：手臂子樹 contype 1 / conaffinity 3、其他 contype 2 / conaffinity 1，只產生「與手臂有關」的接觸，並重算 body 層級的位元（broadphase 用的是它）。運動鏈上相距 ≤ `ignore_within_links`（2）的 body 對、初始姿態就接觸的 body 對（`allow_initial_contacts`）與 `allowed_pairs` 不算碰撞。MJCF 與 URDF 的手臂 FK 已比對一致（ti5_170a / ti5_t170，200 組隨機姿態，0.000 mm）。
+
+**演算法**（`ArmIk`，每個使用端自己的 `mjData`）：
+- 末端 6D 誤差（位置 + 姿態旋轉向量 × `orientation_weight`）以 damped least squares 求解，每步 clamp 到限位（扣掉 `joint_limit_margin`）與 `max_step`。
+- **swivel**：手肘繞「肩 → 腕」軸的角度，`atan2((ref×v)·axis, ref·v)`，`ref` 為 `swivel_reference`（root_body 座標系，預設 −z），**軀幹座標的絕對角度**。7 DOF 對 6D 剩 1 維 null space，以 SVD 取最後一個右奇異向量 `n`，沿 `n` 走純量步長讓手肘接近目標方向（不用 `pinv(J_elbow·N)`：rank 1，數值雜訊的小奇異值會被放大）。末端優先：swivel 做不到時 `swivel_reached` 為 false。
+- `solve()`（指令 / 示教，non-RT）：迭代到收斂；從 seed 解不到時以固定亂數種子的起點重試 `restarts` 次，**只有等級較高的解才取代**（末端收斂且 swivel 到達 > 末端收斂 > 沒有收斂），同等級保留 seed 的解，不會無故跳到另一個分支；`local: true`（示教）不重試。實測 ti5_170a：200/200 收斂、平均 1–2 ms。
+- `step()`（伺服，不配置記憶體）：速度 = gain × 誤差，單一 joint 不超過 `max_joint_velocity`，之後還有模式的 `max_steps`。實測每步 3–6 µs，碰撞檢查約 0.1 ms。
+- `check_collisions()`：`mj_kinematics` + `mj_collision`，同一對 body 合併、保留最深的穿透。
+
+**`arm_ik_server`**（只做計算，不送任何指令）：參數 `arm_ik_config`、`joint_states_topic`（預設 `/joint_states`）。`~/solve`（`SolveArmIk`）：目標的 `frame_id` 必須是 `root_body`（空字串視同）；`seed` 空 = `state` 中的目前角度（沒有時用設定檔的 seed）；`state` 空 = 最新的 `/joint_states`（腰、腿、頭影響 root_body 與碰撞）。未收斂、swivel 做不到或解有碰撞時 `success: false`，但解仍回傳。`~/forward`（`ArmForward`）：關節角 → 末端位姿 + swivel + 碰撞。`~/tcp_jog`（`TcpJog`）：末端單步，以 `reference`（UI 上一步的 positions，空 = 目前角度）的 forward 為基準沿一個軸加上 delta（平移 / 旋轉的座標系為手腕或 root_body；旋轉在手腕座標右乘、root 座標左乘），平移 / 旋轉時維持基準的 swivel，ELBOW 只改 swivel；以 `local`（只從 reference 迭代）求解，回傳新的關節角與 `max_joint_delta`，UI 再以一個 keyframe 的編舞播放。基準由 UI 傳入而不是讀量測值：PD / 實機的量測有重力造成的穩態誤差，連續單步會逐步下沉。單執行緒 executor，不需要鎖。
+
+**伺服**（`arm_servo` 模式）：controller 把 `~/pose_targets`（`ArmPoseTarget`：`header.frame_id` 必須等於 `pose_targets.frame`、`arm`、`pose`、`swivel`）放進 `RobotState::pose_targets`。plugin 每週期把量測的全身角度寫進模型、從 planner 的命令位置（已經過 `max_steps`，不會累積落後）走一步；下一步會產生新的碰撞或讓碰撞更深時不走（已經在碰撞中的手臂仍可往外移）；目標 inactive 時保持；swivel 為 NaN 時維持進入模式時的 swivel（手肘不會在 null space 中漂移）。`arm_ik_config` 空字串時 configure 只 warn，進入時才失敗，不讓整個 controller configure 失敗。相機 → 軀幹的 tf 由發送端完成。
+
+**`arm_ik_check`**：`ros2 run graphen_arm_ik arm_ik_check <arm_ik.yaml>`，列出允許的初始接觸，以隨機可達目標做來回測試（收斂率、時間）、swivel ±20° 測試、碰撞探測與伺服測試；收斂率 ≥ 90% 且探測到碰撞時回傳 0。新增模型或修改 `arm_ik.yaml` 後執行。
 
 ---
 
@@ -924,7 +995,7 @@ IfThenElse "WalkEnabled"
 | D29 | 「不可中斷」是被播放的東西的屬性（系統模式的 `interruptible: false`、編舞腳本的 `interruptible`…，見 D37），在 controller 判斷；停止類模式以 `preempt` 永遠可以切入（hold 預設 true） | BT 只能管住自己送出的指令，手動 action、`~/mode` 或其他節點會繞過它；某些動作途中被切換有實機風險，保證必須和動作綁在一起。拒絕而不是延後切換，避免「指令已接受但還沒生效」的中間狀態。hold 預設 preempt，是為了忘了設定時停止仍然有效 |
 | D30 | 編舞的第一段帶入切換當下的命令速度（五次 Hermite），為此 `RobotState` 增加 `commanded_velocities` | 播放途中切換時，從靜止開始的曲線等於命令在一個週期內煞停（實測加速度約 38 rad/s²），觀感是頓一下，實機上是電流尖峰與衝擊。用命令速度而不是量測速度：與命令位置一致、沒有雜訊，切換前後的命令曲線因此連續 |
 | D27 | 「模式播完了」由 `Motion::status()` → planner 的 `progress()`（附序號）→ 播放類 action 的 `wait_until_finished` 回報；cancel 只停止等待 | BT 要依序播放多段動作，用固定時間的 `Wait` 會和腳本長度脫鉤。序號用來分辨「這一次播放」與之後的切換（被取代時 abort，不會誤報成功）。沿用同一個 action 而不是新增 topic：預設值維持原本「切換後立即成功」，既有的 tree 不受影響。cancel 不停止動作，是因為「停下來」本身就是切到另一個模式，由呼叫端決定切到哪裡比較明確 |
-| D31 | 模型以 `robot:=` 選擇（取代 `mujoco_robot`），同時決定 URDF 本體、MJCF 與 PD 預設增益，實機也跟著它走；子群組設定依控制方式分成 `position_common.yaml` / `pd_common.yaml`；PD 增益放在模型套件、以關節為 key（`joint_gains.<joint>.*`） | 原本 `robot_description` 不論模型都是 `ti5_170a_graphen` 的本體，與 ti5_t170 的 MJCF 有 6 軸軸向相反、極限不同，BVH 重定向與實際物理不一致；位置模式的接線在 mock / mujoco / real 三份檔案逐字重複；增益依「硬體」分檔（`mujoco_pd_<robot>.yaml`、`real_pd.yaml`）且綁定 controller 名稱，但增益本質上屬於模型。改成依控制方式與模型組合後，新增模型只要在模型套件放增益檔、在 launch 的 `robots` 加一列；改子群組分組不必改增益檔。t170a 一併移除。預設 `ti5_170a`（沿用原本的 URDF，所有 hardware 相同）；ti5_t170 的軸向與極限在實機確認後再考慮改預設 |
+| D31 | 模型以 `robot:=` 選擇（取代 `mujoco_robot`），同時決定 URDF 本體、MJCF 與 PD 預設增益，實機也跟著它走；子群組設定依控制方式分成 `position_common.yaml` / `pd_common.yaml`；PD 增益放在模型套件、以關節為 key（`joint_gains.<joint>.*`） | 原本 `robot_description` 不論模型都是 `ti5_170a_graphen` 的本體，與 ti5_t170 的 MJCF 有 6 軸軸向相反、極限不同，BVH 重定向與實際物理不一致；位置模式的接線在 mock / mujoco / real 三份檔案逐字重複；增益依「硬體」分檔（`mujoco_pd_<robot>.yaml`、`real_pd.yaml`）且綁定 controller 名稱，但增益本質上屬於模型。改成依控制方式與模型組合後，新增模型只要在模型套件放增益檔、在 launch 的 `robots` 加一列；改子群組分組不必改增益檔。t170a 一併移除。CAN 配線屬於機台，預設用 `graphen_bringup/config/can_driver_config.json`，只有接線不同的機台（`aiterone_ny`）在 `robots` 的 `can_config` 指定模型套件內的檔案。預設 `ti5_170a`（沿用原本的 URDF，所有 hardware 相同）；ti5_t170 的軸向與極限在實機確認後再考慮改預設 |
 | D32 | 設定、能力、內容分開：`controllers.yaml` 只留硬體、安全上限與系統模式；policy 在 policy 庫（跟著程式碼版控）；編舞在機器人端的舞曲庫、BVH 在 BVH 目錄 | 原本表演內容寫在機器人設定裡：改內容要重啟、會和安全設定混在同一個檔案，而且 `walk`、`arm_demo` 這種模式其實是「類型 + 某個檔案」。分開之後三種人各管各的東西，內容可以在執行時更換 |
 | D33 | 模式 = 類型，每種類型一個 action / BT 節點（`SwitchMode`、`PlayChoreo`、`PlayBvh`、`RunPolicy`），共通的選項 / 結果 / feedback 用巢狀 msg 定義一次（`Playback*.msg`） | 指令需要帶「每次都不一樣的資料」（播哪一段、試播的內容、循環與速度）時，塞進單一的 `SwitchMode` 會讓它長出只對某一種模式有效的欄位。獨立的 action 讓 goal 可以各自定義，BT 節點的名稱與有型別的 port 也直接表達意圖；共通語意只有一份，不會各自走樣 |
 | D34 | 所有入口都經過同一個 `PlaybackArbiter`；`SwitchMode` 保留給系統模式 | 不可中斷、`preempt`、互相取代必須對所有類型一致，否則從另一個入口就能繞過。停止走系統模式：不需要載入、不查任何庫、不會因為內容有誤而失敗，是相依最少的路徑 |
@@ -932,6 +1003,13 @@ IfThenElse "WalkEnabled"
 | D36 | 編舞以編輯端為主：帶內容試播，正式的舞曲發佈到機器人端的舞曲庫，BT 只能依名稱播放；發佈與播放用同一套檢查；不留歷史、沒有刪除介面 | 編輯要能立刻試，表演則不能依賴編輯工具在線。機器人端只保存發佈過的快照，方向固定（編輯端 → 機器人），不會有兩邊各改一份的問題；以 sha256 讓編輯端比對是否已同步 |
 | D37 | 編舞的不可中斷寫在腳本（`interruptible`），機器人端的上限（`max_steps`、速度比例…）只在 `controllers.yaml` | 哪一段表演要保護是內容的性質，由編排的人決定；能動多快是機器人的性質，內容不能放寬。為此 `LocomotionAlgorithm` 增加 `interruptible()` |
 | D38 | 「同一個」的判斷包含內容的版本（編舞、policy 設定檔的 sha256；BVH 的播放選項） | 重新發佈之後，同名的舞曲應該被當成新的內容而切換過去，不是被 `ON_SAME_IGNORE` 吃掉；每次播放也因此在 log 留下內容的版本 |
+| D40 | 手臂 IK 與碰撞都用 MuJoCo（3.11，綁定版本），實機路徑也依賴它；一份 C++ 實作給示教、指令、伺服共用 | 快速實作版：MJCF 有完整的 mesh 碰撞幾何，URDF 幾乎沒有；全身 `mj_kinematics + mj_collision` 約 0.1 ms，100 Hz 可接受，不需要另外引入 pinocchio / FCL。實機本來就需要在 MuJoCo 驗證，綁定不會是額外負擔。演算法只有一份，示教看到的姿態與指令 / 伺服得到的一致 |
+| D41 | elbow 以「軀幹座標的絕對 swivel 角」表示；碰撞只偵測不閃避（指令拒絕、伺服停住、示教警告） | 絕對角度讓同一個數值在任何末端位置代表同一個手肘方向，UI 與視覺端容易理解；相對角度會隨末端移動而漂移。閃避需要規劃，超出快速版的範圍；偵測已經足以避免最危險的情況 |
+| D42 | 指令功能不改 choreographer 的格式（仍為關節角）：UI 呼叫 `arm_ik_server` 得到關節角再寫進腳本；choreographer 另外檢查整條插值路徑的碰撞 | 腳本格式不變，既有的編輯、發佈、檢查流程都不受影響；IK 的分支選擇在編輯時就決定並由 UI 看到，播放時不會因為 IK 而產生不同的姿態。兩個 keyframe 都不碰撞，中間的插值仍可能穿過身體，所以碰撞檢查要放在 choreographer、以實際播放的曲線取樣 |
+| D43 | 影子試播在 controller 內部空跑（`PlannerCore` 與實際播放共用、理想追蹤），而不是另開一套 MuJoCo bringup | 同一個演算法、同一份參數與 `max_steps`、同一個碰撞模型，起點自動是機器人當下的狀態（不用同步）；不會和實機的 controller 撞名。代價是只有運動學：看不到力矩飽和與追蹤誤差（MuJoCo 模型的質量分布本來就不可靠），閉環的 policy / plugin 空跑沒有意義，所以只開放給編舞 |
+| D44 | 「試播通過才上實機」的閘門放在 controller（`shadow_token`：sha256 + 起點 + 有效期），由 `choreo.shadow.require` 決定是否強制 | 閘門在客戶端的話，其他 client 可以繞過；起點相同才代表試播的路徑就是實際的路徑（第一段從當下位置出發）。強制會連 BT 播放已發佈的舞曲也要求 token，所以預設關閉、實機設定時開啟 |
+| D46 | 示教模式中所有 `PlayChoreo` 都是影子播放（`<mode>.shadow_playback`），帶 token 也不例外，上機必須先切離示教 | 示教時 UI 的「試播」不會把機器人帶離示教、也不會讓手臂突然動；上機變成明確的兩步（切模式、帶 token 播放），不會因為誤帶 token 而在示教中動作。用模式屬性表示，和 `interruptible` / `preempt` 同一種寫法，其他模式也能使用 |
+| D45 | viewer 只做顯示、拖曳與 IK，示教由 controller 的模式（`teach`）觸發，keyframe 與腳本交給外部程式 | 示教時機器人必須停住（hold），用模式表達最直接，也讓試播與正式播放在同一個靜止的起點；viewer 不綁定編舞格式，外部的編輯工具可以自由組合姿態與時間 |
 | D39 | policy 的參數可以用 controller 參數 `<policy>.<鍵>` 覆寫；啟動時以 `default_policy` 在 configure 階段載入 | 情境 launch 只需要改一兩個值（例如 `entry_speed`），不必複製整份訓練常數；自由站立的模擬必須從第一個週期就由 policy 接手，而且設定有誤要在啟動時發現 |
 
 ---
@@ -1015,11 +1093,14 @@ IfThenElse "WalkEnabled"
 - **所有 BVH 共用同一組 `bvh.max_steps`**：目前依步行的檔案設定；動作差異很大的檔案可能需要改成每個檔案自己的設定。
 - **policy 沒有進入條件檢查**：機身已經傾斜或倒下時仍然可以 `run_policy`，由 policy 自己面對。
 - **載入是序列化的**：播放用的 callback group 一次只處理一個要求，載入 policy 的那一兩百毫秒內，其他內容的播放指令與 service 要等它結束。`~/switch_mode`（包括 stop）與 `~/mode` 不在這個 group，不受影響。
-- **TODO：`package://` 解析重複**：`graphen_controllers`（`library_utils`）、`graphen_rl_policy`（onnx）、`graphen_choreographer`（腳本）各有一份相同的邏輯，可以抽成共用元件。
+- **TODO：`package://` 解析重複**：`graphen_controllers`（`library_utils`）、`graphen_rl_policy`（onnx）、`graphen_choreographer`（腳本）、`graphen_arm_ik`（`resolve_package_path`，公開）各有一份相同的邏輯，可以抽成共用元件。
+- **手臂 IK 的限制**：碰撞只偵測不閃避；`scene` 只能在設定檔中靜態定義（沒有動態更新介面）；編舞的路徑碰撞在 configure 時以 `nominal` 姿態代表腰 / 腿 / 頭，播放時差很多的話 keyframe 之間的檢查是近似的；`tip_offset`（工具點）、伺服增益、fb70 的 `arm_ik.yaml` 都待實機確認（`TODO(verify-on-hw)`）。swivel 參考方向預設為軀幹 −z，手臂自然下垂時數值約 ±118°（不是 0），各手臂可以用 `swivel_reference` 改。
+- **`arm_ik.yaml` 修改後要重新啟動**：`ArmModel::load_cached()` 在 process 內只載入一次。
 - **TODO：機身線速度估測**：目前的 `ImuLeakyEstimator` 只用 IMU，線速度只能當短時間的近似值。需要準確的線速度時（例如 RL policy 的 observation），改寫一個融合 IMU 與腿部運動學（足底接觸判斷）的 `BaseStateEstimator` plugin，換掉 `base_estimator.plugin` 即可。
 - **速度前饋與增益只有 PdController 使用**：`PositionController` 與 `Ti5Hardware` 只有 position 介面，位置模式下 `JointCommand::velocities` / `kp` / `kd` 不會生效。實機要使用 PD 需要先驗證 Ti5 的電流模式（`TODO(verify-on-hw)`）。
 - **BT 的方向與 controller 的模式可能不一致**：controller 被 reconfigure 回到啟動時的動作時，BT 的 `{mode}` 不會跟著改變，要等到下一次換向（或切換 `gp_enable_*`）才會重新同步。
 - **planner 的速度受 non-RT 排程影響**：max_steps 是「每週期」的量，planner thread 被延遲時，實際速度會變慢（WSL 在高負載下觀察得到）。BVH 的播放時間以實際經過時間推進，不受影響，但輸出仍受 max_steps 限制。
+- **影子試播只有運動學、只支援編舞**：理想追蹤看不到力矩飽和、追蹤誤差與動力學造成的碰撞；BVH 也是開環的，之後可以開放（`BvhSource` 設定 `supports_shadow`）。試播在播放用的 callback group 同步執行，長的編舞（數十秒、碰撞檢查開啟）會讓同一個 group 的其他要求等待。
 - **BVH 步態是開環播放**：沒有平衡控制，浮動基座（root 位移、`BASE_S` 旋轉）被忽略；實機只能在吊掛等安全條件下使用。
 - **BVH 超出 T170 限位**：`t170wk_walk1_subject1.bvh` 的髖 roll（約 ±0.6 rad）、踝等會超出 URDF 限位而被截斷，組的殘差因此不為 0（約 0.3~0.6 rad）。
 - **BVH 播放的延遲**：插補在子群組進行，輸出約晚一幀（1/24 s ≈ 42 ms）；開環播放沒有影響，切換模式的反應也會晚最多一幀。

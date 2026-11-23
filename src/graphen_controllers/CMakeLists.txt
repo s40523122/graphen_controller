@@ -17,6 +17,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclcpp_action
   rclcpp_lifecycle
   realtime_tools
+  sensor_msgs
   std_msgs
 )
 
@@ -36,10 +37,13 @@ add_library(${PROJECT_NAME} SHARED
   src/library_utils.cpp
   src/locomotion_planner.cpp
   src/parameter_sources.cpp
+  src/planner_core.cpp
   src/playback_arbiter.cpp
   src/plugin_factory.cpp
   src/plugin_motion.cpp
   src/policy_source.cpp
+  src/shadow_gate.cpp
+  src/shadow_runner.cpp
   src/switch_group_controller.cpp
   src/sub_group_controller/pd_controller.cpp
   src/sub_group_controller/position_controller.cpp

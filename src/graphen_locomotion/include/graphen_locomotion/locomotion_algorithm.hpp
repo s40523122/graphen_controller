@@ -30,6 +30,10 @@ struct Context {
   // 這個模式實際生效的每週期最大移動量（<mode>.max_steps，沒有設定時為 planner_max_steps），
   // 順序同 joint_names。演算法可用來確認自己的輸出不會被限速；不由 controller 建立時可能為空
   std::vector<double> max_steps{};
+  // RobotState::pose_targets 的名稱（controller 的 pose_targets.names，例如 [left, right]）與座標系
+  // （pose_targets.frame）；沒有設定時為空
+  std::vector<std::string> pose_target_names{};
+  std::string pose_target_frame{};
 };
 
 // 外部 locomotion 演算法的 plugin 基類（pluginlib）。

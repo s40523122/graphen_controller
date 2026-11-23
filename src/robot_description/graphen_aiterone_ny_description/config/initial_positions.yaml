@@ -1,0 +1,28 @@
+# scripts/make_mjcf.py 產生 MJCF 的 home keyframe（與基座高度）用的姿態 [rad]，未列出的關節為 0。
+# 來源：NY 的 graphen_aiterone_ny_bringup/config/initial_positions.yaml（ti5_graphen_moveit2_config）。
+# graphen_bringup 的 ros2_control 初始值不讀這份，用的是頂層 xacro 的 initial_positions_file
+initial_positions:
+  # Left Arm
+  L_SHOULDER_P: 0.0
+  L_SHOULDER_R: 0.0
+  L_SHOULDER_Y: 0.0
+  L_ELBOW_Y: 0.0
+  L_WRIST_P: 0.0
+  L_WRIST_Y: 0.0
+  L_WRIST_R: 0.0
+  # Right Arm
+  R_SHOULDER_P: 0.0
+  R_SHOULDER_R: 0.0
+  R_SHOULDER_Y: 0.0
+  R_ELBOW_Y: 0.0
+  R_WRIST_P: 0.0
+  R_WRIST_Y: 0.0
+  R_WRIST_R: 0.0
+  # Waist
+  WAIST_Y: 0.0
+  WAIST_R: 0.0
+  WAIST_P: 0.0
+  # Head
+  NECK_Y: 0.0
+  NECK_R: 0.0
+  NECK_P: 0.0

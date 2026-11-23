@@ -32,6 +32,7 @@ public:
     }
     return finished_ ? MotionStatus::kFinished : MotionStatus::kRunning;
   }
+  std::string failure_reason() const override {return faulted_ ? failure_reason_ : std::string{};}
 
 private:
   // 記錄演算法的例外並進入保持狀態
@@ -42,6 +43,7 @@ private:
   const std::string name_;
   const locomotion::Logger log_;
   bool faulted_{false};
+  std::string failure_reason_;  // 最近一次故障的原因（"<stage>: <what>"）
   bool finished_{false};  // 最近一次 update() 之後演算法的 finished()
 };
 

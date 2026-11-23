@@ -76,6 +76,7 @@ PlaybackRequest ChoreoSource::build(
   request.detail = source + ", sha256 " + short_hash(sha256);
   request.motion = std::move(created.motion);
   request.policy.interruptible = created.algorithm->interruptible();
+  request.content_sha256 = sha256;
   return request;
 }
 

@@ -1,0 +1,78 @@
+<?xml version="1.0"?>
+<!--
+  Graphen AiterOne NY 整機運動學模型（不含 ros2_control）。
+  - 本檔也會在建置時被展開成 graphen_aiterone_ny.urdf，提供給 ti5_hardware 讀取關節限制（urdf_path），
+    因此同目錄的 include 一律使用相對路徑，讓本套件尚未安裝時也能展開。
+  - 手部引用 dexterous_hand_description，不在本套件重複維護。
+-->
+<robot name="graphen_aiterone_ny" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="prefix" default=""/>
+
+  <xacro:property name="prefix"   value="$(arg prefix)"/>
+  <xacro:property name="mesh_dir" value="package://graphen_aiterone_ny_description/meshes"/>
+
+  <!--
+    手部底座掛載在 L 型轉接板末端面（R/L_WRIST_R_S 座標）：
+    - hand_mount_offset：側向距離，L 型板網格算出的端面在 |y| = 68.5 mm（左 68.6、右 68.3）
+    - hand_mount_x：前後位置，沿用 ti5_t170 的手部中心線（端面中心約 -5.2 mm）
+    - 方向沿用 NY 已在實機驗證的版本（左右對稱，大拇指朝前）
+    TODO(verify-on-hw): 實機量測手腕軸心到手部底座的距離後微調 hand_mount_offset
+  -->
+  <xacro:arg name="hand_mount_offset" default="0.0685"/>
+  <xacro:arg name="hand_mount_x"      default="-0.0065"/>
+  <xacro:property name="hand_mount_offset" value="$(arg hand_mount_offset)"/>
+  <xacro:property name="hand_mount_x"      value="$(arg hand_mount_x)"/>
+  <xacro:property name="hand_mount_pitch"  value="1.5708"/>
+
+  <xacro:include filename="materials.xacro"/>
+  <xacro:include filename="base/base.urdf.xacro"/>
+  <xacro:include filename="legs/left_leg.urdf.xacro"/>
+  <xacro:include filename="legs/right_leg.urdf.xacro"/>
+  <xacro:include filename="arms/left_arm.urdf.xacro"/>
+  <xacro:include filename="arms/right_arm.urdf.xacro"/>
+  <xacro:include filename="head/head.urdf.xacro"/>
+  <xacro:include filename="$(find dexterous_hand_description)/urdf/left_hand.xacro"/>
+  <xacro:include filename="$(find dexterous_hand_description)/urdf/right_hand.xacro"/>
+
+  <!-- 世界參考點 -->
+  <link name="${prefix}base_link"/>
+
+  <joint name="${prefix}base_link_to_base_s" type="fixed">
+    <parent link="${prefix}base_link"/>
+    <child  link="${prefix}BASE_S"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- 軀幹：BASE_S + WAIST_Y/R/P -->
+  <xacro:t170_base prefix="${prefix}" mesh_dir="${mesh_dir}"/>
+
+  <!-- 左腿：L_HIP_P/R/Y → L_KNEE_P → L_ANKLE_P/R -->
+  <xacro:t170_left_leg prefix="${prefix}" mesh_dir="${mesh_dir}" parent="${prefix}BASE_S"/>
+
+  <!-- 右腿：R_HIP_P/R/Y → R_KNEE_P → R_ANKLE_P/R -->
+  <xacro:t170_right_leg prefix="${prefix}" mesh_dir="${mesh_dir}" parent="${prefix}BASE_S"/>
+
+  <!-- 左臂：L_SHOULDER_P/R/Y → L_ELBOW_Y → L_WRIST_P/Y/R -->
+  <xacro:t170_left_arm prefix="${prefix}" mesh_dir="${mesh_dir}" parent="${prefix}WAIST_P_S"/>
+
+  <!-- 右臂：R_SHOULDER_P/R/Y → R_ELBOW_Y → R_WRIST_P/Y/R -->
+  <xacro:t170_right_arm prefix="${prefix}" mesh_dir="${mesh_dir}" parent="${prefix}WAIST_P_S"/>
+
+  <!-- 頭部：NECK_Y → NECK_P → NECK_R + 相機 -->
+  <xacro:t170_head prefix="${prefix}" mesh_dir="${mesh_dir}" parent="${prefix}WAIST_P_S"/>
+
+  <!-- 靈巧手 -->
+  <xacro:left_hand
+    prefix="${prefix}"
+    parent="${prefix}L_WRIST_R_S"
+    xyz="${hand_mount_x} ${hand_mount_offset} 0"
+    rpy="${-hand_mount_pitch} ${hand_mount_pitch} 0"/>
+
+  <xacro:right_hand
+    prefix="${prefix}"
+    parent="${prefix}R_WRIST_R_S"
+    xyz="${hand_mount_x} ${-hand_mount_offset} 0"
+    rpy="${hand_mount_pitch} ${hand_mount_pitch} 0"/>
+
+</robot>

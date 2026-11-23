@@ -31,6 +31,9 @@ public:
     double rate_hz{0.0};
     std::string robot_description;  // 沒有時為空字串
     rclcpp::Logger logger{rclcpp::get_logger("plugin_factory")};
+    // controller 的 pose_targets.names / pose_targets.frame（RobotState::pose_targets 的順序與座標系）
+    std::vector<std::string> pose_target_names;
+    std::string pose_target_frame;
   };
 
   struct Created {

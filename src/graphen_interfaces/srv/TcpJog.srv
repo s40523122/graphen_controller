@@ -1,0 +1,35 @@
+# 手臂末端（TCP）單步：以 reference 的姿態為基準，沿一個軸移動 delta，回傳新的 7 個關節角
+# （graphen_arm_ik 的 arm_ik_server，~/tcp_jog）。只做計算，不送任何指令；UI 把 positions 寫成 keyframe
+# 再以 PlayChoreo 播放。
+# 平移 / 旋轉時手肘維持 reference 的 swivel（軀幹座標的絕對角度）；AXIS_ELBOW 只改 swivel，末端不動。
+# 未收斂、swivel 做不到、或解的姿態有碰撞時 success 為 false（解仍然回傳）
+uint8 AXIS_X=0
+uint8 AXIS_Y=1
+uint8 AXIS_Z=2
+uint8 AXIS_ROLL=3                    # 繞 x
+uint8 AXIS_PITCH=4                   # 繞 y
+uint8 AXIS_YAW=5                     # 繞 z
+uint8 AXIS_ELBOW=6                   # swivel
+
+uint8 FRAME_TOOL=0                   # 手腕（tip_body + tip_offset）目前的座標軸
+uint8 FRAME_ROOT=1                   # 軀幹（root_body，WAIST_P_S）的座標軸
+
+string arm                           # arm_ik.yaml 中的手臂名稱（例如 left / right）
+uint8 axis
+float64 delta                        # 平移為 m，旋轉與 elbow 為 rad
+uint8 frame                          # 平移與旋轉的座標系（AXIS_ELBOW 不使用）
+float64[] reference                  # 基準姿態（7 個，順序同 joint_names），通常是上一次命令的 positions；
+                                     # 空 = state 中的目前角度
+sensor_msgs/JointState state         # 其他關節（腰、腿、頭）的角度；空 = server 收到的最新 /joint_states
+---
+bool success
+string message
+string[] joint_names                 # 該手臂的 7 個 joint
+float64[] positions                  # 新的關節角（rad）
+float64 max_joint_delta              # 與 reference 相比最大的單一 joint 變化量（rad），UI 用來估算需要的時間
+geometry_msgs/PoseStamped target     # 這一步的末端目標（root_body 座標）
+float64 swivel                       # 解的 swivel（rad；無定義時為 NaN）
+float64 position_error               # m
+float64 orientation_error            # rad
+float64 swivel_error                 # rad
+string[] collisions                  # 解的姿態中與這隻手臂有關的碰撞，"bodyA|bodyB"

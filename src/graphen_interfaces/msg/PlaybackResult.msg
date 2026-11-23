@@ -13,3 +13,6 @@ string item
 # 回傳當下的 state interface 快照（名稱與數值一一對應）
 string[] interface_names
 float64[] values
+
+# 影子試播（options.dry_run）通過時的憑證，正式播放時填入 options.shadow_token；其他情況為空
+string shadow_token

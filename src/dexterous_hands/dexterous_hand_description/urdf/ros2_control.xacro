@@ -3,10 +3,11 @@
   <!-- ═══════════════════════════════════════════
        右手 ros2_control 硬體介面
   ════════════════════════════════════════════ -->
+  <!-- serial_port / hand_id / baudrate 僅在實機模式使用；預設值沿用原本寫死的設定 -->
   <xacro:macro name="right_hand_ros2_control"
-               params="use_fake_hardware serial_port:=/dev/ttyUSB0 hand_id:=1 baudrate:=115200">
+    params="use_fake_hardware prefix:='' serial_port:=/dev/ttyUSB0 hand_id:=1 baudrate:=115200">
 
-    <ros2_control name="right_hand_hardware" type="system">
+    <ros2_control name="${prefix}right_hand_hardware" type="system">
       <hardware>
         <xacro:if value="${use_fake_hardware}">
           <plugin>mock_components/GenericSystem</plugin>
@@ -20,18 +21,7 @@
       </hardware>
 
       <!-- 拇指 -->
-      <joint name="right_thumb_yaw_joint">
-        <command_interface name="position"/>
-        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
-        <state_interface name="velocity"/>
-        
-        <state_interface name="effort"/>
-        <state_interface name="current"/>
-        <state_interface name="error"/>
-        <state_interface name="status"/>
-        <state_interface name="temperature"/>
-      </joint>
-      <joint name="right_thumb_mcp_joint">
+      <joint name="${prefix}right_thumb_yaw_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -41,7 +31,17 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="right_thumb_dip_joint">
+      <joint name="${prefix}right_thumb_mcp_joint">
+        <command_interface name="position"/>
+        <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+        <state_interface name="current"/>
+        <state_interface name="error"/>
+        <state_interface name="status"/>
+        <state_interface name="temperature"/>
+      </joint>
+      <joint name="${prefix}right_thumb_dip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -53,7 +53,7 @@
       </joint>
 
       <!-- 食指 -->
-      <joint name="right_index_yaw_joint">
+      <joint name="${prefix}right_index_yaw_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -63,7 +63,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="right_index_mcp_joint">
+      <joint name="${prefix}right_index_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -73,7 +73,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="right_index_pip_joint">
+      <joint name="${prefix}right_index_pip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -85,7 +85,7 @@
       </joint>
 
       <!-- 中指 -->
-      <joint name="right_middle_yaw_joint">
+      <joint name="${prefix}right_middle_yaw_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -95,7 +95,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="right_middle_mcp_joint">
+      <joint name="${prefix}right_middle_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -105,7 +105,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="right_middle_pip_joint">
+      <joint name="${prefix}right_middle_pip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -117,7 +117,7 @@
       </joint>
 
       <!-- 無名指 -->
-      <joint name="right_ring_mcp_joint">
+      <joint name="${prefix}right_ring_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -127,7 +127,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="right_ring_pip_joint">
+      <joint name="${prefix}right_ring_pip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -139,7 +139,7 @@
       </joint>
 
       <!-- 小指 -->
-      <joint name="right_pinky_mcp_joint">
+      <joint name="${prefix}right_pinky_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -149,7 +149,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="right_pinky_pip_joint">
+      <joint name="${prefix}right_pinky_pip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -162,49 +162,49 @@
 
       <!-- 🌟 右手觸覺感測器 (依照 C++ 陣列 0~7 的順序排列) -->
       <!-- [0] 小拇指 -->
-      <sensor name="right_pinky_tactile">
+      <sensor name="${prefix}right_pinky_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [1] 無名指 -->
-      <sensor name="right_ring_tactile">
+      <sensor name="${prefix}right_ring_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [2] 中指 -->
-      <sensor name="right_middle_tactile">
+      <sensor name="${prefix}right_middle_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [3] 食指 -->
-      <sensor name="right_index_tactile">
+      <sensor name="${prefix}right_index_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [4] 大拇指 -->
-      <sensor name="right_thumb_tactile">
+      <sensor name="${prefix}right_thumb_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [5] 掌心右 -->
-      <sensor name="right_palm_tactile_right">
+      <sensor name="${prefix}right_palm_tactile_right">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [6] 掌心中 -->
-      <sensor name="right_palm_tactile_middle">
+      <sensor name="${prefix}right_palm_tactile_middle">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [7] 掌心左 -->
-      <sensor name="right_palm_tactile_left">
+      <sensor name="${prefix}right_palm_tactile_left">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
@@ -216,9 +216,10 @@
   <!-- ═══════════════════════════════════════════
        左手 ros2_control 硬體介面
   ════════════════════════════════════════════ -->
+  <!-- serial_port / hand_id / baudrate 僅在實機模式使用；預設值沿用原本寫死的設定 -->
   <xacro:macro name="left_hand_ros2_control"
-               params="use_fake_hardware serial_port:=/dev/ttyUSB1 hand_id:=1 baudrate:=115200">
-    <ros2_control name="left_hand_hardware" type="system">
+    params="use_fake_hardware prefix:='' serial_port:=/dev/ttyUSB1 hand_id:=1 baudrate:=115200">
+    <ros2_control name="${prefix}left_hand_hardware" type="system">
       <hardware>
         <xacro:if value="${use_fake_hardware}">
           <plugin>mock_components/GenericSystem</plugin>
@@ -232,7 +233,7 @@
       </hardware>
 
       <!-- 拇指 -->
-      <joint name="left_thumb_yaw_joint">
+      <joint name="${prefix}left_thumb_yaw_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -242,7 +243,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="left_thumb_mcp_joint">
+      <joint name="${prefix}left_thumb_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -252,7 +253,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="left_thumb_dip_joint">
+      <joint name="${prefix}left_thumb_dip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -264,7 +265,7 @@
       </joint>
 
       <!-- 食指 -->
-      <joint name="left_index_yaw_joint">
+      <joint name="${prefix}left_index_yaw_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -274,7 +275,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="left_index_mcp_joint">
+      <joint name="${prefix}left_index_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -284,7 +285,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="left_index_pip_joint">
+      <joint name="${prefix}left_index_pip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -296,7 +297,7 @@
       </joint>
 
       <!-- 中指 -->
-      <joint name="left_middle_yaw_joint">
+      <joint name="${prefix}left_middle_yaw_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -306,7 +307,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="left_middle_mcp_joint">
+      <joint name="${prefix}left_middle_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -316,7 +317,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="left_middle_pip_joint">
+      <joint name="${prefix}left_middle_pip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -328,7 +329,7 @@
       </joint>
 
       <!-- 無名指 -->
-      <joint name="left_ring_mcp_joint">
+      <joint name="${prefix}left_ring_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -338,7 +339,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="left_ring_pip_joint">
+      <joint name="${prefix}left_ring_pip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -350,7 +351,7 @@
       </joint>
 
       <!-- 小指 -->
-      <joint name="left_pinky_mcp_joint">
+      <joint name="${prefix}left_pinky_mcp_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -360,7 +361,7 @@
         <state_interface name="status"/>
         <state_interface name="temperature"/>
       </joint>
-      <joint name="left_pinky_pip_joint">
+      <joint name="${prefix}left_pinky_pip_joint">
         <command_interface name="position"/>
         <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
         <state_interface name="velocity"/>
@@ -373,49 +374,49 @@
 
       <!-- 🌟 左手觸覺感測器 (依照 C++ 陣列 0~7 的順序排列) -->
       <!-- [0] 小拇指 -->
-      <sensor name="left_pinky_tactile">
+      <sensor name="${prefix}left_pinky_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [1] 無名指 -->
-      <sensor name="left_ring_tactile">
+      <sensor name="${prefix}left_ring_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [2] 中指 -->
-      <sensor name="left_middle_tactile">
+      <sensor name="${prefix}left_middle_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [3] 食指 -->
-      <sensor name="left_index_tactile">
+      <sensor name="${prefix}left_index_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [4] 大拇指 -->
-      <sensor name="left_thumb_tactile">
+      <sensor name="${prefix}left_thumb_tactile">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [5] 掌心右 -->
-      <sensor name="left_palm_tactile_right">
+      <sensor name="${prefix}left_palm_tactile_right">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [6] 掌心中 -->
-      <sensor name="left_palm_tactile_middle">
+      <sensor name="${prefix}left_palm_tactile_middle">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>
       </sensor>
       <!-- [7] 掌心左 -->
-      <sensor name="left_palm_tactile_left">
+      <sensor name="${prefix}left_palm_tactile_left">
         <state_interface name="tactile_normal"/>
         <state_interface name="tactile_tangent"/>
         <state_interface name="tactile_direction"/>

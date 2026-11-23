@@ -3,7 +3,7 @@
 <package format="3">
   <name>graphen_interfaces</name>
   <version>0.0.0</version>
-  <description>Graphen ROS 2 interface definitions: playback actions (SwitchMode, PlayChoreo, PlayBvh, RunPolicy) with their shared Playback* messages, and the choreography library / preload services.</description>
+  <description>Graphen ROS 2 interface definitions: playback actions (SwitchMode, PlayChoreo, PlayBvh, RunPolicy) with their shared Playback* messages, the choreography library / preload services, and the arm IK services / pose target message.</description>
   <maintainer email="riverji@graphen.ai">jin</maintainer>
   <license>TODO: License declaration</license>
 
@@ -11,6 +11,9 @@
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <depend>action_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
 

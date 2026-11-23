@@ -1,0 +1,205 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="t170_left_arm" params="prefix mesh_dir parent">
+
+    <!-- ===== L_SHOULDER_P ===== -->
+    <link name="${prefix}L_SHOULDER_P_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.003756 0.08834399999999999 0.000207" rpy="0 0 0"/>
+        <mass value="1.017231"/>
+        <inertia ixx="0.002372488168" ixy="0.000308002632" ixz="1.387495e-06"
+                 iyy="0.0011393050209999999" iyz="1.6191934e-05" izz="0.002662688267"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_SHOULDER_P_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_SHOULDER_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_SHOULDER_P" type="revolute">
+      <origin xyz="0.0005 0.0896 0.336" rpy="0 0 0"/>
+      <parent link="${parent}"/>
+      <child  link="${prefix}L_SHOULDER_P_S"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-3.14" upper="3.14" effort="63" velocity="8.06"/>
+    </joint>
+
+    <!-- ===== L_SHOULDER_R ===== -->
+    <link name="${prefix}L_SHOULDER_R_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="-0.002242 0.163933 0.013930999999999999" rpy="0 0 0"/>
+        <mass value="1.09809"/>
+        <inertia ixx="0.0043556596480000005" ixy="-0.00014642065100000003" ixz="-2.0792412e-05"
+                 iyy="0.0010249878449999999" iyz="-0.00015515220499999997" izz="0.004159562748"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_SHOULDER_R_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_SHOULDER_R_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_SHOULDER_R" type="revolute">
+      <origin xyz="0 0.1004 0" rpy="0 0 0"/>
+      <parent link="${prefix}L_SHOULDER_P_S"/>
+      <child  link="${prefix}L_SHOULDER_R_S"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-1.57" upper="1.57" effort="63" velocity="8.06"/>
+    </joint>
+
+    <!-- ===== L_SHOULDER_Y ===== -->
+    <link name="${prefix}L_SHOULDER_Y_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="-0.000772 0.079344 0.0033450000000000003" rpy="0 0 0"/>
+        <mass value="0.71509"/>
+        <inertia ixx="0.0015319294410000002" ixy="-2.9833332999999998e-05" ixz="-1.601666e-06"
+                 iyy="0.0008379935259999999" iyz="0.00011718606699999999" izz="0.001338291607"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_SHOULDER_Y_S.STL"/></geometry>
+        <material name="t170_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_SHOULDER_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_SHOULDER_Y" type="revolute">
+      <origin xyz="0 0.10375 0" rpy="0 0 0"/>
+      <parent link="${prefix}L_SHOULDER_R_S"/>
+      <child  link="${prefix}L_SHOULDER_Y_S"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-3.14" upper="3.14" effort="42" velocity="8.59"/>
+    </joint>
+
+    <!-- ===== L_ELBOW_Y ===== -->
+    <link name="${prefix}L_ELBOW_Y_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="1e-06 0.085602 0.015987" rpy="0 0 0"/>
+        <mass value="0.8091609999999999"/>
+        <inertia ixx="0.002073021658" ixy="3.2357689999999998e-06" ixz="-2.97582e-07"
+                 iyy="0.0007404714790000001" iyz="-0.000468463919" izz="0.0018669743519999999"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_ELBOW_Y_S.STL"/></geometry>
+        <material name="t170_blue_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_ELBOW_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_ELBOW_Y" type="revolute">
+      <origin xyz="0 0.19625 0" rpy="0 0 0"/>
+      <parent link="${prefix}L_SHOULDER_Y_S"/>
+      <child  link="${prefix}L_ELBOW_Y_S"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-2.4" upper="0.87" effort="42" velocity="8.59"/>
+    </joint>
+
+    <!-- ===== L_WRIST_P ===== -->
+    <link name="${prefix}L_WRIST_P_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.001498 0.0 0.00128" rpy="0 0 0"/>
+        <mass value="0.495016"/>
+        <inertia ixx="0.000251605909" ixy="-1.3600000000000002e-10" ixz="9.487569999999999e-07"
+                 iyy="0.00032623858399999996" iyz="-1.133e-09" izz="0.00030643646999999996"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_WRIST_P_S.STL"/></geometry>
+        <material name="t170_mid_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_WRIST_P_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_WRIST_P" type="revolute">
+      <origin xyz="0 0.09685 0" rpy="0 0 0"/>
+      <parent link="${prefix}L_ELBOW_Y_S"/>
+      <child  link="${prefix}L_WRIST_P_S"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-3.14" upper="3.14" effort="23" velocity="10.16"/>
+    </joint>
+
+    <!-- ===== L_WRIST_Y ===== -->
+    <link name="${prefix}L_WRIST_Y_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.0047610000000000005 0.110285 -0.003891" rpy="0 0 0"/>
+        <mass value="0.730783"/>
+        <inertia ixx="0.002750088512" ixy="-7.9260711e-05" ixz="0.000160793577"
+                 iyy="0.000983080538" iyz="5.5434593999999996e-05" izz="0.0033568687829999997"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_WRIST_Y_S.STL"/></geometry>
+        <material name="t170_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_WRIST_Y_S.STL"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_WRIST_Y" type="revolute">
+      <origin xyz="0 0.17615 -0.0035" rpy="0 0 0"/>
+      <parent link="${prefix}L_WRIST_P_S"/>
+      <child  link="${prefix}L_WRIST_Y_S"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-0.69" upper="0.69" effort="8.3" velocity="12.36"/>
+    </joint>
+
+    <!-- ===== L_WRIST_R ===== -->
+    <link name="${prefix}L_WRIST_R_S">
+      <inertial>
+        <!-- 質量取自 ti5_t170_description（graphen_ws） -->
+        <origin xyz="0.01174 -0.094004 0.0" rpy="0 0 0"/>
+        <mass value="1.439466"/>
+        <inertia ixx="0.001896495998" ixy="9.359903100000001e-05" ixz="-5.629999999999999e-10"
+                 iyy="0.001552196293" iyz="1.35e-09" izz="0.0019337847290000001"/>
+      </inertial>
+      <!-- L 型轉接板（ti5_t170_description），網格單位 mm；相對連桿的擺放照搬 ti5_t170 -->
+      <visual>
+        <origin xyz="-1.0483 1.0575 1.0373" rpy="1.5708 1.5708 0"/>
+        <geometry><mesh filename="${mesh_dir}/L_WRIST_R_S.STL" scale="0.001 0.001 0.001"/></geometry>
+        <material name="t170_white"/>
+      </visual>
+      <collision>
+        <origin xyz="-1.0483 1.0575 1.0373" rpy="1.5708 1.5708 0"/>
+        <geometry><mesh filename="${mesh_dir}/hulls/L_WRIST_R_S.STL" scale="0.001 0.001 0.001"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}L_WRIST_R" type="revolute">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <parent link="${prefix}L_WRIST_Y_S"/>
+      <child  link="${prefix}L_WRIST_R_S"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-2.35" upper="0.348" effort="8.3" velocity="12.36"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>

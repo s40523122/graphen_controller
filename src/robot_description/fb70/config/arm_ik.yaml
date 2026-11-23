@@ -1,0 +1,50 @@
+# graphen_arm_ik 的手臂設定（IK 示教 / 指令 / 視覺伺服共用），格式見 graphen_arm_ik/arm_config.hpp。
+# TODO(verify-on-hw): fb70 的 MJCF mesh 指向 Orin 的 /devtest，開發機上無法載入，這份設定尚未驗證過
+#   （body / joint 名稱與 ti5_170a 相同，已對照 MJCF；seed 與碰撞結果要在 Orin 上以 arm_ik_check 確認）
+# 運動學與碰撞都用這份 MJCF（基座固定、預設不含地面）；目標位姿以 root_body 座標系表示。
+version: 1
+mjcf: package://fb70_description/mjcf/t170_fixed.xml
+root_body: WAIST_P_S     # 軀幹
+
+arms:
+  left:
+    joints: [L_SHOULDER_P, L_SHOULDER_R, L_SHOULDER_Y, L_ELBOW_Y, L_WRIST_P, L_WRIST_Y, L_WRIST_R]
+    tip_body: L_WRIST_R_S
+    elbow_body: L_ELBOW_Y_S
+    shoulder_body: L_SHOULDER_P_S
+    # TODO(verify-on-hw): 工具點（掌心）的偏移；目前為手腕 body 原點
+    tip_offset: {xyz: [0.0, 0.0, 0.0], rpy: [0.0, 0.0, 0.0]}
+    swivel_reference: [0.0, 0.0, -1.0]   # swivel 0 = 軀幹 −z（手肘朝下）
+    seed: [0.0, -1.3, 0.0, -0.3, 0.0, 0.0, 0.0]   # 手臂下垂（與 ti5_170a 的 initial_positions.yaml 相同）
+  right:
+    joints: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, R_WRIST_R]
+    tip_body: R_WRIST_R_S
+    elbow_body: R_ELBOW_Y_S
+    shoulder_body: R_SHOULDER_P_S
+    # TODO(verify-on-hw): 工具點（掌心）的偏移；目前為手腕 body 原點
+    tip_offset: {xyz: [0.0, 0.0, 0.0], rpy: [0.0, 0.0, 0.0]}
+    swivel_reference: [0.0, 0.0, -1.0]
+    seed: [0.0, 1.3, 0.0, 0.3, 0.0, 0.0, 0.0]
+
+solver:
+  damping: 0.01
+  iterations: 100
+  position_tolerance: 1.0e-4     # m
+  orientation_tolerance: 1.0e-3  # rad
+  swivel_tolerance: 1.0e-3       # rad
+  orientation_weight: 0.5
+  max_step: 0.1                  # rad / 迭代
+  joint_limit_margin: 0.01       # rad
+  restarts: 8                    # 從 seed 解不到時，改從幾個固定起點重試的次數
+
+collision:
+  enabled: true
+  include_floor: false
+  min_penetration: 0.0           # m
+  ignore_within_links: 2         # 運動鏈上相距 2 個 link 以內的 body 不檢查（例如軀幹與肩部第二節，關節附近 mesh 本來就重疊）
+  allow_initial_contacts: true   # 所有關節 0 時就接觸的 body 對自動允許（arm_ik_check 會列出）
+  allowed_pairs: []
+
+# 預留：環境障礙物，位姿以機器人基座座標系表示，例如
+#   - {name: table, shape: box, size: [0.4, 0.6, 0.02], xyz: [0.5, 0.0, -0.1]}
+scene: []

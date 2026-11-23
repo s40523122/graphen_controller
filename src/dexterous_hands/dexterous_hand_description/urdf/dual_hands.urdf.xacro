@@ -1,23 +1,26 @@
 <?xml version="1.0"?>
+<!-- 雙手單獨檢視/測試用模型：兩隻手掛在 world 兩側 -->
 <robot name="dual_dexterous_hands" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- 引入左右手 macro -->
+  <!-- 預設使用 mock 硬體，單獨檢視時不需接序列埠 -->
+  <xacro:arg name="use_fake_hardware" default="true"/>
+  <xacro:arg name="right_serial_port" default="/dev/ttyUSB0"/>
+  <xacro:arg name="left_serial_port"  default="/dev/ttyUSB1"/>
+
   <xacro:include filename="$(find dexterous_hand_description)/urdf/right_hand.xacro"/>
   <xacro:include filename="$(find dexterous_hand_description)/urdf/left_hand.xacro"/>
   <xacro:include filename="$(find dexterous_hand_description)/urdf/ros2_control.xacro"/>
-  <!-- 世界座標根連結 -->
+
   <link name="world"/>
 
-  <!-- 右手：掛在 world 右側 -->
-  <xacro:right_hand
-    parent="world"
-    xyz="0.2 0 0"
-    rpy="0 0 0"/>
+  <xacro:right_hand parent="world" xyz="0.2 0 0" rpy="0 0 0"/>
+  <xacro:left_hand  parent="world" xyz="-0.2 0 0" rpy="0 0 0"/>
 
-  <!-- 左手：掛在 world 左側 -->
-  <xacro:left_hand
-    parent="world"
-    xyz="-0.2 0 0"
-    rpy="0 0 0"/>
+  <xacro:right_hand_ros2_control
+    use_fake_hardware="$(arg use_fake_hardware)"
+    serial_port="$(arg right_serial_port)"/>
+  <xacro:left_hand_ros2_control
+    use_fake_hardware="$(arg use_fake_hardware)"
+    serial_port="$(arg left_serial_port)"/>
 
 </robot>

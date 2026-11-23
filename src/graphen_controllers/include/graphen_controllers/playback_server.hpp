@@ -57,7 +57,8 @@ public:
 //   handle_accepted  需要載入時先發布 STAGE_LOADING，再呼叫 Hooks::start（載入內容、送交 PlaybackArbiter）。
 //                    start 丟出例外（內容有誤、檔案不存在…）或被 arbiter 拒絕時 abort，message 說明原因；
 //                    這時還沒有切換，機器人繼續原本的動作
-//   之後             不等待的 goal 立即成功；wait_until_finished 的 goal 交給 poll()
+//   之後             不等待的 goal 立即成功；wait_until_finished 的 goal 交給 poll()。
+//                    影子試播（start 回傳 kDryRun）不切換，立即成功並在 result 帶回 shadow_token
 // cancel 只會停止等待，不會停止或改變目前的動作。
 //
 // 鎖的順序：waiting_mutex_ → PlaybackArbiter 內部的 mutex / Hooks 中的鎖。
@@ -84,6 +85,9 @@ public:
     std::function<void(ResultMsg &)> fill_state;
     // log 中用來稱呼這個 goal 的文字（例如 "choreo:show_1"）
     std::function<std::string(const Goal &)> describe;
+    // 是否支援影子試播（options.dry_run）與試播憑證（options.shadow_token）；
+    // false 時帶了其中任何一個的 goal 會被 REJECT。start 需自行處理這兩個選項
+    bool supports_shadow{false};
   };
 
   // group：action 的 callback group；nullptr 表示 node 預設的 group。
@@ -163,6 +167,10 @@ private:
       reason = "controller is not active";
     } else if (!to_on_same(goal.options.on_same)) {
       reason = "invalid on_same " + std::to_string(static_cast<int>(goal.options.on_same));
+    } else if (!hooks_.supports_shadow &&
+      (goal.options.dry_run || !goal.options.shadow_token.empty()))
+    {
+      reason = "dry_run / shadow_token are not supported by this action";
     } else {
       reason = hooks_.validate(goal);
     }
@@ -194,6 +202,13 @@ private:
       RCLCPP_WARN(logger_, "%s [ %s ]: %s", name_.c_str(), hooks_.describe(*goal).c_str(),
         outcome.message.c_str());
       handle->abort(make_result(false, outcome.message));
+      return;
+    }
+    if (outcome.status == PlaybackOutcome::Status::kDryRun) {
+      // 影子試播：沒有切換，wait_until_finished 不起作用
+      auto result = make_result(true, outcome.message);
+      result->result.shadow_token = outcome.shadow_token;
+      handle->succeed(result);
       return;
     }
     if (!goal->options.wait_until_finished) {

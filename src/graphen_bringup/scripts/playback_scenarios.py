@@ -3,7 +3,8 @@
 播放介面的情境回歸：對著已啟動的 bringup 送出一連串指令，比對 controller 的回應.
 
 涵蓋四個播放入口（switch_mode / play_choreo / play_bvh / run_policy）、舞曲庫的 service、
-以及它們之間的切換規則（on_same、不可中斷、stop 搶占、互相取代）。每一項印出 PASS / FAIL，
+它們之間的切換規則（on_same、不可中斷、stop 搶占、互相取代），以及影子試播（dry_run、shadow_token）
+與 ~/playback_state。每一項印出 PASS / FAIL，
 全部通過時回傳 0。不是測試框架：只是把手動測試的步驟寫成可以重跑的腳本。
 
 **會讓機器人動作**（頸部 yaw 小幅轉動、切換系統模式、播放 BVH、執行 policy）：
@@ -14,23 +15,32 @@
   ros2 run graphen_bringup playback_scenarios --only choreo   # 只跑一個區段
   ros2 run graphen_bringup playback_scenarios --bvh walk --policy rl_flat
 
-需要的設定：系統模式 stop（hold）與 --target-mode 指定的 target 模式（預設 forward）；
+需要的設定：系統模式 stop（hold）、--teach-mode 指定的 hold 模式（預設 teach，shadow_playback: true，shadow 區段）
+與 --target-mode 指定的 target 模式（預設 forward）；
 編舞區段會動 --joint（預設 NECK_Y），choreo.max_steps 與速度上限要容得下約 0.4 rad/s。
+arm 區段（手臂 IK）需要 arm_ik_server、arm_ik.yaml 的 right 手臂與 --servo-mode（預設 arm_servo）；
+伺服會移動右手臂，手臂子群組要 output_enabled: true，否則追蹤的項目會 FAIL。
 """
 
 import argparse
+import copy
 import hashlib
+import math
 import sys
 import time
 
 from action_msgs.msg import GoalStatus
 from graphen_interfaces.action import PlayBvh, PlayChoreo, RunPolicy, SwitchMode
-from graphen_interfaces.msg import PlaybackFeedback, PlaybackOptions
-from graphen_interfaces.srv import GetChoreo, ListChoreos, Preload, PublishChoreo
+from graphen_interfaces.msg import (ArmPoseTarget, PlaybackFeedback, PlaybackOptions,
+                                    PlaybackState)
+from graphen_interfaces.srv import (ArmForward, GetChoreo, ListChoreos, Preload, PublishChoreo,
+                                    SolveArmIk, TcpJog)
+from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 IGNORE = PlaybackOptions.ON_SAME_IGNORE
@@ -172,13 +182,16 @@ class Runner:
     def available(self, action: str) -> bool:
         return self.clients[action].wait_for_server(timeout_sec=DISCOVERY_TIMEOUT)
 
-    def send(self, action: str, on_same: int = IGNORE, wait: bool = False, **fields):
+    def send(self, action: str, on_same: int = IGNORE, wait: bool = False,
+             dry_run: bool = False, shadow_token: str = '', **fields):
         """送出 goal，回傳 Pending；被 reject 時回傳 Outcome（accepted 為 False）."""
         goal = self.goal_types[action]()
         for key, value in fields.items():
             setattr(goal, key, value)
         goal.options.on_same = on_same
         goal.options.wait_until_finished = wait
+        goal.options.dry_run = dry_run
+        goal.options.shadow_token = shadow_token
 
         outcome = Outcome()
 
@@ -196,9 +209,10 @@ class Runner:
         return Pending(self, outcome, future.result(), started)
 
     def play(self, action: str, on_same: int = IGNORE, wait: bool = False,
-             timeout: float = RESPONSE_TIMEOUT, **fields) -> Outcome:
+             timeout: float = RESPONSE_TIMEOUT, dry_run: bool = False, shadow_token: str = '',
+             **fields) -> Outcome:
         """送出 goal 並等到結束."""
-        pending = self.send(action, on_same, wait, **fields)
+        pending = self.send(action, on_same, wait, dry_run, shadow_token, **fields)
         if isinstance(pending, Outcome):
             return pending
         return pending.wait(timeout)
@@ -486,7 +500,430 @@ def run_cross(r: Runner, joint: str, bvh: str):
     r.stop()
 
 
-SECTIONS = ('switch_mode', 'choreo', 'bvh', 'policy', 'cross')
+# 右手臂從胸前橫向掃過身體的編舞：兩個 keyframe 本身都不碰撞，中間的路徑會碰到髖部 / 腰部
+# （ti5_170a 的模型；以 arm_ik_server 搜尋得到）
+CROSSING_CHOREO = (
+    'version: 1\n'
+    'tracks:\n'
+    '  right_arm:\n'
+    '    joints: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, '
+    'R_WRIST_R]\n'
+    '    keyframes:\n'
+    '      - {t: 2.0, positions: {R_SHOULDER_P: -1.198, R_SHOULDER_R: 1.378, R_SHOULDER_Y: 1.064, '
+    'R_ELBOW_Y: 1.578, R_WRIST_P: 0.0, R_WRIST_Y: 0.0, R_WRIST_R: 0.0}}\n'
+    '      - {t: 4.0, positions: {R_SHOULDER_P: -1.394, R_SHOULDER_R: 1.378, R_SHOULDER_Y: -1.064, '
+    'R_ELBOW_Y: 1.578, R_WRIST_P: 0.0, R_WRIST_Y: 0.0, R_WRIST_R: 0.0}}\n')
+
+
+# arm 區段的起始姿態：右手在胸前、手肘彎曲（ti5_170a 不碰撞、離限位有餘裕），
+# 讓每次執行都從同一個姿態開始（上一次執行可能把手臂停在軀幹旁邊）
+ARM_START_CHOREO = (
+    'version: 1\n'
+    'tracks:\n'
+    '  right_arm:\n'
+    '    joints: [R_SHOULDER_P, R_SHOULDER_R, R_SHOULDER_Y, R_ELBOW_Y, R_WRIST_P, R_WRIST_Y, '
+    'R_WRIST_R]\n'
+    '    keyframes:\n'
+    '      - {t: 8.0, positions: {R_SHOULDER_P: 0.6, R_SHOULDER_R: 1.2, R_SHOULDER_Y: 0.0, '
+    'R_ELBOW_Y: 0.8, R_WRIST_P: 0.0, R_WRIST_Y: 0.0, R_WRIST_R: 0.0}}\n')
+
+
+def quat_mul(a, b):
+    """四元數乘法，(x, y, z, w)."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz)
+
+
+def quat_rotate(q, v):
+    """以四元數 q（x, y, z, w）旋轉向量 v."""
+    x, y, z, _ = quat_mul(quat_mul(q, (v[0], v[1], v[2], 0.0)), (-q[0], -q[1], -q[2], q[3]))
+    return (x, y, z)
+
+
+def arm_choreo(joint_names, positions, duration: float) -> str:
+    """一個 keyframe 的右手臂編舞（tcp_jog 的結果交給 PlayChoreo 的方式）."""
+    values = ', '.join(f'{name}: {value:.6f}' for name, value in zip(joint_names, positions))
+    return ('version: 1\n'
+            'tracks:\n'
+            '  right_arm:\n'
+            f'    joints: [{", ".join(joint_names)}]\n'
+            '    keyframes:\n'
+            f'      - {{t: {duration}, positions: {{{values}}}}}\n')
+
+
+def run_tcp_jog(r: Runner, service, forward):
+    """~/tcp_jog：以基準姿態沿一個軸單步，結果交給 PlayChoreo 播放."""
+    r.section('arm: tcp_jog')
+    current = forward()
+    if current is None or not current.success:
+        r.check('tcp_jog: forward of the current pose', False, getattr(current, 'message', 'no response'))
+        return
+    reference = list(current.positions)
+    names = list(current.joint_names)
+    base = current.pose.pose
+    base_p = (base.position.x, base.position.y, base.position.z)
+    base_q = (base.orientation.x, base.orientation.y, base.orientation.z, base.orientation.w)
+
+    def jog(axis, delta, frame=TcpJog.Request.FRAME_TOOL, ref=None):
+        return service(TcpJog, 'tcp_jog', TcpJog.Request(
+            arm='right', axis=axis, delta=delta, frame=frame,
+            reference=reference if ref is None else ref))
+
+    def pose_of(positions):
+        """positions 的末端位姿（forward 帶 state，不依賴機器人目前的姿態）."""
+        response = service(ArmForward, 'forward', ArmForward.Request(
+            arm='right', state=JointState(name=names, position=list(positions))))
+        pose = response.pose.pose
+        return ((pose.position.x, pose.position.y, pose.position.z),
+                (pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w),
+                response.swivel)
+
+    def describe(response):
+        return getattr(response, 'message', 'no response')
+
+    # 手腕座標的平移：位移沿手腕目前的 x 軸，姿態與手肘不變
+    step = 0.02
+    response = jog(TcpJog.Request.AXIS_X, step)
+    ok = response is not None and response.success and response.max_joint_delta > 0.0
+    detail = describe(response)
+    if ok:
+        p, q, swivel = pose_of(response.positions)
+        expected = quat_rotate(base_q, (step, 0.0, 0.0))
+        error = math.dist([p[i] - base_p[i] for i in range(3)], expected)
+        ok = error < 1e-3 and abs(math.remainder(swivel - current.swivel, math.tau)) < 1e-2
+        detail = f'displacement error {error * 1e3:.2f} mm, swivel {current.swivel:.4f} -> {swivel:.4f}'
+    r.check('tcp_jog: X 2 cm in the tool frame moves along the wrist x axis, elbow kept', ok, detail)
+
+    # 軀幹座標的平移
+    response = jog(TcpJog.Request.AXIS_Z, step, frame=TcpJog.Request.FRAME_ROOT)
+    ok = response is not None and response.success
+    detail = describe(response)
+    if ok:
+        p, _, _ = pose_of(response.positions)
+        error = math.dist([p[i] - base_p[i] for i in range(3)], (0.0, 0.0, step))
+        ok = error < 1e-3
+        detail = f'displacement error {error * 1e3:.2f} mm'
+    r.check('tcp_jog: Z 2 cm in the root frame moves straight up', ok, detail)
+
+    # 手腕座標的旋轉：位置不變，相對旋轉 = 繞手腕 x 軸 angle
+    angle = 0.1
+    response = jog(TcpJog.Request.AXIS_ROLL, angle)
+    ok = response is not None and response.success
+    detail = describe(response)
+    if ok:
+        p, q, _ = pose_of(response.positions)
+        # 誤差 = 實際的相對旋轉與預期旋轉之間的角度
+        relative = quat_mul((-base_q[0], -base_q[1], -base_q[2], base_q[3]), q)
+        remaining = quat_mul((-math.sin(angle / 2), 0.0, 0.0, math.cos(angle / 2)), relative)
+        rotation_error = 2.0 * math.acos(min(1.0, abs(remaining[3])))
+        moved = math.dist(p, base_p)
+        ok = moved < 1e-3 and rotation_error < 1e-2
+        detail = f'tip moved {moved * 1e3:.2f} mm, rotation error {rotation_error:.4f} rad'
+    r.check('tcp_jog: ROLL 0.1 rad turns about the wrist x axis in place', ok, detail)
+
+    # 手肘：末端不動、swivel 改變（其中一個方向可能被限位擋住）
+    messages = []
+    ok = False
+    for delta in (0.2, -0.2):
+        response = jog(TcpJog.Request.AXIS_ELBOW, delta)
+        if response is None or not response.success:
+            messages.append(describe(response))
+            continue
+        p, _, swivel = pose_of(response.positions)
+        moved = math.dist(p, base_p)
+        turned = math.remainder(swivel - current.swivel, math.tau)
+        messages.append(f'tip moved {moved * 1e3:.2f} mm, swivel changed {turned:.4f}')
+        if moved < 1e-3 and abs(turned - delta) < 1e-2:
+            ok = True
+            break
+    r.check('tcp_jog: ELBOW 0.2 rad keeps the tip (either direction)', ok, '; '.join(messages))
+
+    response = jog(TcpJog.Request.AXIS_X, 2.0)
+    r.check('tcp_jog: an unreachable step fails',
+            response is not None and not response.success and len(response.positions) == 7,
+            describe(response))
+    response = jog(9, 0.01)
+    r.check('tcp_jog: an unknown axis is refused',
+            response is not None and not response.success and 'axis' in response.message,
+            describe(response))
+    response = jog(TcpJog.Request.AXIS_X, 0.01, ref=[0.0, 0.0])
+    r.check('tcp_jog: a reference without 7 values is refused',
+            response is not None and not response.success and 'reference' in response.message,
+            describe(response))
+
+    # UI 的流程：連續兩步（第二步以第一步的結果為基準），每一步以 PlayChoreo 播放
+    target = None
+    ok = True
+    detail = ''
+    ref = reference
+    for axis, delta in ((TcpJog.Request.AXIS_Z, 0.02), (TcpJog.Request.AXIS_PITCH, 0.1)):
+        response = jog(axis, delta, ref=ref)
+        if response is None or not response.success:
+            ok, detail = False, describe(response)
+            break
+        outcome = r.play('play_choreo', on_same=RESTART, wait=True, timeout=15.0,
+                         content=arm_choreo(response.joint_names, response.positions, 1.0))
+        if outcome.status_name != 'SUCCEEDED':
+            ok, detail = False, f'{outcome.status_name}: {outcome.message}'
+            break
+        ref = list(response.positions)
+        target = response.target.pose
+    if ok:
+        r.pause(0.5)
+        reached = forward()
+        p = reached.pose.pose.position
+        error = math.dist((p.x, p.y, p.z), (target.position.x, target.position.y, target.position.z))
+        ok = error < 2e-3
+        detail = f'remaining error {error * 1e3:.1f} mm (arm group output disabled?)'
+    r.check('tcp_jog: two steps played with PlayChoreo reach the last target', ok, detail)
+
+
+def run_arm(r: Runner, server: str, servo_mode: str):
+    """手臂 IK：arm_ik_server、編舞的路徑碰撞檢查、伺服模式."""
+    def service(service_type, name, request):
+        client = r.node.create_client(service_type, f'{server}/{name}')
+        if not client.wait_for_service(timeout_sec=DISCOVERY_TIMEOUT):
+            return None
+        future = client.call_async(request)
+        rclpy.spin_until_future_complete(r.node, future, timeout_sec=RESPONSE_TIMEOUT)
+        return future.result() if future.done() else None
+
+    def forward():
+        return service(ArmForward, 'forward', ArmForward.Request(arm='right'))
+
+    if forward() is None:
+        r.skip('arm', f'{server} not available (arm_ik_config disabled?)')
+        return
+    r.section('arm: IK service')
+    r.expect('move the right arm to the start pose (choreography)',
+             r.play('play_choreo', on_same=RESTART, wait=True, timeout=30.0,
+                    content=ARM_START_CHOREO), 'SUCCEEDED', 'Finished')
+    r.pause(0.5)
+    current = forward()
+    r.check('forward: current pose of the right arm', current.success and
+            current.pose.header.frame_id != '', current.message)
+    frame = current.pose.header.frame_id
+
+    def solve_request(pose, frame_id=None, swivel=math.nan):
+        request = SolveArmIk.Request(arm='right', swivel=swivel)
+        request.target.header.frame_id = frame if frame_id is None else frame_id
+        request.target.pose = pose
+        return request
+
+    moved = copy.deepcopy(current.pose.pose)
+    moved.position.x += 0.03
+    response = service(SolveArmIk, 'solve', solve_request(moved))
+    r.check('solve: 3 cm forward of the current pose',
+            response is not None and response.success and len(response.positions) == 7 and
+            response.position_error < 1e-3, getattr(response, 'message', 'no response'))
+    if response is not None and response.success and math.isfinite(response.swivel):
+        # 其中一個方向可能被限位擋住（手臂下垂時）：任一方向做到即可
+        messages = []
+        for delta in (0.2, -0.2):
+            shifted = service(SolveArmIk, 'solve', solve_request(moved, swivel=response.swivel + delta))
+            ok = shifted is not None and shifted.success and shifted.position_error < 1e-3
+            messages.append(getattr(shifted, 'message', 'no response'))
+            if ok:
+                break
+        r.check('solve: same tip with the elbow swiveled by 0.2 rad (either direction)', ok,
+                '; '.join(messages))
+    response = service(SolveArmIk, 'solve', solve_request(moved, frame_id='camera_link'))
+    r.check('solve: wrong frame_id is refused',
+            response is not None and not response.success and 'frame_id' in response.message,
+            getattr(response, 'message', 'no response'))
+    inside = copy.deepcopy(current.pose.pose)
+    inside.position.x, inside.position.y, inside.position.z = 0.05, 0.0, 0.1
+    response = service(SolveArmIk, 'solve', solve_request(inside))
+    r.check('solve: a target inside the torso fails and reports collisions',
+            response is not None and not response.success and len(response.collisions) > 0,
+            getattr(response, 'message', 'no response'))
+
+    run_tcp_jog(r, service, forward)
+
+    # 編舞的路徑碰撞檢查（controller 有 choreo.arm_ik_config 時）
+    params = r.call(GetParameters, 'get_parameters',
+                    GetParameters.Request(names=['choreo.arm_ik_config']))
+    collision_enabled = params is not None and params.values and params.values[0].string_value
+    if collision_enabled and r.available('play_choreo'):
+        r.section('arm: choreography path collision')
+        response = r.call(PublishChoreo, 'publish_choreo',
+                          PublishChoreo.Request(name='scn_crossing', content=CROSSING_CHOREO))
+        r.check('publish: a path through the body is refused with the time and bodies',
+                response is not None and not response.success and 'collision at t=' in
+                response.message, getattr(response, 'message', 'no response'))
+        r.expect('play: the same content is aborted without switching',
+                 r.play('play_choreo', content=CROSSING_CHOREO), 'ABORTED', 'collision at t=')
+    else:
+        r.skip('arm: choreography path collision', "'choreo.arm_ik_config' is not set")
+
+    outcome = r.play('switch_mode', mode=servo_mode, on_same=RESTART)
+    if outcome.status_name == 'REJECTED':
+        r.skip('arm: servo', f"system mode '{servo_mode}' not configured")
+        return
+    r.section('arm: servo')
+    r.expect(f'switch to {servo_mode}', outcome, 'SUCCEEDED', 'Switched', mode=servo_mode)
+    publisher = r.node.create_publisher(ArmPoseTarget, f'{r.controller}/pose_targets', 10)
+    start = forward()
+
+    def stream(pose, seconds, rate=30.0):
+        msg = ArmPoseTarget(arm='right', pose=pose, swivel=math.nan)
+        msg.header.frame_id = frame
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            publisher.publish(msg)
+            r.pause(1.0 / rate)
+
+    def distance(a, b):
+        return math.dist((a.x, a.y, a.z), (b.x, b.y, b.z))
+
+    goal = copy.deepcopy(start.pose.pose)
+    goal.position.x += 0.05
+    goal.position.z += 0.05
+    stream(goal, 4.0)
+    # 停止發布後，目標在 pose_targets.timeout 之內仍然有效
+    r.pause(1.0)
+    reached = forward()
+    error = distance(reached.pose.pose.position, goal.position)
+    r.check('servo: the wrist follows a target 7 cm away', error < 0.005,
+            f'remaining error {error * 1e3:.1f} mm (arm group output disabled?)')
+    r.pause(1.0)
+    held = forward()
+    drift = max(abs(a - b) for a, b in zip(held.positions, reached.positions))
+    r.check('servo: holds after the target times out', drift < 1e-3, f'moved {drift:.4f} rad')
+
+    inside = copy.deepcopy(start.pose.pose)
+    inside.position.x, inside.position.y, inside.position.z = 0.05, 0.0, 0.1
+    stream(inside, 4.0)
+    stopped = forward()
+    r.check('servo: an arm driven into the torso stops before colliding',
+            not stopped.collisions and distance(stopped.pose.pose.position, inside.position) > 0.05,
+            f'collisions {list(stopped.collisions)}')
+    r.node.destroy_publisher(publisher)
+    r.stop()
+
+
+def joint_value(outcome: Outcome, joint: str):
+    """result 的 state 快照中 <joint>/position 的值；沒有時為 None."""
+    result = outcome.result
+    name = f'{joint}/position'
+    if result is None or name not in result.interface_names:
+        return None
+    return result.values[list(result.interface_names).index(name)]
+
+
+def run_shadow(r: Runner, joint: str, teach_mode: str):
+    if not r.available('play_choreo'):
+        r.skip('shadow', "play_choreo not available ('choreo.plugin' not set?)")
+        return
+    r.section('shadow: playback_state and dry run')
+    qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                     durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    states = []
+    shadow = []
+    state_sub = r.node.create_subscription(
+        PlaybackState, f'{r.controller}/playback_state', states.append, qos)
+    shadow_sub = r.node.create_subscription(
+        JointState, f'{r.controller}/shadow/joint_states', shadow.append, 10)
+    try:
+        outcome = r.play('switch_mode', mode=teach_mode, on_same=RESTART)
+        r.expect(f'switch to {teach_mode}', outcome, 'SUCCEEDED', mode=teach_mode)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not (states and states[-1].mode == teach_mode):
+            r.pause(0.1)
+        r.check('playback_state follows the mode', bool(states) and states[-1].mode == teach_mode,
+                f'last {states[-1].mode if states else None!r}')
+        base = joint_value(outcome, joint)
+        if base is None:
+            r.check(f'{joint}/position in the state snapshot', False, 'not found')
+            return
+        target = base + 0.2 if base < 0.5 else base - 0.2
+        script = choreo_script(joint, round(target, 4), 1.5)
+
+        # 試播：不切換、不動，回傳 token，軌跡發布到 ~/shadow/joint_states
+        shadow.clear()
+        dry = r.play('play_choreo', content=script, dry_run=True)
+        r.expect('dry run passes without switching', dry, 'SUCCEEDED', 'Dry run finished',
+                 mode=teach_mode)
+        token = dry.result.shadow_token if dry.result is not None else ''
+        r.check('dry run returns a shadow_token', bool(token))
+        r.pause(2.5)
+        after = joint_value(r.play('switch_mode', mode=teach_mode), joint)
+        r.check('dry run does not move the robot',
+                after is not None and abs(after - base) < 1e-6, f'{base} -> {after}')
+        last = None
+        if shadow and joint in shadow[-1].name:
+            last = shadow[-1].position[list(shadow[-1].name).index(joint)]
+        r.check('dry run trajectory is published and reaches the target',
+                last is not None and abs(last - target) < 1e-3,
+                f'{len(shadow)} messages, last {last}, target {target}')
+
+        # 試播失敗：第一個 keyframe 在 t: 0 但離目前位置太遠（on_enter 的檢查）
+        far = (
+            'version: 1\n'
+            'tracks:\n'
+            '  t:\n'
+            f'    joints: [{joint}]\n'
+            '    keyframes:\n'
+            f'      - {{t: 0.0, positions: {{{joint}: {round(target, 4)}}}}}\n'
+            f'      - {{t: 1.0, positions: {{{joint}: {round(target, 4)}}}}}\n')
+        failed = r.play('play_choreo', content=far, dry_run=True)
+        r.expect('dry run reports a failure on entry', failed, 'ABORTED', 'Dry run failed',
+                 mode=teach_mode)
+        r.check('failed dry run returns no token',
+                failed.result is None or not failed.result.shadow_token)
+
+        # 不支援試播的 action
+        outcome = r.play('switch_mode', mode=teach_mode, dry_run=True)
+        r.expect('switch_mode rejects dry_run', outcome, 'REJECTED')
+        outcome = r.play('switch_mode', mode=teach_mode, shadow_token=token)
+        r.expect('switch_mode rejects shadow_token', outcome, 'REJECTED')
+
+        # teach（shadow_playback: true）中的 PlayChoreo 一律只做影子試播，帶 token 也一樣
+        outcome = r.play('play_choreo', content=script)
+        r.expect('play in the teach mode is a shadow playback', outcome, 'SUCCEEDED',
+                 'Shadow playback in mode', mode=teach_mode)
+        r.check('shadow playback returns a shadow_token',
+                outcome.result is not None and bool(outcome.result.shadow_token))
+        outcome = r.play('play_choreo', content=script, shadow_token=token, wait=True)
+        r.expect('a token does not play for real in the teach mode', outcome, 'SUCCEEDED',
+                 'Shadow playback in mode', mode=teach_mode)
+        after = joint_value(r.play('switch_mode', mode=teach_mode), joint)
+        r.check('shadow playback does not move the robot',
+                after is not None and abs(after - base) < 1e-6, f'{base} -> {after}')
+
+        # 憑證檢查：先切到 stop（hold，同樣不動，起點不變）
+        outcome = r.play('switch_mode', mode='stop', on_same=RESTART)
+        r.expect('leave the teach mode (stop)', outcome, 'SUCCEEDED', mode='stop')
+        outcome = r.play('play_choreo', content=script, shadow_token='bogus')
+        r.expect('unknown shadow_token is refused', outcome, 'ABORTED', 'unknown or expired',
+                 mode='stop')
+        other = choreo_script(joint, round(target, 4), 2.0)
+        outcome = r.play('play_choreo', content=other, shadow_token=token)
+        r.expect('shadow_token of other content is refused', outcome, 'ABORTED',
+                 'content differs', mode='stop')
+        outcome = r.play('play_choreo', content=script, shadow_token=token, wait=True,
+                         timeout=10.0)
+        r.expect('valid shadow_token plays', outcome, 'SUCCEEDED', 'Finished', mode='choreo')
+        # 「播完」以命令位置判斷；量測值稍後才跟上（WSL 時鐘回跳時 RT 迴圈會暫停約 1 s），等一下再讀
+        r.pause(1.5)
+        reached = joint_value(r.play('switch_mode', mode='stop', on_same=RESTART), joint)
+        r.check('played to the dry run target',
+                reached is not None and abs(reached - target) < 1e-3, f'{reached} vs {target}')
+        r.pause()
+        outcome = r.play('play_choreo', content=script, shadow_token=token)
+        r.expect('shadow_token is refused after the robot moved', outcome, 'ABORTED',
+                 'moved since the dry run', mode='stop')
+    finally:
+        r.node.destroy_subscription(state_sub)
+        r.node.destroy_subscription(shadow_sub)
+        r.stop()
+
+
+SECTIONS = ('switch_mode', 'choreo', 'shadow', 'bvh', 'policy', 'cross', 'arm')
 
 
 def main() -> int:
@@ -497,11 +934,17 @@ def main() -> int:
     parser.add_argument('--controller', default='/switch_group_controller')
     parser.add_argument('--target-mode', default='forward',
                         help='a target-type system mode (default: forward)')
+    parser.add_argument('--teach-mode', default='teach',
+                        help='a hold-type system mode with shadow_playback: true, used by the shadow '
+                             'section (default: teach)')
     parser.add_argument('--joint', default='NECK_Y',
                         help='joint moved by the choreography scenarios (default: NECK_Y)')
     parser.add_argument('--bvh', default='t170wk_walk1_subject1',
                         help='BVH file (without .bvh) in bvh.library_path')
     parser.add_argument('--policy', default='rl_flat', help='policy in policy.library_path')
+    parser.add_argument('--arm-ik-server', default='/arm_ik_server')
+    parser.add_argument('--servo-mode', default='arm_servo',
+                        help='system mode using graphen_arm_ik/ArmServoAlgorithm')
     args = parser.parse_args(rclpy.utilities.remove_ros_args(sys.argv)[1:])
 
     sections = SECTIONS if not args.only else tuple(args.only.split(','))
@@ -521,12 +964,16 @@ def main() -> int:
             run_switch_mode(runner, args.target_mode)
         if 'choreo' in sections:
             run_choreo(runner, args.joint, args.target_mode)
+        if 'shadow' in sections:
+            run_shadow(runner, args.joint, args.teach_mode)
         if 'bvh' in sections:
             run_bvh(runner, args.bvh)
         if 'policy' in sections:
             run_policy(runner, args.policy)
         if 'cross' in sections:
             run_cross(runner, args.joint, args.bvh)
+        if 'arm' in sections:
+            run_arm(runner, args.arm_ik_server, args.servo_mode)
         runner.stop()
     finally:
         node.destroy_node()

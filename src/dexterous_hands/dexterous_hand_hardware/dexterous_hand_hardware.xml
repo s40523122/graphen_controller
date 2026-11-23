@@ -4,7 +4,7 @@
     type="dexterous_hand_hardware::DexterousHandHardware"
     base_class_type="hardware_interface::SystemInterface">
     <description>
-      Dexterous Hand Hardware Interface (Mock)
+      RS485 dexterous hand hardware interface (13 actuated joints + 8 tactile sensors)
     </description>
   </class>
 </library>

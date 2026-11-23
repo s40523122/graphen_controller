@@ -22,7 +22,11 @@
 #include "graphen_controllers/playback_server.hpp"
 #include "graphen_controllers/plugin_factory.hpp"
 #include "graphen_controllers/policy_source.hpp"
+#include "graphen_controllers/shadow_gate.hpp"
+#include "graphen_controllers/shadow_runner.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "graphen_interfaces/msg/arm_pose_target.hpp"
+#include "graphen_interfaces/msg/playback_state.hpp"
 #include "graphen_interfaces/action/play_bvh.hpp"
 #include "graphen_interfaces/action/play_choreo.hpp"
 #include "graphen_interfaces/action/run_policy.hpp"
@@ -35,6 +39,7 @@
 #include "pluginlib/class_loader.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/string.hpp"
 
 namespace graphen::control {
@@ -45,7 +50,7 @@ namespace graphen::control {
 // 同一時間只播放一個 Motion，由 LocomotionPlanner 在 non-RT thread 中以 planner_rate 播放、
 // 每週期最多移動 max_steps，寫入 target_buffer_；update() 只讀取最新值輸出。
 // update() 另外把量測的關節角度 / 速度與 IMU 寫入 state_buffer_。planner 每週期讀取後，
-// 補上 ~/cmd_vel 的速度指令、執行機身狀態估測器（base_estimator），再交給 Motion。
+// 補上 ~/cmd_vel 的速度指令、~/pose_targets 的末端目標、執行機身狀態估測器（base_estimator），再交給 Motion。
 //
 // 可以播放的東西依「模式」（類型）分成四種，各有自己的入口；controller 本身只做接線，
 // 不包含任何特定模式的邏輯：
@@ -62,7 +67,7 @@ namespace graphen::control {
 //   planner（non-RT）       Motion 的 on_enter() / update()
 //   播放用的 callback group 會載入內容的 action（編舞、BVH、policy）與所有 service：讀檔、解析、建立演算法實例，
 //                           然後送交 arbiter。載入完成才切換，載入期間（以及載入失敗時）機器人繼續原本的動作
-//   預設的 callback group   ~/switch_mode、~/mode、~/cmd_vel、等待播完的 timer：不做載入，所以不會被載入擋住
+//   預設的 callback group   ~/switch_mode、~/mode、~/cmd_vel、~/pose_targets、等待播完的 timer：不做載入，所以不會被載入擋住
 //                           （停止不必排在別人的載入後面）
 //
 // 參數：
@@ -89,6 +94,10 @@ namespace graphen::control {
 //   base_estimator.plugin    （選填）graphen_locomotion::BaseStateEstimator 的 plugin 類別名稱；
 //                            其餘 base_estimator.* 參數由估測器自行讀取。空字串表示不估測（base.valid 為 false）
 //   command_timeout          ~/cmd_vel 的逾時（秒）；超過時速度指令視為 0（command.active 為 false）
+//   pose_targets.names       （選填）~/pose_targets 接受的目標名稱（例如 [left, right]），
+//                            即 RobotState::pose_targets 的順序；空的時候不訂閱
+//   pose_targets.frame       目標必須使用的座標系（header.frame_id，預設 WAIST_P_S）；controller 不做 tf
+//   pose_targets.timeout     目標的逾時（秒）；超過時該目標的 active 為 false
 //   switch_mode_poll_rate    檢查「等待播完」的 goal 的頻率 (Hz)，也是 feedback 的頻率（所有播放類 action 共用）
 //   robot_description        （BVH 必要、編舞的限位檢查需要）URDF，由 launch 傳給 controller_manager
 //
@@ -121,6 +130,8 @@ namespace graphen::control {
 // 介面：
 //   ~/mode           (std_msgs/String, 訂閱)                 切換系統模式；未知模式會被忽略
 //   ~/cmd_vel        (geometry_msgs/Twist, 訂閱)             機身速度指令（linear.x、linear.y、angular.z）
+//   ~/pose_targets   (graphen_interfaces/msg/ArmPoseTarget, 訂閱)  末端位姿目標（pose_targets.names 有設定時；
+//                    plugin 模式使用，例如 arm_servo）。frame / 名稱不符或非有限值時丟棄並 warn
 //   ~/switch_mode    (graphen_interfaces/action/SwitchMode)  切換系統模式
 //   ~/play_choreo    (graphen_interfaces/action/PlayChoreo)  播放編舞（choreo.plugin 有設定時）
 //   ~/play_bvh       (graphen_interfaces/action/PlayBvh)     播放 BVH（bvh.library_path 有設定時）
@@ -160,6 +171,8 @@ private:
     std::string name;
     std::shared_ptr<Motion> motion;
     PlaybackPolicy policy;
+    // true：這個模式播放中，所有 PlayChoreo 都改為影子試播（不切換），例如示教模式
+    bool shadow_playback{false};
   };
 
   // 依名稱取得系統模式；未知時回傳 nullptr。表在 configure 後即唯讀，可在任何 thread 查詢
@@ -182,6 +195,19 @@ private:
 
   // planner thread 每週期呼叫：取得量測狀態，補上速度指令，並執行機身狀態估測器
   void fill_planner_state(RobotState & state);
+  // ~/pose_targets 的 callback：檢查後寫入 pose_target_commands_
+  void on_pose_target(const graphen_interfaces::msg::ArmPoseTarget & msg);
+
+  // 編舞的影子試播：以 planner 目前的狀態為起點空跑 request.motion，不切換。
+  // 通過時回傳 kDryRun 與 token，失敗時回傳 kRejected；軌跡都會發布在 ~/shadow/joint_states
+  PlaybackOutcome run_dry(const PlaybackRequest & request, const std::string & label);
+  // 目前在播的系統模式設定了 shadow_playback 時回傳它的名稱，否則為 nullopt
+  std::optional<std::string> shadow_playback_mode() const;
+  // 正式播放前檢查試播憑證；不通過時丟出 std::runtime_error（原因成為 result 的 message）
+  void check_shadow_token(const std::string & token, const PlaybackRequest & request) const;
+  // wait_timer_ 中呼叫：發布 ~/playback_state（改變時）與試播軌跡（依實際時間）
+  void publish_playback_state();
+  void publish_shadow_trajectory();
 
   // 讀取 base_estimator.plugin 並建立、configure 估測器；未設定時回傳 nullptr，設定錯誤時丟出例外
   std::shared_ptr<locomotion::BaseStateEstimator> create_base_estimator();
@@ -243,6 +269,18 @@ private:
   VelocityCommand velocity_command_;
   double command_timeout_{0.5};
 
+  // ~/pose_targets 的最新目標（與 pose_target_names_ 同順序）：subscription callback 寫入、planner thread 讀取
+  struct PoseTargetCommand {
+    locomotion::PoseTarget target;
+    std::chrono::steady_clock::time_point stamp;
+    bool received{false};
+  };
+  std::vector<std::string> pose_target_names_;
+  std::string pose_target_frame_;
+  double pose_target_timeout_{0.5};
+  std::mutex pose_target_mutex_;
+  std::vector<PoseTargetCommand> pose_target_commands_;
+
   // planner（non-RT thread）寫入，update() 從 RT 端讀取
   std::unique_ptr<LocomotionPlanner> planner_;
   LocomotionPlanner::TargetBuffer target_buffer_;
@@ -264,6 +302,7 @@ private:
 
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscriber_{nullptr};
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscriber_{nullptr};
+  rclcpp::Subscription<graphen_interfaces::msg::ArmPoseTarget>::SharedPtr pose_target_subscriber_{nullptr};
 
   // 會載入內容的 action（編舞、BVH、policy）與 service 專用的 callback group：載入在這裡進行，
   // 不會擋住預設 group 中的 ~/switch_mode、~/cmd_vel、~/mode 與 wait_timer_
@@ -273,8 +312,27 @@ private:
   rclcpp::Service<graphen_interfaces::srv::ListChoreos>::SharedPtr list_choreos_service_;
   rclcpp::Service<graphen_interfaces::srv::GetChoreo>::SharedPtr get_choreo_service_;
   rclcpp::Service<graphen_interfaces::srv::Preload>::SharedPtr preload_service_;
-  // 定時呼叫各 server 的 poll()（等待播完的 goal）
+  // 定時呼叫各 server 的 poll()（等待播完的 goal），並發布 ~/playback_state
   rclcpp::TimerBase::SharedPtr wait_timer_{nullptr};
+
+  // ~/playback_state：目前在播的東西（未啟用時為空），改變時發布
+  rclcpp::Publisher<graphen_interfaces::msg::PlaybackState>::SharedPtr playback_state_publisher_;
+  std::optional<graphen_interfaces::msg::PlaybackState> last_playback_state_;
+
+  // 影子試播（choreo.shadow.*）：憑證、模擬上限，與試播軌跡的發布
+  std::unique_ptr<ShadowGate> shadow_gate_;
+  double shadow_max_duration_{600.0};
+  double shadow_publish_rate_{50.0};
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr shadow_publisher_;
+  rclcpp::TimerBase::SharedPtr shadow_timer_{nullptr};
+  // 最近一次試播的軌跡：playback group 寫入、shadow_timer_ 讀取
+  struct ShadowReplay {
+    ShadowResult trajectory;
+    std::chrono::steady_clock::time_point started;
+    size_t next{0};  // 下一個要發布的取樣
+  };
+  std::mutex shadow_mutex_;
+  std::optional<ShadowReplay> shadow_replay_;
 };
 
 }  // namespace graphen::control

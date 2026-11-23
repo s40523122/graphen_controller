@@ -16,7 +16,10 @@
   <!-- robot:= 的模型套件：MJCF 與 config/joint_pd_gains.yaml -->
   <exec_depend>fb70_description</exec_depend>
   <exec_depend>ti5_t170_description</exec_depend>
+  <exec_depend>graphen_aiterone_ny_description</exec_depend>
   <exec_depend>graphen_controllers</exec_depend>
+  <!-- arm_ik_server、編舞的路徑碰撞檢查與 arm_servo 模式（依 robot:= 的 config/arm_ik.yaml） -->
+  <exec_depend>graphen_arm_ik</exec_depend>
   <exec_depend>graphen_interfaces</exec_depend>
   <!-- policy 庫（policy.library_path 的預設位置：graphen_rl_policy/policy） -->
   <exec_depend>graphen_rl_policy</exec_depend>
@@ -27,6 +30,7 @@
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
