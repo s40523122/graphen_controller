@@ -47,12 +47,22 @@ PlayChoreo::PlayChoreo(const std::string & name, const BT::NodeConfiguration & c
 BT::PortsList PlayChoreo::providedPorts() {
   auto ports = common_ports(kPlayChoreoAction);
   ports.insert(BT::InputPort<std::string>("choreo", "Name of a published choreography"));
+  ports.insert(BT::InputPort<std::string>("content",
+    "Choreography script (YAML) to play directly; exclusive with choreo"));
   return ports;
 }
 
 std::string PlayChoreo::fill_goal(Goal & goal) {
-  goal.name = required_input(*this, node_type_name(), "choreo");
-  return goal.name;
+  std::string name;
+  std::string content;
+  getInput("choreo", name);
+  getInput("content", content);
+  if (name.empty() == content.empty()) {
+    throw BT::RuntimeError(node_type_name() + ": exactly one of [choreo] and [content] is required");
+  }
+  goal.name = name;
+  goal.content = content;
+  return name.empty() ? "<content>" : name;
 }
 
 PlayBvh::PlayBvh(const std::string & name, const BT::NodeConfiguration & config)

@@ -14,27 +14,69 @@
 
 namespace {
 
+constexpr const char * kBlackboardParamPrefix = "gp_";
+
+// 參數 gp_<key> 寫入 blackboard 的 <key>；型別沿用參數的型別（bool / int / double / string）。
+// 樹的 port 型別必須一致：double 的 port 要寫成 1.0 而不是 1。不支援的型別或型別衝突時回傳錯誤訊息
+std::optional<std::string> sync_to_blackboard(
+  const BT::Blackboard::Ptr & blackboard, const rclcpp::Parameter & param)
+{
+  const auto key = param.get_name().substr(std::char_traits<char>::length(kBlackboardParamPrefix));
+  try {
+    switch (param.get_type()) {
+      case rclcpp::ParameterType::PARAMETER_BOOL:
+        blackboard->set<bool>(key, param.as_bool());
+        return std::nullopt;
+      case rclcpp::ParameterType::PARAMETER_INTEGER:
+        blackboard->set<int>(key, static_cast<int>(param.as_int()));
+        return std::nullopt;
+      case rclcpp::ParameterType::PARAMETER_DOUBLE:
+        blackboard->set<double>(key, param.as_double());
+        return std::nullopt;
+      case rclcpp::ParameterType::PARAMETER_STRING:
+        blackboard->set<std::string>(key, param.as_string());
+        return std::nullopt;
+      default:
+        return "unsupported type " + std::string(param.get_type_name());
+    }
+  } catch (const std::exception & e) {
+    return std::string(e.what());
+  }
+}
+
+bool is_blackboard_param(const std::string & name) {
+  return name.rfind(kBlackboardParamPrefix, 0) == 0 &&
+         name.size() > std::char_traits<char>::length(kBlackboardParamPrefix);
+}
+
 // 載入 behavior tree、以固定週期 tick 的執行器。
-// ROS 參數 gp_* 與 topic /is_ok、/wait_seconds 會同步寫入 blackboard，
-// 讓外部（rqt、命令列）能在執行中調整樹的行為。
+// 所有 gp_* 參數（設定檔中的、以及下面宣告的預設值）與 topic /is_ok、/wait_seconds 會同步寫入
+// blackboard（gp_ 之後的名稱為 key），讓外部（rqt、命令列）能在執行中調整樹的行為；
+// 新的樹只要在設定檔加上 gp_* 參數即可，不需要修改這個程式。
 int run(const rclcpp::Node::SharedPtr & node) {
   const auto logger = node->get_logger();
 
-  node->declare_parameter<std::string>("tree_file", "");
-  node->declare_parameter<std::vector<std::string>>("plugins", {"graphen_bt_nodes"});
-  node->declare_parameter<int>("tick_period_ms", 100);
-  node->declare_parameter<bool>("groot.enabled", true);
-  node->declare_parameter<int>("groot.max_msg_per_second", 25);
-  node->declare_parameter<int>("groot.publisher_port", 1666);
-  node->declare_parameter<int>("groot.server_port", 1667);
+  // 設定檔中的參數已由 NodeOptions 自動宣告（型別取自設定檔），這裡只補上沒有設定時的預設值
+  const auto declare_default = [&node](const std::string & name, const auto & value) {
+      if (!node->has_parameter(name)) {
+        node->declare_parameter(name, value);
+      }
+    };
+  declare_default("tree_file", std::string{});
+  declare_default("plugins", std::vector<std::string>{"graphen_bt_nodes"});
+  declare_default("tick_period_ms", 100);
+  declare_default("groot.enabled", true);
+  declare_default("groot.max_msg_per_second", 25);
+  declare_default("groot.publisher_port", 1666);
+  declare_default("groot.server_port", 1667);
 
-  // 對外調整 blackboard 用的參數
-  node->declare_parameter<bool>("gp_is_ok", true);
-  node->declare_parameter<int>("gp_wait_seconds", 3);
-  node->declare_parameter<double>("gp_rate", 100.0);
-  node->declare_parameter<int>("gp_sys_count", 0);
-  node->declare_parameter<bool>("gp_enable_walk", false);
-  node->declare_parameter<bool>("gp_enable_reciprocate", true);
+  // 既有樹使用的 blackboard 參數的預設值；其他 gp_* 由設定檔提供
+  declare_default("gp_is_ok", true);
+  declare_default("gp_wait_seconds", 3);
+  declare_default("gp_rate", 100.0);
+  declare_default("gp_sys_count", 0);
+  declare_default("gp_enable_walk", false);
+  declare_default("gp_enable_reciprocate", true);
 
   const auto tree_file = node->get_parameter("tree_file").as_string();
   if (tree_file.empty()) {
@@ -61,14 +103,19 @@ int run(const rclcpp::Node::SharedPtr & node) {
   // 建樹前先放入 ROS node，需要 ROS 的節點會在建構時從 blackboard 取得
   auto blackboard = BT::Blackboard::create();
   blackboard->set<rclcpp::Node::SharedPtr>("node", node);
-  blackboard->set<bool>("is_ok", node->get_parameter("gp_is_ok").as_bool());
-  blackboard->set<int>(
-    "wait_seconds", static_cast<int>(node->get_parameter("gp_wait_seconds").as_int()));
-  blackboard->set<double>("rate", node->get_parameter("gp_rate").as_double());
+  const auto parameter_names = node->list_parameters({}, 0).names;
+  for (const auto & name : parameter_names) {
+    if (!is_blackboard_param(name)) {
+      continue;
+    }
+    if (const auto error = sync_to_blackboard(blackboard, node->get_parameter(name))) {
+      RCLCPP_ERROR(logger, "Parameter '%s' cannot be written to the blackboard: %s",
+        name.c_str(), error->c_str());
+      return 1;
+    }
+  }
+  // 計數一律從 0 開始（gp_sys_count 是計數的鏡像，由 IncrementSysCount 等節點回寫）
   blackboard->set<int>("sys_count", 0);
-  blackboard->set<bool>("enable_walk", node->get_parameter("gp_enable_walk").as_bool());
-  blackboard->set<bool>(
-    "enable_reciprocate", node->get_parameter("gp_enable_reciprocate").as_bool());
 
   auto tree = factory.createTreeFromFile(tree_file, blackboard);
   RCLCPP_INFO(logger, "Loaded tree from [ %s ]", tree_file.c_str());
@@ -79,24 +126,18 @@ int run(const rclcpp::Node::SharedPtr & node) {
       rcl_interfaces::msg::SetParametersResult result;
       result.successful = true;
       for (const auto & param : parameters) {
-        if (param.get_name() == "gp_is_ok") {
-          blackboard->set<bool>("is_ok", param.as_bool());
-          RCLCPP_INFO(logger, "Parameter changed: is_ok -> %s", param.as_bool() ? "true" : "false");
-        } else if (param.get_name() == "gp_wait_seconds") {
-          blackboard->set<int>("wait_seconds", static_cast<int>(param.as_int()));
-          RCLCPP_INFO(logger, "Parameter changed: wait_seconds -> %ld", param.as_int());
-        } else if (param.get_name() == "gp_rate") {
-          blackboard->set<double>("rate", param.as_double());
-          RCLCPP_INFO(logger, "Parameter changed: rate -> %f", param.as_double());
-        } else if (param.get_name() == "gp_enable_walk") {
-          blackboard->set<bool>("enable_walk", param.as_bool());
-          RCLCPP_INFO(logger, "Parameter changed: enable_walk -> %s",
-            param.as_bool() ? "true" : "false");
-        } else if (param.get_name() == "gp_enable_reciprocate") {
-          blackboard->set<bool>("enable_reciprocate", param.as_bool());
-          RCLCPP_INFO(logger, "Parameter changed: enable_reciprocate -> %s",
-            param.as_bool() ? "true" : "false");
+        if (!is_blackboard_param(param.get_name())) {
+          continue;
         }
+        if (const auto error = sync_to_blackboard(blackboard, param)) {
+          // 型別和樹的 port 不一致時拒絕修改，不讓樹在 tick 時才失敗
+          result.successful = false;
+          result.reason = param.get_name() + ": " + *error;
+          return result;
+        }
+        RCLCPP_INFO(logger, "Parameter changed: %s -> %s",
+          param.get_name().substr(std::char_traits<char>::length(kBlackboardParamPrefix)).c_str(),
+          param.value_to_string().c_str());
       }
       return result;
     });
@@ -152,7 +193,10 @@ int run(const rclcpp::Node::SharedPtr & node) {
 
 int main(int argc, char ** argv) {
   rclcpp::init(argc, argv);
-  auto node = rclcpp::Node::make_shared("bt_runner");
+  // 設定檔中的 gp_* 不需要逐一在程式中宣告：自動宣告設定檔中的所有參數
+  auto node = rclcpp::Node::make_shared(
+    "bt_runner",
+    rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(true));
 
   int ret = 1;
   try {

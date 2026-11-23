@@ -28,8 +28,9 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [graphen_motion](src/graphen_motion/) | C++ lib（不依賴 rclcpp） | BVH 解析、BVH → URDF 1-DOF joint 轉換（`BvhRetargeter`）、`bvh_retarget_cli` | — |
 | [graphen_controllers](src/graphen_controllers/) | controller plugin | `SwitchGroupController`（含 `LocomotionPlanner`、切換規則 `PlaybackArbiter`、內容來源 `ChoreoSource` / `BvhSource` / `PolicySource`）、子群組 `PositionController` / `PdController` | graphen_control_utils、graphen_interfaces、graphen_motion |
 | [graphen_bringup](src/graphen_bringup/) | 資源 | controller 設定檔、CAN 設定、BVH 與範例編舞（`motions/`）、launch、工具腳本（`choreo_publish`、`playback_scenarios`） | graphen_controllers、ti5_170a_graphen |
-| [graphen_bt_nodes](src/graphen_bt_nodes/) | BT plugin | 自訂 BT 節點（RateControl、IsOk、SysCount、播放節點 SwitchMode / PlayChoreo / PlayBvh / RunPolicy…） | graphen_interfaces |
+| [graphen_bt_nodes](src/graphen_bt_nodes/) | BT plugin | 自訂 BT 節點（RateControl、IsOk、SysCount、播放節點 SwitchMode / PlayChoreo / PlayBvh / RunPolicy、速度命令 JointVelocity、視覺跟隨用的 GetPixelError / SendOnChange…） | graphen_interfaces |
 | [graphen_bt](src/graphen_bt/) | 執行檔 | `bt_runner`、tree XML、設定檔與 launch | graphen_bt_nodes（執行期載入） |
+| [graphen_vision](src/graphen_vision/) | 節點（Python） | `face_tracker`：相機影像（ROS topic，或直接讀 webcam / RealSense 彩色串流）→ YuNet 人臉偵測與鎖定 → `/face_tracker/target`（給 face_track.xml） | — （執行期選用：realsense2_camera） |
 | [imu16460_core](src/imu16460/imu16460_core/) | C++ lib（純 CMake，無 ROS） | IMU 協議、parser、serial、`Driver`、`imu16460_cli` | — |
 | [imu16460_hardware](src/imu16460/imu16460_hardware/) | hardware plugin | ros2_control `SensorInterface`，xacro macro | imu16460_core |
 | [ti5_170a_graphen](src/robot_description/ti5_170a_graphen/) | 資源（外部） | T170 URDF、ros2_control xacro、joint 分組 SRDF | imu16460_hardware、ti5_hardware、dexterous_hand_description |
@@ -196,7 +197,7 @@ timeout 15 ros2 action send_goal --feedback /switch_group_controller/play_choreo
   graphen_interfaces/action/PlayChoreo "{name: arm_demo, options: {wait_until_finished: true}}"
 ```
 
-- **試播**：把 `name` 換成 `content`（腳本的 YAML 字串），不存檔直接播放；檢查與發佈相同。這是給編輯工具用的，BT 只能依名稱播放。
+- **試播**：把 `name` 換成 `content`（腳本的 YAML 字串），不存檔直接播放；檢查與發佈相同。這是給編輯工具用的；BT 的表演依名稱播放（`content` 只用於樹即時產生的短命令，例如視覺跟隨）。
 - 內容有誤、名稱沒有發佈時 goal 為 aborted，`message` 說明原因，機器人繼續原本的動作。
 - 等待中被其他播放取代（任何一個 action 或 `~/mode`）時 goal 會 abort（`Preempted by [ X ]`）；Ctrl-C（cancel）只是不再等待，**動作會繼續執行**，要停下來請切到 `stop`。
 - 已經在播同一段時：`on_same: 0` 不重新開始；`1` 一律重播；`2` 播完才重播（播放中重複送出的指令被吃掉）。重新發佈後的同名舞曲視為不同的內容，會直接切換。
@@ -292,6 +293,35 @@ ros2 param set /bt_runner gp_enable_walk true          # 切到 walk（BVH 步�
 ros2 param set /bt_runner gp_enable_walk false         # 回到往返（從 forward 開始）
 ros2 param set /bt_runner gp_enable_reciprocate false  # 兩個都 false：停止
 ```
+
+### 視覺跟隨（頭部轉向人臉）
+
+外部的人臉偵測節點把人臉中心發布成 `geometry_msgs/PointStamped`（`point.x` / `point.y` 為像素，原點在左上角；預設 topic `/face_tracker/target`，以 `gp_face_topic` 修改）。相機要裝在頭上，不需要校正。`face_track.xml` 依誤差以低頻送出頭部的速度命令（快 / 慢 / 停），人臉遺失時立即停止，超過 `gp_face_lost_hold` 秒回到正前方（系統模式 `head_center`）。設計見 [ARCHITECTURE §3.5](docs/ARCHITECTURE.md#35-與控制層的連動) 與 D47。
+
+視覺端用 `graphen_vision` 的 `face_tracker`（YuNet 人臉偵測，多張臉時鎖定一張持續跟隨）。啟動順序：
+
+```bash
+# 1. 相機 + 視覺端，二擇一：
+#    a. 直接讀 V4L2 裝置：webcam，或不裝 RealSense SDK、把 RealSense 的彩色串流當 webcam
+#       （v4l2-ctl --list-devices 找出 RealSense 的節點，--list-formats-ext 中 YUYV 的是彩色；
+#        建議用 /dev/v4l/by-id/... 的路徑，WSL 預設核心沒有 uvcvideo 讀不到）
+ros2 launch graphen_vision face_tracker.launch.py source:=device device:=/dev/video4
+#    b. realsense2_camera（要在機器人端安裝）發布影像，face_tracker 訂閱
+ros2 launch graphen_vision face_tracker.launch.py start_camera:=true color_profile:=640x480x30
+#    log 會印出影像尺寸，必須和 bt_runner 的 gp_face_image_width / gp_face_image_height 一致；
+#    設定 publish_debug_image: true 後可以用 rqt_image_view 看 /face_tracker/debug_image 的框
+# 2. 控制層（bringup）
+# 3. 行為層
+ros2 launch graphen_bt bt.launch.py \
+  tree_file:=$(ros2 pkg prefix graphen_bt)/share/graphen_bt/trees/face_track.xml
+ros2 param set /bt_runner gp_enable_face_track true    # 開始跟隨（預設 false）
+ros2 param set /bt_runner gp_face_v_slow 3.0           # 執行中調整；小數要寫成 x.0
+```
+
+- 參數（速度 deg/s、門檻、正負號、範圍、命令時效）都在 `bt_runner.yaml` 的 `gp_face_*`，說明見 [bt_runner.yaml.example](src/graphen_bt/config/bt_runner.yaml.example)。本機的 `bt_runner.yaml` 與 `controllers.yaml`（`head_center` 模式）要和範本同步。
+- **第一次上機先確認方向**：`gp_face_sign_yaw` / `gp_face_sign_pitch` 反了頭會越轉越遠，立即把 `gp_enable_face_track` 設為 false（頭最多再轉 `v × gp_face_horizon`）。
+- 需要 `choreo.shadow.require: false`：速度命令是 PlayChoreo 帶內容的短編舞，強制試播時每個命令都會被拒絕。
+- `face_tracker` 的參數（影像 topic、偵測門檻、鎖定、平滑）在 [face_tracker.yaml](src/graphen_vision/config/face_tracker.yaml)。收不到影像時（每 5 秒 WARN）先確認 `image_topic` 與 `image_reliable` 和發送端相符（`ros2 topic info -v <topic>`）。
 
 ### 靈巧手（mock）
 

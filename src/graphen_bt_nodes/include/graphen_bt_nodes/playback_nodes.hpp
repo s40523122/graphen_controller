@@ -26,8 +26,11 @@ protected:
   std::string fill_goal(Goal & goal) override;
 };
 
-// 播放舞曲庫中已發佈的編舞。BT 只能依名稱播放（帶內容的試播是編輯工具用的）。
-//   choreo (string) 舞曲的名稱
+// 播放編舞：舞曲庫中已發佈的名稱，或直接帶腳本內容（兩者擇一）。
+// 表演用名稱；content 給由樹即時產生的短編舞（例如 JointVelocity 的速度命令）使用，
+// 播放前一樣經過 controller 的完整檢查。
+//   choreo  (string) 舞曲的名稱
+//   content (string) 腳本的 YAML 內容
 class PlayChoreo : public PlaybackActionNode<graphen_interfaces::action::PlayChoreo> {
 public:
   PlayChoreo(const std::string & name, const BT::NodeConfiguration & config);

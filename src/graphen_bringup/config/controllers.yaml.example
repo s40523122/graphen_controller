@@ -193,7 +193,7 @@ switch_group_controller:
     # 系統模式：以名稱識別（switch_mode action、BT 的 SwitchMode、~/mode topic 都用這些名稱），
     # 名稱同時是下面參數的前綴。type 只有 target / hold / plugin；controller 不認得任何特定模式，
     # 行為完全由 type 與參數決定。choreo / bvh / policy 是保留名稱（見後面的內容與 policy 區塊）
-    modes: [forward, reverse, stop, teach, sine, arm_servo, home]
+    modes: [forward, reverse, stop, teach, sine, arm_servo, home, head_center]
     # 啟動時的動作：default_mode（系統模式）或 default_policy（policy 名稱）擇一。
     # 都是空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
     # 收到 BT / action / ~/mode 的命令後才開始移動
@@ -265,6 +265,19 @@ switch_group_controller:
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # head_center：頭部回到正前方（BT face_track 在目標遺失一段時間後使用），比預設慢。
+    # 只列出頭部，其餘保持進入時的位置
+    head_center:
+      type: target
+      joints: [NECK_Y, NECK_P, NECK_R]
+      targets: [0.0, 0.0, 0.0]
+      max_steps: [0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005,   # left arm
+                  0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005,   # right arm
+                  0.005, 0.005, 0.005,                               # waist
+                  0.003, 0.003, 0.003,                               # head（100 Hz 下約 0.3 rad/s）
+                  0.005, 0.005, 0.005, 0.005, 0.005, 0.005,          # left leg
+                  0.005, 0.005, 0.005, 0.005, 0.005, 0.005]          # right leg
 
     # ── 內容與 policy：不是 modes 裡的系統模式，各有自己的 action，播什麼由指令指定 ──
     # 這裡只放機器人端的設定（庫的位置與安全上限）；內容本身不寫在這個檔案裡。

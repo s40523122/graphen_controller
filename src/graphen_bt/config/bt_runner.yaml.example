@@ -20,3 +20,29 @@ bt_runner:
     # joint_reciprocate.xml 的模式選擇：walk 優先；都為 false 時切到 stop 模式停止
     gp_enable_walk: false
     gp_enable_reciprocate: false
+
+    # face_track.xml（視覺跟隨：頭部轉向外部節點提供的人臉中心）。型別要和樹的 port 一致：
+    # 小數的參數一律寫成 x.0。門檻都是正規化誤差（畫面中心 0、邊緣 1），不需要相機校正
+    gp_enable_face_track: false
+    gp_face_topic: /face_tracker/target     # geometry_msgs/PointStamped，x / y 為像素（只在啟動時讀取）
+    # 必須等於相機 color 影像的解析度（graphen_vision face_tracker 啟動時 log 印出；
+    # face_tracker.launch.py 的 color_profile 預設 640x480x30）
+    gp_face_image_width: 640.0
+    gp_face_image_height: 480.0
+    gp_face_timeout_ms: 500                 # 超過這段時間沒有新資料視為遺失：立即停止
+    gp_face_lost_hold: 3.0                  # s，遺失超過這段時間後慢速回到正前方（head_center 模式）
+    # 各軸的速度選擇：|誤差| > far 用 v_fast；> near（已在動時 > stop）用 v_slow；其餘停止。
+    # stop 要預留延遲造成的滑行量（約 v_slow × 0.3 s 換算成誤差），near > stop 形成遲滯
+    gp_face_far: 0.4
+    gp_face_near: 0.15
+    gp_face_stop: 0.08
+    gp_face_v_fast: 20.0                    # deg/s（choreo.max_steps 的頭部 0.005 × 100 Hz ≈ 28.6 deg/s 為上限）
+    gp_face_v_slow: 5.0                     # deg/s
+    # 誤差 → 關節速度的正負號（相機裝在頭上）。人臉在畫面右側（err_x > 0）時頭要往右轉
+    # TODO(verify-on-hw): 依實機的 NECK 軸向確認；方向反了頭會越轉越遠，立即關閉 enable_face_track
+    gp_face_sign_yaw: -1.0
+    gp_face_sign_pitch: 1.0
+    gp_face_lower: "-1.2;-0.5"              # rad，NECK_Y;NECK_P 的移動範圍（比 URDF 限位小）
+    gp_face_upper: "1.2;0.5"
+    gp_face_horizon: 1.0                    # s，一個速度命令的有效時間；BT 停止續送時最多再動這麼久
+    gp_face_refresh_ms: 500                 # 速度不變時的續送間隔，必須小於 horizon

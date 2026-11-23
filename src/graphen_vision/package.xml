@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>graphen_vision</name>
+  <version>0.0.0</version>
+  <description>Vision nodes for graphen: face tracking target (YuNet) for the BT face_track tree.</description>
+  <maintainer email="riverji@graphen.ai">jin</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <!-- realsense2_camera 只在 launch 的 start_camera:=true 時使用，在機器人端另外安裝，不列為依賴；
+       source: device 直接讀 V4L2 裝置（webcam / RealSense 的彩色串流），不需要它 -->
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

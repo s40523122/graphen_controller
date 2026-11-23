@@ -1,0 +1,200 @@
+<?xml version="1.0"?>
+<!--
+  視覺跟隨：頭部（NECK_Y / NECK_P）轉向外部節點提供的人臉中心，讓人臉留在畫面中央。
+  相機裝在頭上，所以只看像素誤差就能閉環，不需要相機校正（只需要各軸的正負號與門檻）。
+
+  BT 只送出低頻的「方向 + 速度」命令，每個 tick 監控誤差，在越過目標之前降速或停止：
+    1. Decide  依目前狀態決定命令 {cmd}：stop / center / "<yaw deg/s>;<pitch deg/s>"
+       Disabled   gp_enable_face_track 為 false：stop
+       Track      看得到人臉：每軸以子樹 AxisVelocity 選速度（快 / 慢 / 停，有遲滯），兩軸都停就是 stop
+       Lost       看不到人臉：立即 stop（不在沒有回饋時繼續轉）；超過 face_lost_hold 秒回到正前方
+    2. Send    SendOnChange：{cmd} 改變時才送出；速度命令另外每 face_refresh_ms 續送一次。
+       速度命令（JointVelocity）只維持 face_horizon 秒：BT 中斷或續送失敗時，頭最多再動這麼久就停下
+
+  所有數值來自 bt_runner.yaml 的 gp_face_*（rqt / ros2 param set 可在執行中調整）。
+  stop / head_center 是系統模式（controllers.yaml 的 modes）；速度命令是 PlayChoreo 帶內容播放的短編舞，
+  受 controller 的編舞上限檢查（超過上限的命令被拒絕，不會執行）。
+  第一次 tick 時 enable 為 false 會送出一次 stop（和 joint_reciprocate 相同）。
+-->
+<root main_tree_to_execute="FaceTrack">
+    <!-- ////////// -->
+    <BehaviorTree ID="FaceTrack">
+        <Sequence>
+            <!-- 只在第一次 tick 執行：各軸的速度狀態（遲滯用）從 0 開始 -->
+            <Fallback name="InitOnce">
+                <BlackboardCheckString value_A="{initialized}" value_B="true" return_on_mismatch="FAILURE">
+                    <AlwaysSuccess/>
+                </BlackboardCheckString>
+                <Sequence>
+                    <Action ID="Multiply" name="ResetYawSpeed" a="0" out="{yaw_speed}"/>
+                    <Action ID="Multiply" name="ResetPitchSpeed" a="0" out="{pitch_speed}"/>
+                    <SetBlackboard output_key="initialized" value="true"/>
+                </Sequence>
+            </Fallback>
+
+            <IfThenElse name="Decide">
+                <Condition ID="IsOk" is_ok_val="{enable_face_track}"/>
+                <IfThenElse name="FaceVisible">
+                    <Action ID="GetPixelError" topic="{face_topic}"
+                            image_width="{face_image_width}" image_height="{face_image_height}"
+                            timeout_ms="{face_timeout_ms}"
+                            err_x="{err_x}" err_y="{err_y}" abs_x="{abs_x}" abs_y="{abs_y}"
+                            dir_x="{dir_x}" dir_y="{dir_y}" lost_s="{lost_s}"/>
+                    <Sequence name="Track">
+                        <SubTreePlus ID="AxisVelocity" name="Yaw"
+                                     abs="{abs_x}" dir="{dir_x}" sign="{face_sign_yaw}"
+                                     far="{face_far}" near="{face_near}" stop="{face_stop}"
+                                     v_fast="{face_v_fast}" v_slow="{face_v_slow}"
+                                     speed="{yaw_speed}" v="{yaw_v}"/>
+                        <SubTreePlus ID="AxisVelocity" name="Pitch"
+                                     abs="{abs_y}" dir="{dir_y}" sign="{face_sign_pitch}"
+                                     far="{face_far}" near="{face_near}" stop="{face_stop}"
+                                     v_fast="{face_v_fast}" v_slow="{face_v_slow}"
+                                     speed="{pitch_speed}" v="{pitch_v}"/>
+                        <Action ID="JoinValues" in1="{yaw_v}" in2="{pitch_v}" out="{velocities}"/>
+                        <Fallback>
+                            <BlackboardCheckString name="Centered" value_A="{velocities}" value_B="0.0;0.0" return_on_mismatch="FAILURE">
+                                <Sequence>
+                                    <SetBlackboard output_key="cmd" value="stop"/>
+                                    <SetBlackboard output_key="cmd_refresh_ms" value="0"/>
+                                </Sequence>
+                            </BlackboardCheckString>
+                            <Sequence name="Move">
+                                <SetBlackboard output_key="cmd" value="{velocities}"/>
+                                <SetBlackboard output_key="cmd_refresh_ms" value="{face_refresh_ms}"/>
+                            </Sequence>
+                        </Fallback>
+                    </Sequence>
+                    <Sequence name="Lost">
+                        <!-- 重新看到人臉時，從「停止」的門檻（near）開始判斷 -->
+                        <Action ID="Multiply" a="0" out="{yaw_speed}"/>
+                        <Action ID="Multiply" a="0" out="{pitch_speed}"/>
+                        <SetBlackboard output_key="cmd_refresh_ms" value="0"/>
+                        <IfThenElse>
+                            <Condition ID="IsAbove" name="LostLong" value="{lost_s}" threshold="{face_lost_hold}"/>
+                            <SetBlackboard output_key="cmd" value="center"/>
+                            <SetBlackboard output_key="cmd" value="stop"/>
+                        </IfThenElse>
+                    </Sequence>
+                </IfThenElse>
+                <Sequence name="Disabled">
+                    <SetBlackboard output_key="cmd" value="stop"/>
+                    <SetBlackboard output_key="cmd_refresh_ms" value="0"/>
+                </Sequence>
+            </IfThenElse>
+
+            <!-- 命令改變時才送出；速度命令在到期前續送。失敗時下一個 tick 重試 -->
+            <Decorator ID="SendOnChange" name="Send" value="{cmd}" refresh_ms="{cmd_refresh_ms}">
+                <Switch2 variable="{cmd}" case_1="stop" case_2="center">
+                    <Action ID="SwitchMode" mode="stop"/>
+                    <Action ID="SwitchMode" mode="head_center"/>
+                    <Action ID="JointVelocity" joints="NECK_Y;NECK_P" velocities="{cmd}"
+                            lower="{face_lower}" upper="{face_upper}" horizon="{face_horizon}"/>
+                </Switch2>
+            </Decorator>
+        </Sequence>
+    </BehaviorTree>
+
+    <!-- 單軸的速度選擇（yaw / pitch 共用）：
+         |誤差| > far                         → v_fast
+         |誤差| > near，或已在動且 |誤差| > stop → v_slow（遲滯：停下後要超過 near 才再啟動）
+         其餘                                 → 0
+         speed 是這一軸目前的速度大小（下一個 tick 判斷「已在動」用）；v = speed × dir × sign（deg/s） -->
+    <BehaviorTree ID="AxisVelocity">
+        <Sequence>
+            <Fallback name="ChooseSpeed">
+                <Sequence name="Fast">
+                    <Condition ID="IsAbove" name="Far" value="{abs}" threshold="{far}"/>
+                    <Action ID="Multiply" a="{v_fast}" out="{speed}"/>
+                </Sequence>
+                <Sequence name="Slow">
+                    <Fallback>
+                        <Condition ID="IsAbove" name="BeyondNear" value="{abs}" threshold="{near}"/>
+                        <Sequence name="KeepMoving">
+                            <Condition ID="IsAbove" name="Moving" value="{speed}" threshold="0"/>
+                            <Condition ID="IsAbove" name="BeyondStop" value="{abs}" threshold="{stop}"/>
+                        </Sequence>
+                    </Fallback>
+                    <Action ID="Multiply" a="{v_slow}" out="{speed}"/>
+                </Sequence>
+                <Action ID="Multiply" name="Stop" a="0" out="{speed}"/>
+            </Fallback>
+            <Action ID="Multiply" name="Velocity" a="{speed}" b="{dir}" c="{sign}" out="{v}"/>
+        </Sequence>
+    </BehaviorTree>
+    <!-- ////////// -->
+    <TreeNodesModel>
+        <Condition ID="IsOk">
+            <input_port name="is_ok_val" type="bool"/>
+        </Condition>
+        <Condition ID="IsAbove">
+            <input_port name="value" type="double"/>
+            <input_port name="threshold" type="double"/>
+        </Condition>
+        <Action ID="GetPixelError">
+            <input_port name="topic" type="std::string" default="/face_tracker/target">geometry_msgs/PointStamped, pixels</input_port>
+            <input_port name="image_width" type="double">Image width (px)</input_port>
+            <input_port name="image_height" type="double">Image height (px)</input_port>
+            <input_port name="timeout_ms" type="int" default="500">Target is lost after this long</input_port>
+            <output_port name="err_x" type="double">Normalized error, right is positive</output_port>
+            <output_port name="err_y" type="double">Normalized error, down is positive</output_port>
+            <output_port name="abs_x" type="double">|err_x|</output_port>
+            <output_port name="abs_y" type="double">|err_y|</output_port>
+            <output_port name="dir_x" type="double">Sign of err_x (-1, 0, 1)</output_port>
+            <output_port name="dir_y" type="double">Sign of err_y (-1, 0, 1)</output_port>
+            <output_port name="lost_s" type="double">Seconds since the last detection</output_port>
+        </Action>
+        <Action ID="Multiply">
+            <input_port name="a" type="double"/>
+            <input_port name="b" type="double" default="1.0"/>
+            <input_port name="c" type="double" default="1.0"/>
+            <output_port name="out" type="double"/>
+        </Action>
+        <Action ID="JoinValues">
+            <input_port name="in1" type="double"/>
+            <input_port name="in2" type="double"/>
+            <input_port name="in3" type="double"/>
+            <input_port name="in4" type="double"/>
+            <input_port name="precision" type="int" default="1">Number of decimals</input_port>
+            <output_port name="out" type="std::string">Values joined with ;</output_port>
+        </Action>
+        <Decorator ID="SendOnChange">
+            <input_port name="value" type="std::string">Command to compare with the last one sent</input_port>
+            <input_port name="refresh_ms" type="int" default="0">Resend an unchanged command after this long, 0 = never</input_port>
+        </Decorator>
+        <Action ID="SwitchMode">
+            <input_port name="action_name" type="std::string" default="/switch_group_controller/switch_mode">Action name</input_port>
+            <input_port name="mode" type="std::string">System mode to switch to</input_port>
+            <input_port name="timeout_ms" type="int" default="1000">Timeout for server discovery and the switch itself (including loading)</input_port>
+            <input_port name="wait_finished" type="bool" default="false">Return SUCCESS only after the motion has finished</input_port>
+            <input_port name="on_same" type="std::string" default="ignore">When this is already playing: ignore, restart or restart_if_finished</input_port>
+            <input_port name="finish_timeout_ms" type="int" default="0">With wait_finished: limit on waiting for the motion to finish, 0 = no limit</input_port>
+        </Action>
+        <Action ID="JointVelocity">
+            <input_port name="action_name" type="std::string" default="/switch_group_controller/play_choreo">Action name</input_port>
+            <input_port name="joints" type="std::string">Joint names separated by ;</input_port>
+            <input_port name="velocities" type="std::string">Velocity of each joint in deg/s, separated by ;</input_port>
+            <input_port name="lower" type="std::string">Lower bound of each joint (rad), separated by ;</input_port>
+            <input_port name="upper" type="std::string">Upper bound of each joint (rad), separated by ;</input_port>
+            <input_port name="horizon" type="double" default="1.0">How long one command keeps moving (s); resend before it expires</input_port>
+            <input_port name="states_topic" type="std::string" default="/switch_group_controller/states">DynamicJointState topic for the current positions</input_port>
+            <input_port name="timeout_ms" type="int" default="1000">Timeout for server discovery and the switch itself (including loading)</input_port>
+            <input_port name="wait_finished" type="bool" default="false">Return SUCCESS only after the motion has finished</input_port>
+            <input_port name="on_same" type="std::string" default="restart">When this is already playing: ignore, restart or restart_if_finished</input_port>
+            <input_port name="finish_timeout_ms" type="int" default="0">With wait_finished: limit on waiting for the motion to finish, 0 = no limit</input_port>
+        </Action>
+        <SubTree ID="AxisVelocity">
+            <input_port name="abs"/>
+            <input_port name="dir"/>
+            <input_port name="sign"/>
+            <input_port name="far"/>
+            <input_port name="near"/>
+            <input_port name="stop"/>
+            <input_port name="v_fast"/>
+            <input_port name="v_slow"/>
+            <inout_port name="speed"/>
+            <output_port name="v"/>
+        </SubTree>
+    </TreeNodesModel>
+    <!-- ////////// -->
+</root>

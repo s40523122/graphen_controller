@@ -1,0 +1,50 @@
+face_tracker:
+  ros__parameters:
+    # 影像來源：topic（訂閱 sensor_msgs/Image，例如 realsense2_camera）或 device（直接讀 V4L2 裝置）
+    source: topic
+
+    # ── source: device ──
+    # webcam，或不安裝 RealSense SDK、把 RealSense 的彩色串流當 webcam（Linux 的 uvcvideo）。
+    # RealSense 會出現好幾個 /dev/video*：用 `v4l2-ctl --list-devices` 列出，
+    # `v4l2-ctl -d /dev/videoN --list-formats-ext` 中格式為 YUYV 的是彩色（Z16 深度、GREY/Y8 紅外線）。
+    # 編號在插拔後可能改變，建議用 /dev/v4l/by-id/... 的路徑。WSL 預設核心沒有 uvcvideo，讀不到
+    device: /dev/video0        # 路徑，或編號（要加引號，例如 "4"）；也可以是影片檔（測試用，播完從頭重播）
+    device_width: 640          # 0 = 裝置預設；實際值在啟動時 log 印出
+    device_height: 480
+    device_fps: 30.0
+    device_fourcc: YUYV        # RealSense 彩色為 YUYV；一般 webcam 高解析度時常用 MJPG；空字串 = 裝置預設
+    frame_id: camera_color_optical_frame
+    device_reopen_after: 2.0   # s，連續這麼久讀不到影像時重新開啟裝置
+
+    # ── source: topic ──
+    # RealSense 的 color 影像。realsense2_camera 4.54 以後預設為 /camera/camera/color/image_raw，
+    # 舊版為 /camera/color/image_raw；以機器人端的 ros2 topic list 為準
+    image_topic: /camera/camera/color/image_raw
+    # true：以 reliable 訂閱（realsense2_camera 預設以 reliable 發布）。發送端是 best effort 時要改成 false，
+    # 否則 QoS 不相容、收不到任何影像（no_image_warn_period 秒後 WARN）。大影像以 best effort 傳輸時
+    # 分片容易遺失，能選擇時用 reliable
+    image_reliable: true
+
+    model_path: ""             # 空字串：本套件的 models/face_detection_yunet_2023mar.onnx
+
+    # 偵測：先縮到這個寬度（不放大、保持長寬比）再送進 YuNet；越小越快，遠處的小臉越難偵測
+    detect_width: 320
+    score_threshold: 0.6
+    nms_threshold: 0.3
+    top_k: 50
+    min_face_px: 20.0          # 原始影像中臉的最小邊長（px），更小的忽略（遠處的路人）
+
+    # 鎖定：沒有鎖定時選最大的臉；鎖定後只跟離上一個位置 lock_max_jump × 畫面寬度以內的臉，
+    # 連續 lock_lost_frames 幀找不到才解除（期間不發布，BT 以 gp_face_timeout_ms 判斷遺失）
+    lock_max_jump: 0.25
+    lock_lost_frames: 5
+    smoothing: 0.5             # 中心的指數平滑，舊值的權重（0 = 不平滑）；越大越穩、延遲越大
+
+    # 影像尺寸必須等於 bt_runner 的 gp_face_image_width / gp_face_image_height；
+    # > 0 時檢查，不一致就不發布（0 = 不檢查，只在第一幀 log 印出尺寸）
+    expected_width: 0
+    expected_height: 0
+
+    publish_debug_image: false # true：~/debug_image 發布畫上框與中心的影像（rqt_image_view 檢視）
+    stats_period: 5.0          # s，log 處理頻率與偵測耗時的間隔（0 = 不印）
+    no_image_warn_period: 5.0  # s，這段時間收不到影像時 WARN（0 = 不檢查）

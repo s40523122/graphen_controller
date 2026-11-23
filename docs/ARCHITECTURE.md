@@ -43,6 +43,9 @@ graph LR
     btnodes[graphen_bt_nodes<br/>BT plugin]
     bt[graphen_bt<br/>bt_runner + trees]
   end
+  subgraph 視覺
+    vision[graphen_vision<br/>face_tracker（YuNet，rclpy）]
+  end
   ctrl -->|build| utils
   ctrl -->|build| motion
   ctrl -->|build| loco
@@ -64,6 +67,7 @@ graph LR
   ti5hw -->|build| can
   handdesc -.->|exec| handhw
   bt -.->|runtime 載入| btnodes
+  vision -.->|topic /face_tracker/target| bt
 ```
 
 實線為編譯期依賴，虛線為執行期依賴。兩層在執行期透過 `switch_group_controller` 的播放類 action（`~/switch_mode`、`~/play_choreo`、`~/play_bvh`、`~/run_policy`）與 `~/states` topic 連動（見 [§3.5](#35-與控制層的連動)）。
@@ -849,9 +853,14 @@ graph TB
 | `IsBelow` | Condition | `value`、`threshold`(double) | `value < threshold` 時回傳 SUCCESS |
 | `IsAbove` | Condition | `value`、`threshold`(double) | `value > threshold` 時回傳 SUCCESS |
 | `SwitchMode` | StatefulAction | `mode`(string，系統模式名稱) + 共通 port | 切換到系統模式（`~/switch_mode`） |
-| `PlayChoreo` | StatefulAction | `choreo`(string，舞曲庫中的名稱) + 共通 port | 播放已發佈的編舞（`~/play_choreo`）；BT 不能帶內容試播 |
+| `PlayChoreo` | StatefulAction | `choreo`(string，舞曲庫中的名稱) 或 `content`(string，腳本 YAML)（擇一）+ 共通 port | 播放編舞（`~/play_choreo`）。表演用名稱；`content` 給樹即時產生的短編舞（D47） |
 | `PlayBvh` | StatefulAction | `bvh`(string，檔名不含 `.bvh`)、`loop`(bool, true)、`time_scale`(double, 1.0) + 共通 port | 播放 BVH（`~/play_bvh`）。第一次播放要載入檔案，`timeout_ms` 要涵蓋這段時間 |
 | `RunPolicy` | StatefulAction | `policy`(string，policy 庫中的名稱) + 共通 port | 執行 policy（`~/run_policy`）。第一次執行要載入，`timeout_ms` 要涵蓋，或事先用 `~/preload` 載入 |
+| `JointVelocity` | StatefulAction | `joints`(string，`;` 分隔)、`velocities`(string，deg/s，`;` 分隔)、`lower` / `upper`(string，rad，`;` 分隔)、`horizon`(double, 1.0)、`states_topic`(string, `/switch_group_controller/states`) + 共通 port（`on_same` 預設 `restart`） | 速度命令：每個 joint 一條 linear 軌道，目標 = 目前位置 + v·horizon（截在範圍內），以 `PlayChoreo` 的 `content` 送出（D47）。v = 0 或已在邊界的 joint 為 hold。還沒有 joint 狀態時回傳 FAILURE；超過 controller 上限的命令被拒絕（FAILURE） |
+| `GetPixelError` | SyncAction | `topic`(string, `/face_tracker/target`，PointStamped 像素)、`image_width` / `image_height`(double)、`timeout_ms`(int, 500)、out `err_x` / `err_y` / `abs_x` / `abs_y` / `dir_x` / `dir_y` / `lost_s`(double) | 目標像素 → 以畫面中心為原點的正規化誤差（-1..1，右 / 下為正）。以收到的時間判斷新舊（不看 header.stamp）；逾時回傳 FAILURE，`lost_s` 仍輸出 |
+| `SendOnChange` | Decorator | `value`(string)、`refresh_ms`(int, 0) | 命令改變、或距離上次成功超過 `refresh_ms`（> 0）時才 tick 子節點，其他時候回傳 SUCCESS；子節點 RUNNING 時繼續 tick 到完成；失敗不記錄（下個 tick 重試）；halt 時清除記錄 |
+| `Multiply` | SyncAction | `a`(double)、`b` / `c`(double, 1.0)、out `out`(double) | `out = a·b·c`；只給 `a` 時當作「寫入 double」（維持 blackboard 的型別） |
+| `JoinValues` | SyncAction | `in1`..`in4`(double，選填)、`precision`(int, 1)、out `out`(string) | 以固定小數位數串成 `a;b;...`；給 vector 類的 port，也當作 `SendOnChange` 的比較值（固定位數避免浮點雜訊被當成改變） |
 
 四個播放節點共用 [playback_action_node.hpp](../src/graphen_bt_nodes/include/graphen_bt_nodes/playback_action_node.hpp) 的 `PlaybackActionNode<ActionT>`，各自只定義專用的 port（[playback_nodes.hpp](../src/graphen_bt_nodes/include/graphen_bt_nodes/playback_nodes.hpp)）。共通 port：`action_name`(string，預設為該類型的 action)、`timeout_ms`(int, 1000)、`wait_finished`(bool, false)、`on_same`(string, `ignore`：`ignore` / `restart` / `restart_if_finished`)、`finish_timeout_ms`(int, 0)。共同行為：以 async 送出 goal，期間回傳 RUNNING；reject、失敗（內容有誤、目前在播的不可中斷…）或逾時（含等待 server）回傳 FAILURE。每次執行都會送 goal，應放在只有需要時才會走到的分支。`wait_finished` 時等動作播完才回傳 SUCCESS（被取代、動作失敗或超過 `finish_timeout_ms` 時 FAILURE；0 表示不限），此時 `timeout_ms` 只算到 goal 被接受為止。被 halt 或逾時會 cancel goal，但**動作會繼續執行**。
 
@@ -934,6 +943,49 @@ IfThenElse "WalkEnabled"
 
 **等動作播完再接下一段**：[trees/choreo_demo.xml](../src/graphen_bt/trees/choreo_demo.xml) 以 `Sequence` 串接兩個 `PlayChoreo wait_finished="true" on_same="restart_if_finished"`，依序播放舞曲庫中的兩段編舞（要先用 `choreo_publish` 發佈）（[§2.12](#212-編舞graphen_choreographer)）。節點在動作播完之前回傳 RUNNING，Sequence 停在該節點；`restart_if_finished` 讓 controller 已經停在同一段（例如 BT 重新啟動）時，播完的會重播、還在播放的不被打斷。會失敗的段落（例如起點不對）每個 tick 都會重送 goal，所以把「從任何位置都能執行」的段落放在最前面。
 
+**視覺跟隨（低頻速度命令 + 監控）**：[trees/face_track.xml](../src/graphen_bt/trees/face_track.xml) 讓頭部（NECK_Y / NECK_P）轉向外部節點發布的人臉中心（`geometry_msgs/PointStamped`，像素）。
+
+視覺端是 [graphen_vision](../src/graphen_vision/) 的 `face_tracker`：
+
+```
+RealSense（realsense2_camera）──color Image──▶ face_tracker ──/face_tracker/target──▶ bt_runner（GetPixelError）
+或 V4L2 裝置（webcam / RealSense 彩色串流）──────▶（source: device，背景 thread 直接讀取）
+                                                 YuNet 偵測（縮到 detect_width）
+                                                 → TargetLock 鎖定一張臉（最大 → 最近、連續 N 幀遺失才解除）
+                                                 → 指數平滑 → 只在鎖定時發布（stamp = 影像的擷取時間）
+```
+
+- YuNet 用 opencv_zoo 的 2023mar 模型（套件內附）。Humble 的系統 OpenCV 4.5.4 的 `FaceDetectorYN` 只支援已下架的 2021dec 格式，所以以 `cv2.dnn` 執行、自行解碼（[yunet.py](../src/graphen_vision/graphen_vision/yunet.py)）；輸入補到 32 的倍數。640×480 縮到 320 寬時，每幀約 4–6 ms（開發機 CPU）。
+- 偵測與鎖定在不依賴 rclpy 的 Python 模組中，節點只負責接線。
+- `source: device` 以 OpenCV（V4L2）直接讀裝置，不需要相機驅動節點：RealSense D4xx 是 UVC 裝置，不安裝 librealsense 也能讀彩色串流（YUYV 的那個 `/dev/video*`；失去深度與對齊）。stamp 為讀到該幀的時間；連續 `device_reopen_after` 秒讀不到時重新開啟。`device` 也可以是影片檔（依影片的 fps 播放，測試用）。
+- 影像以 **reliable** 訂閱（`image_reliable`）：約 1 MB 的影像以 best effort 傳輸時分片容易遺失，開發機上實測跨 process 只收到約 1 成。發送端是 best effort 時要改成 false，否則 QoS 不相容、收不到影像（`no_image_warn_period` 後 WARN）。
+- 以測試影像（640×480、15 Hz）實測：影像 stamp 到目標收到約 15 ms（最大 25 ms）；多張臉時鎖定不跳動；沒有臉時不發布。
+
+face_track.xml 的行為：相機裝在頭上，以像素誤差閉環，不需要相機校正，只需要各軸的正負號（`gp_face_sign_*`）與門檻。每個 tick 先決定命令 `{cmd}`，再由一個 `SendOnChange` 送出：
+
+```
+Sequence
+├─ InitOnce                                # 各軸的速度狀態從 0 開始
+├─ IfThenElse "Decide"
+│  ├─ IsOk {enable_face_track}
+│  ├─ IfThenElse "FaceVisible"
+│  │  ├─ GetPixelError → abs / dir / lost_s
+│  │  ├─ Sequence "Track"
+│  │  │  ├─ SubTreePlus AxisVelocity (yaw)   → {yaw_v}
+│  │  │  ├─ SubTreePlus AxisVelocity (pitch) → {pitch_v}
+│  │  │  ├─ JoinValues → {velocities}
+│  │  │  └─ {velocities} == "0.0;0.0" ? cmd = stop : cmd = {velocities}（續送 face_refresh_ms）
+│  │  └─ Sequence "Lost"                   # 立即 stop；lost_s > face_lost_hold 時 cmd = center
+│  └─ Disabled: cmd = stop
+└─ SendOnChange value={cmd} refresh_ms={cmd_refresh_ms}
+   └─ Switch2 {cmd}: stop → SwitchMode stop / center → SwitchMode head_center / 其他 → JointVelocity
+```
+
+- `AxisVelocity`（兩軸共用的子樹）：`|誤差| > far` 用 `v_fast`；`> near`，或「已在動且 `> stop`」用 `v_slow`；其餘 0。near > stop 形成遲滯，停下後要超過 near 才再啟動。stop 門檻要預留延遲造成的滑行量（約 `v_slow` × 0.3 s）。
+- 命令只在改變時送出；速度命令另外每 `face_refresh_ms` 續送一次，因為 `JointVelocity` 的命令只維持 `face_horizon` 秒（D47）。stop / center 不續送：關閉跟隨後不會一直搶走其他播放。
+- mock 上以閉環模擬（150 ms 相機延遲、HFOV 70°）實測：從正前方轉向 (-30°, -10°) 約 2.7 s 收斂、沒有越過目標，期間送出 7 個命令；每次切換在 controller 端約 12 ms（大多是手臂碰撞取樣，只有頭部的編舞也會執行）。移動中結束 bt_runner，頭在 v·horizon（20°）後停下。
+- 第一次 tick 時沒有啟用會送出一次 stop（和 joint_reciprocate 相同）；從沒看到人臉時 `lost_s` 很大，會先回到正前方。
+
 ### 3.6 bt_runner 參數與介面
 
 設定檔：[bt_runner.yaml](../src/graphen_bt/config/bt_runner.yaml)，launch：[bt.launch.py](../src/graphen_bt/launch/bt.launch.py)（launch argument：`tree_file`、`params_file`）
@@ -952,7 +1004,9 @@ IfThenElse "WalkEnabled"
 | `gp_enable_walk` | bool | false | 對應 blackboard `enable_walk`（joint_reciprocate.xml：啟用 walk，優先於往返） |
 | `gp_enable_reciprocate` | bool | true | 對應 blackboard `enable_reciprocate`（joint_reciprocate.xml：啟用 forward / reverse 往返；兩者都 false 時切到 stop） |
 
-`gp_*` 參數在執行中修改（`ros2 param set` 或 rqt）時，會由 parameter callback 同步寫入 blackboard。
+**所有** `gp_*` 參數都會寫入 blackboard（`gp_` 之後的名稱為 key，型別沿用參數：bool / int / double / string），包括上表以外、只寫在設定檔中的參數（node 以 `automatically_declare_parameters_from_overrides` 建立），新的樹只要在設定檔加上 `gp_*` 即可，不需要修改 `bt_runner`。上表是沒有設定時的預設值。face_track.xml 的參數（`gp_enable_face_track`、`gp_face_*`）見 [bt_runner.yaml.example](../src/graphen_bt/config/bt_runner.yaml.example)。
+
+執行中修改（`ros2 param set` 或 rqt）時由 parameter callback 同步寫入 blackboard。型別必須和樹的 port 一致（double 的 port 要寫成 `1.0`，不能寫成 `1`）：不一致時啟動失敗，或執行中的修改被拒絕（`Setting parameter failed`）。
 
 | Topic | 型別 | 對應的 blackboard key |
 |---|---|---|
@@ -1000,7 +1054,7 @@ IfThenElse "WalkEnabled"
 | D33 | 模式 = 類型，每種類型一個 action / BT 節點（`SwitchMode`、`PlayChoreo`、`PlayBvh`、`RunPolicy`），共通的選項 / 結果 / feedback 用巢狀 msg 定義一次（`Playback*.msg`） | 指令需要帶「每次都不一樣的資料」（播哪一段、試播的內容、循環與速度）時，塞進單一的 `SwitchMode` 會讓它長出只對某一種模式有效的欄位。獨立的 action 讓 goal 可以各自定義，BT 節點的名稱與有型別的 port 也直接表達意圖；共通語意只有一份，不會各自走樣 |
 | D34 | 所有入口都經過同一個 `PlaybackArbiter`；`SwitchMode` 保留給系統模式 | 不可中斷、`preempt`、互相取代必須對所有類型一致，否則從另一個入口就能繞過。停止走系統模式：不需要載入、不查任何庫、不會因為內容有誤而失敗，是相依最少的路徑 |
 | D35 | 內容在播放時載入：先載入並檢查、通過才切換；載入在專用的 callback group 進行，BVH 與 policy 快取並可預載 | 載入時間當作初始化時間是可以接受的，但不能讓機器人在載入期間失去控制，也不能擋住 `~/cmd_vel`。先檢查再切換讓「內容有誤」不會打斷正在進行的動作，錯誤訊息也能直接回給送出指令的一方 |
-| D36 | 編舞以編輯端為主：帶內容試播，正式的舞曲發佈到機器人端的舞曲庫，BT 只能依名稱播放；發佈與播放用同一套檢查；不留歷史、沒有刪除介面 | 編輯要能立刻試，表演則不能依賴編輯工具在線。機器人端只保存發佈過的快照，方向固定（編輯端 → 機器人），不會有兩邊各改一份的問題；以 sha256 讓編輯端比對是否已同步 |
+| D36 | 編舞以編輯端為主：帶內容試播，正式的舞曲發佈到機器人端的舞曲庫，BT 的表演只依名稱播放（樹即時產生的短命令例外，見 D47）；發佈與播放用同一套檢查；不留歷史、沒有刪除介面 | 編輯要能立刻試，表演則不能依賴編輯工具在線。機器人端只保存發佈過的快照，方向固定（編輯端 → 機器人），不會有兩邊各改一份的問題；以 sha256 讓編輯端比對是否已同步 |
 | D37 | 編舞的不可中斷寫在腳本（`interruptible`），機器人端的上限（`max_steps`、速度比例…）只在 `controllers.yaml` | 哪一段表演要保護是內容的性質，由編排的人決定；能動多快是機器人的性質，內容不能放寬。為此 `LocomotionAlgorithm` 增加 `interruptible()` |
 | D38 | 「同一個」的判斷包含內容的版本（編舞、policy 設定檔的 sha256；BVH 的播放選項） | 重新發佈之後，同名的舞曲應該被當成新的內容而切換過去，不是被 `ON_SAME_IGNORE` 吃掉；每次播放也因此在 log 留下內容的版本 |
 | D40 | 手臂 IK 與碰撞都用 MuJoCo（3.11，綁定版本），實機路徑也依賴它；一份 C++ 實作給示教、指令、伺服共用 | 快速實作版：MJCF 有完整的 mesh 碰撞幾何，URDF 幾乎沒有；全身 `mj_kinematics + mj_collision` 約 0.1 ms，100 Hz 可接受，不需要另外引入 pinocchio / FCL。實機本來就需要在 MuJoCo 驗證，綁定不會是額外負擔。演算法只有一份，示教看到的姿態與指令 / 伺服得到的一致 |
@@ -1011,6 +1065,8 @@ IfThenElse "WalkEnabled"
 | D46 | 示教模式中所有 `PlayChoreo` 都是影子播放（`<mode>.shadow_playback`），帶 token 也不例外，上機必須先切離示教 | 示教時 UI 的「試播」不會把機器人帶離示教、也不會讓手臂突然動；上機變成明確的兩步（切模式、帶 token 播放），不會因為誤帶 token 而在示教中動作。用模式屬性表示，和 `interruptible` / `preempt` 同一種寫法，其他模式也能使用 |
 | D45 | viewer 只做顯示、拖曳與 IK，示教由 controller 的模式（`teach`）觸發，keyframe 與腳本交給外部程式 | 示教時機器人必須停住（hold），用模式表達最直接，也讓試播與正式播放在同一個靜止的起點；viewer 不綁定編舞格式，外部的編輯工具可以自由組合姿態與時間 |
 | D39 | policy 的參數可以用 controller 參數 `<policy>.<鍵>` 覆寫；啟動時以 `default_policy` 在 configure 階段載入 | 情境 launch 只需要改一兩個值（例如 `entry_speed`），不必複製整份訓練常數；自由站立的模擬必須從第一個週期就由 policy 接手，而且設定有誤要在啟動時發現 |
+| D47 | BT 的速度命令是「有時效的 linear 編舞」：`JointVelocity` 把 v 換成目標 = 目前位置 + v·horizon、以 `PlayChoreo` 的 `content` 送出，BT 在到期前續送；controller 不新增速度介面 | 讓 BT 能以低頻命令指定方向與速度（視覺跟隨的快 / 慢 / 停），決策與監控留在樹中，不必為每種用途寫 locomotion plugin。編舞的起點是命令位置、linear 不沿用切換前的速度，續送時位置與速度都連續；新命令通過檢查前舊命令照常播放，所以不會卡頓。時效讓 BT 中斷時頭最多再動 v·horizon；限位、速度與 `max_steps` 仍由 controller 的編舞檢查把關。代價：每個命令都會經過一次載入與檢查（約 12 ms）；`choreo.shadow.require: true` 時每個命令都要先試播，因此 face_track 需要 false。即時性更高的連續追蹤仍應做成 plugin（例如 `arm_servo`），屆時樹的決策結構可以保留 |
+| D48 | `bt_runner` 把所有 `gp_*` 參數同步到 blackboard（設定檔中的自動宣告），不再逐一寫在程式中 | 新的樹（例如 face_track 的十幾個參數）只要改設定檔；型別以參數為準，與 port 不一致時在啟動或修改時就失敗，不會到 tick 才出錯 |
 
 ---
 
