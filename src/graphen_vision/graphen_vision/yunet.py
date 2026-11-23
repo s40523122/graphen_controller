@@ -7,6 +7,7 @@
 
 from dataclasses import dataclass
 import math
+import os
 from typing import List
 
 import cv2
@@ -54,6 +55,11 @@ class YuNetDetector:
             raise ValueError('nms_threshold must be in (0, 1)')
         if top_k < 1:
             raise ValueError('top_k must be at least 1')
+        # OpenCV 對缺檔只回報 "Can't read ONNX file"：先檢查，指出最常見的原因
+        if not os.path.isfile(model_path):
+            raise ValueError(
+                f'YuNet model not found: {model_path} (it ships in graphen_vision/models/; '
+                'make sure the .onnx file was deployed and rebuild graphen_vision)')
         self._net = cv2.dnn.readNet(model_path)
         self._output_names = self._net.getUnconnectedOutLayersNames()
         self._detect_width = int(detect_width)

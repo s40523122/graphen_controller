@@ -8,3 +8,6 @@
   2023mar 版需要 OpenCV ≥ 4.8 的 `FaceDetectorYN`，Humble 的系統 OpenCV 是 4.5.4，
   所以 `graphen_vision/yunet.py` 以 `cv2.dnn` 執行並自行解碼。
 - 輸入的寬高會補到 32 的倍數（模型內部的上取樣要求）。
+- 專案的 `.gitignore` 排除所有 `*.onnx`（policy 模型），這個目錄以 `!src/graphen_vision/models/*.onnx` 例外放行；
+  部署端少了這個檔案時 face_tracker 啟動失敗（`YuNet model not found`）。
+- `cv2.dnn` 的執行方式在 OpenCV 4.5.4（系統）與 pip 的 4.12 都可以使用。

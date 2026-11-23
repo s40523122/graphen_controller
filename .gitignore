@@ -21,6 +21,9 @@ src/graphen_mujoco/third_party/
 
 # policy 模型不進版控（已追蹤的舊 onnx 不受影響）
 *.onnx
+# 例外：graphen_vision 的人臉偵測模型（約 230 KB，來源與 sha256 見 models/README.md）是套件的一部分，
+# 沒有它 face_tracker 無法啟動
+!src/graphen_vision/models/*.onnx
 
 # 專案的 Claude Code 指示只留在本機，不進版控
 CLAUDE.md
