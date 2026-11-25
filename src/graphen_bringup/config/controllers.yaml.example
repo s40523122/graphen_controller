@@ -193,7 +193,7 @@ switch_group_controller:
     # 系統模式：以名稱識別（switch_mode action、BT 的 SwitchMode、~/mode topic 都用這些名稱），
     # 名稱同時是下面參數的前綴。type 只有 target / hold / plugin；controller 不認得任何特定模式，
     # 行為完全由 type 與參數決定。choreo / bvh / policy 是保留名稱（見後面的內容與 policy 區塊）
-    modes: [forward, reverse, stop, teach, sine, arm_servo, home, head_center]
+    modes: [forward, reverse, stop, teach, sine, arm_servo, home, head_center, trajectory]
     # 啟動時的動作：default_mode（系統模式）或 default_policy（policy 名稱）擇一。
     # 都是空字串：啟動時不進入任何模式，保持目前位置（實機為 real_initial_positions 或開機位置），
     # 收到 BT / action / ~/mode 的命令後才開始移動
@@ -279,6 +279,29 @@ switch_group_controller:
                   0.005, 0.005, 0.005, 0.005, 0.005, 0.005,          # left leg
                   0.005, 0.005, 0.005, 0.005, 0.005, 0.005]          # right leg
 
+    # trajectory：跟隨外部的關節軌跡（trajectory_msgs/JointTrajectory，例如 GR00T / VLA 的關節命令），
+    # graphen_ros_bridge/JointTrajectoryFollower。取樣後的位置、速度是 PD 的 q*、q̇*，
+    # 下游 PdController 計算力矩（hardware:=mujoco_pd / real_pd）；PositionController 只追位置。
+    # 只播放進入這個模式之後收到的軌跡；訊息的關節名稱要和 command interface 一致，沒有列出的關節保持。
+    # kp / kd（選填）：一個數套到全部關節，或依 command interface 順序給 32 個數，兩者一起給；
+    # 不寫時用 PdController 的預設增益。MuJoCo 測試見 sim_vla.launch.py
+    trajectory:
+      type: plugin
+      plugin: graphen_ros_bridge/JointTrajectoryFollower
+      topic: /t170/gr00t/joint_command
+      qos_reliability: best_effort   # 發布端是 BEST_EFFORT；RELIABLE 的訂閱收不到
+      timeout: 0.5                   # s，播完最後一點後這麼久沒有新訊息：速度前饋歸零，停在最後一點
+      log_period: 1.0                # s，拒絕訊息的 ERROR 最短間隔
+      # 10 rad/週期 = 不限速，完全照外部軌跡追蹤（同 RL policy）。要讓 planner 平滑跳動或第一筆離目前姿態
+      # 很遠的命令時，在本機 YAML 或 scenario_params 調小（例如 0.02，100 Hz 下約 2 rad/s）。
+      # TODO(verify-on-hw): 實機使用前要改成有意義的上限
+      max_steps: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # left arm
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,   # right arm
+                  10.0, 10.0, 10.0,                           # waist
+                  10.0, 10.0, 10.0,                           # head
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0,         # left leg
+                  10.0, 10.0, 10.0, 10.0, 10.0, 10.0]         # right leg
+
     # ── 內容與 policy：不是 modes 裡的系統模式，各有自己的 action，播什麼由指令指定 ──
     # 這裡只放機器人端的設定（庫的位置與安全上限）；內容本身不寫在這個檔案裡。
     # 四種入口共用同一套切換規則，可以互相取代；stop（hold）永遠能切入。
@@ -314,7 +337,7 @@ switch_group_controller:
       max_steps: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,     # left arm
                   0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02,     # right arm
                   0.005, 0.005, 0.005,                          # waist
-                  0.005, 0.005, 0.005,                          # head
+                  0.01, 0.01, 0.01,                             # head（100 Hz 下約 57 deg/s；BT face_track 的 v_fast 要在這以內）
                   0.005, 0.005, 0.005, 0.005, 0.005, 0.005,     # left leg
                   0.005, 0.005, 0.005, 0.005, 0.005, 0.005]     # right leg
 

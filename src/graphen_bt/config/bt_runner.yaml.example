@@ -33,15 +33,16 @@ bt_runner:
     gp_face_lost_hold: 3.0                  # s，遺失超過這段時間後慢速回到正前方（head_center 模式）
     # 各軸的速度選擇：|誤差| > far 用 v_fast；> near（已在動時 > stop）用 v_slow；其餘停止。
     # stop 要預留延遲造成的滑行量（約 v_slow × 0.3 s 換算成誤差），near > stop 形成遲滯
-    gp_face_far: 0.4
+    gp_face_far: 0.2
     gp_face_near: 0.15
     gp_face_stop: 0.08
-    gp_face_v_fast: 20.0                    # deg/s（choreo.max_steps 的頭部 0.005 × 100 Hz ≈ 28.6 deg/s 為上限）
-    gp_face_v_slow: 5.0                     # deg/s
+    gp_face_v_fast: 45.0                    # deg/s（choreo.max_steps 的頭部 0.01 × 100 Hz ≈ 57 deg/s 為上限，超過時命令會被拒絕）
+    gp_face_v_slow: 12.0                    # deg/s；太高時停止點附近容易衝過頭，加大 gp_face_stop
     # 誤差 → 關節速度的正負號（相機裝在頭上）。人臉在畫面右側（err_x > 0）時頭要往右轉
-    # TODO(verify-on-hw): 依實機的 NECK 軸向確認；方向反了頭會越轉越遠，立即關閉 enable_face_track
+    # 已在實機確認（2026-11-23）：yaw -1、pitch -1。換機型或相機安裝方向時要重新確認；
+    # 方向反了頭會越轉越遠，立即關閉 enable_face_track
     gp_face_sign_yaw: -1.0
-    gp_face_sign_pitch: 1.0
+    gp_face_sign_pitch: -1.0
     gp_face_lower: "-1.2;-0.5"              # rad，NECK_Y;NECK_P 的移動範圍（比 URDF 限位小）
     gp_face_upper: "1.2;0.5"
     gp_face_horizon: 1.0                    # s，一個速度命令的有效時間；BT 停止續送時最多再動這麼久

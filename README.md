@@ -45,6 +45,7 @@ graphen 的 ROS 2 控制工作區，分成兩層：
 | [graphen_choreographer](src/graphen_choreographer/) | locomotion plugin（不依賴 rclcpp） | 編舞（多軌 keyframe 的組合動作）：`ChoreographerAlgorithm`、腳本解析、路徑碰撞檢查、`choreo_check` | graphen_locomotion、graphen_arm_ik |
 | [graphen_arm_ik](src/graphen_arm_ik/) | C++ lib + node + locomotion plugin | 手臂 IK（手腕 6D + 手肘 swivel）與碰撞偵測（MuJoCo 3.11）、`arm_ik_server`（`~/solve`、`~/forward`、`~/tcp_jog`）、視覺伺服 plugin `ArmServoAlgorithm`、`arm_ik_check` | graphen_mujoco（CMake）、graphen_locomotion、graphen_interfaces |
 | [graphen_rl_policy](src/graphen_rl_policy/) | locomotion plugin | RL policy 共用基類 `PolicyRunner`（ONNX Runtime）與 policy plugin：`T170VelocityPolicy`（FullBodyT70）、`Ti5FlatPolicy`（robolab） | graphen_locomotion |
+| [graphen_ros_bridge](src/graphen_ros_bridge/) | locomotion plugin（依賴 rclcpp） | 輸入來自 ROS topic、需要自己建立 node 的 plugin：`JointTrajectoryFollower`（跟隨外部 `trajectory_msgs/JointTrajectory`，例如 GR00T / VLA；系統模式 `trajectory`） | graphen_locomotion |
 
 ## 快速開始
 
@@ -383,6 +384,7 @@ ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd robot:=fb70 mu
 # ti5_t170（任何機器）
 ros2 launch graphen_bringup bringup.launch.py hardware:=mujoco_pd mujoco_fixed_base:=true
 
+# 或由 bringup 一起開：mujoco_gui:=true（經 mujoco_viewer.sh，模型與 port 跟著 bringup；mujoco_viewer_python:=<python> 指定 PY）
 # 主機上另開視窗（只顯示，不需要 ROS；視窗內按 End 重置模擬）。不指定 --model 時向 MujocoSystem 查詢
 # 它載入的 MJCF（先開 viewer 會等到 bringup 啟動）；bringup 在容器內、路徑在主機上不存在時要自己指定
 bash src/graphen_mujoco/tools/mujoco_viewer.sh                                  # 模型跟著 bringup
@@ -462,6 +464,20 @@ ros2 topic pub -r 20 /switch_group_controller/cmd_vel geometry_msgs/msg/Twist "{
   - **同一套訓練設定重新訓練**：放入新的 onnx，複製一份 `<名稱>.policy.yaml`，更新 `model_path`、`model_sha256`（`sha256sum <onnx>`）與改變的常數，不需要修改程式。
   - **obs / action 組法不同**：要新增 policy plugin（見 [ARCHITECTURE §5](docs/ARCHITECTURE.md#5-擴充指引)）。
 - **ONNX Runtime**：`graphen_rl_policy` 需要 `third_party/onnxruntime`（1.31.0，不進版控）。Orin 使用 aarch64 版（取自 FullBodyT70/cpp_interface），x86_64 開發機使用 GitHub release 的 `onnxruntime-linux-x64-1.31.0.tgz`。
+- **外部關節軌跡（GR00T / VLA）用 `sim_vla.launch.py`**：系統模式 `trajectory`（`graphen_ros_bridge/JointTrajectoryFollower`）訂閱 `trajectory_msgs/JointTrajectory`（預設 `/t170/gr00t/joint_command`、BEST_EFFORT），取樣後的位置 / 速度是 PD 的 q* / q̇*。`sim_vla.launch.py` 以 `scenario_params` 把 `default_mode` 設成 `trajectory`，預設 `robot:=ti5_t170`、`mujoco_pd`、吊掛，並開 MuJoCo 視窗（`mujoco_gui:=false` 關閉）。本機 `controllers.yaml` 要有 `trajectory` 模式（見範本）。
+  ```bash
+  ros2 launch graphen_bringup sim_vla.launch.py                                    # 發布端的 RMW：domain 35、Fast DDS、UDPv4
+  ros2 launch graphen_bringup sim_vla.launch.py fastdds_builtin_transports:=none   # WSL 開發機（見下方）
+  ros2 launch graphen_bringup sim_vla.launch.py ros_domain_id:=0 mujoco_fixed_base:=false
+  ```
+  - RMW 環境（`ros_domain_id`、`ros_localhost_only`、`rmw_implementation`、`fastdds_builtin_transports`）只套用到這個 launch 啟動的程序；BT、`ros2` CLI 要和它互通時，必須在相同的環境變數下執行。呼叫端的 `FASTRTPS_DEFAULT_PROFILES_FILE` 不會沿用。
+  - `FASTDDS_BUILTIN_TRANSPORTS=UDPv4`（預設，GR00T 在 container / 另一台機器時需要）在 WSL 開發機上會讓 controller_manager 的 service 沒有回應、spawner 起不來；本機測試用 `fastdds_builtin_transports:=none`。
+  - 只播放進入模式之後收到的軌跡；單點訊息立刻採用，多點依 `time_from_start` 線性插值。播完最後一點後超過 `trajectory.timeout`（0.5 s）沒有新訊息時速度前饋歸零、停在最後一點。`max_steps` 預設 10（不限速），**實機使用前要調小**。
+  - 手動測試（`ros2 topic pub --once` 搭配 BEST_EFFORT，剛配對上的第一筆常常會遺失，用 `-t` 多送幾次）：
+    ```bash
+    ros2 topic pub -t 3 -r 5 -w 1 --qos-reliability best_effort /t170/gr00t/joint_command \
+        trajectory_msgs/msg/JointTrajectory "{joint_names: [L_WRIST_P], points: [{positions: [-0.5]}]}"
+    ```
 - **RL policy 只在 MuJoCo 驗證過**，不要在實機上使用（見 [ARCHITECTURE §2.11](docs/ARCHITECTURE.md#211-rl-policy-plugingraphen_rl_policy)）。實機的對應是 `hardware:=real_pd`（尚未驗證）。
 
 ### 實機 IMU（FSS-IMU16460-C）

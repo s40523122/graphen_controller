@@ -1,0 +1,10 @@
+<library path="graphen_ros_bridge_plugins">
+  <!-- 訂閱 trajectory_msgs/JointTrajectory（例如 GR00T / VLA 的關節命令），取樣後輸出 q*、q̇* -->
+  <class name="graphen_ros_bridge/JointTrajectoryFollower"
+         type="graphen::ros_bridge::JointTrajectoryFollower"
+         base_class_type="graphen::locomotion::LocomotionAlgorithm">
+    <description>
+      Follows a trajectory_msgs/JointTrajectory stream published on a configured topic.
+    </description>
+  </class>
+</library>

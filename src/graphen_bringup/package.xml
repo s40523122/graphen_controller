@@ -23,6 +23,8 @@
   <exec_depend>graphen_interfaces</exec_depend>
   <!-- policy 庫（policy.library_path 的預設位置：graphen_rl_policy/policy） -->
   <exec_depend>graphen_rl_policy</exec_depend>
+  <!-- trajectory 模式（graphen_ros_bridge/JointTrajectoryFollower，sim_vla.launch.py） -->
+  <exec_depend>graphen_ros_bridge</exec_depend>
   <!-- 編舞（choreo.plugin：graphen_choreographer/ChoreographerAlgorithm）與 motions/*.choreo.yaml -->
   <exec_depend>graphen_choreographer</exec_depend>
   <exec_depend>hardware_interface</exec_depend>

@@ -1067,6 +1067,7 @@ Sequence
 | D39 | policy 的參數可以用 controller 參數 `<policy>.<鍵>` 覆寫；啟動時以 `default_policy` 在 configure 階段載入 | 情境 launch 只需要改一兩個值（例如 `entry_speed`），不必複製整份訓練常數；自由站立的模擬必須從第一個週期就由 policy 接手，而且設定有誤要在啟動時發現 |
 | D47 | BT 的速度命令是「有時效的 linear 編舞」：`JointVelocity` 把 v 換成目標 = 目前位置 + v·horizon、以 `PlayChoreo` 的 `content` 送出，BT 在到期前續送；controller 不新增速度介面 | 讓 BT 能以低頻命令指定方向與速度（視覺跟隨的快 / 慢 / 停），決策與監控留在樹中，不必為每種用途寫 locomotion plugin。編舞的起點是命令位置、linear 不沿用切換前的速度，續送時位置與速度都連續；新命令通過檢查前舊命令照常播放，所以不會卡頓。時效讓 BT 中斷時頭最多再動 v·horizon；限位、速度與 `max_steps` 仍由 controller 的編舞檢查把關。代價：每個命令都會經過一次載入與檢查（約 12 ms）；`choreo.shadow.require: true` 時每個命令都要先試播，因此 face_track 需要 false。即時性更高的連續追蹤仍應做成 plugin（例如 `arm_servo`），屆時樹的決策結構可以保留 |
 | D48 | `bt_runner` 把所有 `gp_*` 參數同步到 blackboard（設定檔中的自動宣告），不再逐一寫在程式中 | 新的樹（例如 face_track 的十幾個參數）只要改設定檔；型別以參數為準，與 port 不一致時在啟動或修改時就失敗，不會到 tick 才出錯 |
+| D49 | 輸入來自 ROS topic、需要自己建立 rclcpp node 的 locomotion plugin 放在 `graphen_ros_bridge`（第一個是 `JointTrajectoryFollower`），不放進 `graphen_locomotion`；取樣等與傳輸無關的邏輯放在 header-only 的 `trajectory_sampler.hpp` | `graphen_locomotion` 的介面與內建 plugin 不依賴 rclcpp，外部（非 ROS）演算法與離線工具（`choreo_check`、影子試播）只需要它；plugin 自己開 node 會讓這個邊界失效。代價：這類 plugin 有自己的 executor thread，輸入不經過 `RobotState`，也不能在沒有 rclcpp 的環境中載入。之後若改成由 controller 統一訂閱、經 `RobotState` 交給 plugin（同 `pose_targets`），取樣層可以沿用 |
 
 ---
 
@@ -1115,6 +1116,7 @@ Sequence
 4. 參數在 `configure()` 讀取並驗證，錯誤時丟例外；`update()` 中不要長時間阻塞（會拖慢 planner 週期）。
 5. 機身狀態用 `state.base`（機身座標系），速度指令用 `state.command`；使用前先檢查 `base.valid`、`command.active`。
 6. 有終點的演算法覆寫 `finished()`，播放類 action 的 `wait_until_finished` 才等得到結束；內容本身不可中斷時覆寫 `interruptible()`。
+7. `graphen_locomotion` 與它的內建 plugin 不依賴 rclcpp。演算法需要自己訂閱 ROS topic（建立 rclcpp node）時，放在 `graphen_ros_bridge` 或自己的套件，不要放進 `graphen_locomotion`（D49）；node 以 `use_global_arguments(false)` 建立，避免套用 `ros2_control_node` 的 remap。
 
 ### 新增 RL policy
 - **同一個家族重新訓練**（obs / action 組法相同）：把 onnx 放進 `graphen_rl_policy/policy/`，複製一份 `<名稱>.policy.yaml`（檔名就是 `run_policy` 用的名稱），更新 `model_path`、`model_sha256`（`sha256sum <onnx>`），以及改變的常數（`default_joint_pos`、`action_scale`、`kp`、`kd` 等）。不需要重新建置程式（`--symlink-install` 下新的 onnx 與設定檔要重建 `graphen_rl_policy` 才會安裝到 share）。不用改 `controllers.yaml`。

@@ -3,6 +3,7 @@ install/
 log/
 __pycache__/
 .vscode/
+ron_update/
 
 # BVH 動作檔只追蹤預設檔，其他自行加入的動作不進版控
 *.bvh

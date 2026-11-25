@@ -9,6 +9,7 @@
 
   ros2 launch graphen_bringup sim_rl.launch.py                       # ti5_170a + rl_flat
   ros2 launch graphen_bringup sim_rl.launch.py policy:=rl_walk robot:=fb70
+  ros2 launch graphen_bringup sim_rl.launch.py mujoco_gui:=true      # 一起開 MuJoCo 視窗
 """
 import os
 import tempfile
@@ -28,6 +29,8 @@ def generate_launch_description():
     hardware = LaunchConfiguration('hardware')
     robot = LaunchConfiguration('robot')
     mujoco_viewer_port = LaunchConfiguration('mujoco_viewer_port')
+    mujoco_gui = LaunchConfiguration('mujoco_gui')
+    mujoco_viewer_python = LaunchConfiguration('mujoco_viewer_python')
 
     declare_args = [
         DeclareLaunchArgument(
@@ -45,6 +48,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'mujoco_viewer_port', default_value='9870',
             description='UDP port of graphen_mujoco/tools/mujoco_viewer.py (0 disables)'),
+        DeclareLaunchArgument(
+            'mujoco_gui', default_value='false',
+            description='Also start the MuJoCo window on the simulated MJCF (see bringup.launch.py)'),
+        DeclareLaunchArgument(
+            'mujoco_viewer_python', default_value='',
+            description='Python interpreter for the MuJoCo window; empty keeps the script default'),
     ]
 
     def include_bringup(context):
@@ -66,6 +75,8 @@ def generate_launch_description():
                 'robot': robot.perform(context),
                 'mujoco_fixed_base': 'false',
                 'mujoco_viewer_port': mujoco_viewer_port.perform(context),
+                'mujoco_gui': mujoco_gui.perform(context),
+                'mujoco_viewer_python': mujoco_viewer_python.perform(context),
                 'scenario_params': scenario.name,
             }.items())]
 

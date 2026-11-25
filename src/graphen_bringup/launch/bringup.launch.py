@@ -7,7 +7,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, LogInfo, OpaqueFunction, RegisterEventHandler,
+    DeclareLaunchArgument, ExecuteProcess, LogInfo, OpaqueFunction, RegisterEventHandler,
     SetLaunchConfiguration)
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
@@ -46,6 +46,8 @@ def generate_launch_description():
     mujoco_fixed_base = LaunchConfiguration('mujoco_fixed_base')
     mujoco_model = LaunchConfiguration('mujoco_model')
     mujoco_viewer_port = LaunchConfiguration('mujoco_viewer_port')
+    mujoco_gui = LaunchConfiguration('mujoco_gui')
+    mujoco_viewer_python = LaunchConfiguration('mujoco_viewer_python')
     robot = LaunchConfiguration('robot')
     scenario_params = LaunchConfiguration('scenario_params')
     srdf_file = LaunchConfiguration('srdf_file')
@@ -126,6 +128,15 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'mujoco_viewer_port', default_value='9870',
             description='UDP port of graphen_mujoco/tools/mujoco_viewer.py (0 disables)'),
+        DeclareLaunchArgument(
+            'mujoco_gui', default_value='false',
+            description='hardware:=mujoco / mujoco_pd only. true: also start the MuJoCo window '
+                        '(graphen_mujoco/tools/mujoco_viewer.sh) on the MJCF the simulator loaded; '
+                        'needs mujoco_viewer_port > 0'),
+        DeclareLaunchArgument(
+            'mujoco_viewer_python', default_value='',
+            description='Python interpreter for the MuJoCo window (PY of mujoco_viewer.sh); '
+                        'empty keeps the script default'),
         DeclareLaunchArgument(
             'arm_ik_config', default_value='auto',
             description='graphen_arm_ik config (arm IK, collision checking) shared by arm_ik_server, '
@@ -238,6 +249,29 @@ def generate_launch_description():
 
     set_mujoco_model = OpaqueFunction(function=resolve_mujoco_model)
 
+    # MuJoCo 視窗：物理在 MujocoSystem 裡跑，視窗是另一個程序，載入同一份 MJCF、以 UDP 接收姿態
+    # （只顯示，沒有第二套模擬）。透過 mujoco_viewer.sh 啟動，沿用它的 venv（PY）與 DISPLAY 設定
+    def start_mujoco_viewer(context):
+        if not is_mujoco(context) or not IfCondition(mujoco_gui).evaluate(context):
+            return []
+        port = mujoco_viewer_port.perform(context)
+        if port == '0':
+            return [LogInfo(msg='mujoco_gui: skipped because mujoco_viewer_port is 0')]
+        model = mujoco_model.perform(context)
+        if not os.path.isfile(model):
+            raise RuntimeError(f'mujoco_gui: MJCF not found: {model!r}')
+        script = os.path.join(
+            get_package_share_directory('graphen_mujoco'), 'tools', 'mujoco_viewer.sh')
+        python = mujoco_viewer_python.perform(context)
+        return [LogInfo(msg=f'mujoco viewer: {model} (UDP {port})'), ExecuteProcess(
+            name='mujoco_viewer',
+            cmd=['bash', script, '--model', model, '--port', port],
+            output='screen',
+            additional_env={'PY': python} if python else {},
+        )]
+
+    node_mujoco_viewer = OpaqueFunction(function=start_mujoco_viewer)
+
     # ti5_hardware 的 CAN 讀取逾時：位置模式（100 Hz）沿用 20 ms；電流模式在 200 Hz 迴圈內讀取，
     # 必須遠小於 5 ms 的週期。使用者有指定時不覆寫
     def resolve_hw_read_timeout(context):
@@ -297,6 +331,11 @@ def generate_launch_description():
     #    →（mujoco_pd / real_pd）<robot 套件>/config/joint_pd_gains.yaml →（情境 launch）scenario_params，
     #    後載入的覆蓋先載入的。參數檔無法用 condition 切換，所以在 OpaqueFunction 中組合
     def create_controller_manager(context):
+        # 本機檔不存在時 controller_manager 只會略過它，之後才以「controller 沒有 type」失敗，原因不明顯
+        if not os.path.isfile(controllers_yaml_file):
+            raise RuntimeError(
+                f'{controllers_yaml_file} does not exist; create it from the template:\n'
+                f'  cp {controllers_yaml_file}.example {controllers_yaml_file}')
         hw = hardware.perform(context)
         robot_name = robot.perform(context)
         pd = hw in ('mujoco_pd', 'real_pd')
@@ -430,6 +469,7 @@ def generate_launch_description():
 
     return LaunchDescription(declare_args + [
         set_mujoco_model,  # 必須在使用 robot_description 的 node 之前
+        node_mujoco_viewer,  # 使用 set_mujoco_model 決定的 mujoco_model
         set_can_config,
         set_hw_read_timeout,
         node_robot_state_publisher,
